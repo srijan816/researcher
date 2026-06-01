@@ -27,13 +27,20 @@ Before generating the research plan, deeply analyze the user's request:
    - Is this entity central to the request (must have dedicated coverage), or peripheral?
    - What minimum factual coverage is needed? Examples: capabilities, pricing, known limitations, integration constraints, supported inputs/outputs, API behavior, release status, or legal scope.
    If 3+ entities are central, the TOC MUST allocate dedicated coverage to each central entity. A TOC that buries central entities only inside thematic sections is invalid and must be revised.
-2. **Source Strategy**: Derive the source classes needed from the claim profile. Specification claims need first-party/official sources when possible. Quantitative claims need primary issuer or authoritative data sources. Causal scientific claims need academic/research sources. Recommendation claims need practitioner/expert evidence and triangulation. Trend claims need dated/time-series/current sources. Discovery claims need diverse sources and counterevidence.
-3. **Budget Plan**: Follow `budget_profile` when it is available. In lesson-first mode, spend most search effort on broad-topic foundations and examples, keep the motion bridge bounded, and leave a reserve for gap-filling and synthesis. In symmetric mode, distribute search effort across the main sections more evenly so one branch does not consume the whole budget.
-4. **User Intent**: What is the user ultimately trying to achieve or understand?
-5. **Explicit Requirements**: List everything the user explicitly asked for
-6. **Implicit Requirements**: What's necessary for a complete answer but not explicitly stated?
-7. **Out of Scope**: What topics are tangential/irrelevant and should be excluded to keep the report focused?
-8. **Language**: What language is the user's request in?
+2. **Research Task Decomposition**: Divide the request into self-contained evidence-gathering tasks before writing queries. Each task must have:
+   - `task_id`: stable ID like `Q1`, `Q2`, ...
+   - `task_category`: generic category such as `foundations`, `primary_data`, `examples`, `comparison`, `counterevidence`, `implementation`, `market_context`, `risk`, or `synthesis_gap`
+   - `relevance_weight`: integer 1-5 based on direct importance to the user's requested answer
+   - `budget_percent`: share of the active research budget; all task percentages must sum to exactly 100
+   - `search_budget`: integer search-call cap for that task, computed from `budget_profile.active_search_calls` and the task's `budget_percent`
+   Allocate budget by relevance to the user query, expected evidence difficulty, source authority needs, uncertainty/gap risk, and synthesis leverage. Do not allocate budget merely because a topic is interesting. No single task should exceed 40% unless the user asked for a narrow lookup/screen.
+3. **Source Strategy**: Derive the source classes needed from the claim profile. Specification claims need first-party/official sources when possible. Quantitative claims need primary issuer or authoritative data sources. Causal scientific claims need academic/research sources. Recommendation claims need practitioner/expert evidence and triangulation. Trend claims need dated/time-series/current sources. Discovery claims need diverse sources and counterevidence.
+4. **Budget Plan**: Follow `budget_profile` when it is available. In lesson-first mode, spend most search effort on broad-topic foundations and examples, keep the motion bridge bounded, and leave a reserve for gap-filling and synthesis. In symmetric mode, distribute search effort across the main sections more evenly so one branch does not consume the whole budget.
+5. **User Intent**: What is the user ultimately trying to achieve or understand?
+6. **Explicit Requirements**: List everything the user explicitly asked for
+7. **Implicit Requirements**: What's necessary for a complete answer but not explicitly stated?
+8. **Out of Scope**: What topics are tangential/irrelevant and should be excluded to keep the report focused?
+9. **Language**: What language is the user's request in?
 
 When the request is about a core topic such as "university education", treat counterarguments, alternatives, and trade-offs as supporting evidence inside the same report, not as a separate report topic unless the user explicitly asks for a comparison or alternative-pathways brief.
 
@@ -104,6 +111,7 @@ After you have finished your own search tool calls and refined the plan, pass th
 The researcher has no additional context, so each query must be **self-contained and specific**.
 Generate only the queries needed to answer the scoped request and cover the TOC sections.
 Every query must be bound to one or more target claims. The TOC organizes the final report; claim-bound queries drive evidence gathering.
+Every query is also a research task with a budget allocation. The `budget_percent` values across all queries must sum to exactly 100. `search_budget` values should add up to no more than `budget_profile.active_search_calls`, leaving `budget_profile.reserve_search_calls` untouched for gap-filling and synthesis.
 
 Query Guidelines:
 - Be specific and searchable - include key terms needed to find relevant sources
@@ -115,6 +123,7 @@ Query Guidelines:
 - For multi-entity briefs, assign each query to a `target_entity` when it serves one entity. Use `target_entity: null` only for cross-entity synthesis queries.
 - For broad thematic briefs, still create target claims. Example: "What primary data supports demand for AI consulting in 2026?" is a quantitative/trend claim, not just a "market trends" section.
 - For any likely numeric claim, include a target claim that explicitly seeks the primary issuer or authoritative source behind the number. Do not plan to cite a blog that merely quotes a statistic unless the primary source cannot be found.
+- Add `task_id`, `task_category`, `relevance_weight`, `budget_percent`, and `search_budget` to each query. Put the largest budgets on tasks that directly answer the user's required output or need authoritative/primary-source verification. Put smaller budgets on background and bridge tasks.
 
 ### Temporal Grounding and Freshness
 - Treat all relative time phrases ("current", "latest", "today", "now", "recent", "upcoming", "this year", "next") as relative to the Current date and time in the Context section.
@@ -160,6 +169,11 @@ Compact examples of `queries` items:
 {
   "query": "2026 AI automation use cases ROI cost savings revenue uplift analyst reports McKinsey IDC Gartner",
   "tool": "advanced_web_search_tool",
+  "task_id": "Q1",
+  "task_category": "primary_data",
+  "relevance_weight": 5,
+  "budget_percent": 25,
+  "search_budget": 12,
   "target_sections": ["Business Impact, ROI, and Efficiency Evidence"],
   "target_claims": [
     {

@@ -80,6 +80,27 @@ def test_plan_json_from_tool_args_fills_missing_claims_and_sections():
     assert plan["constraints"][0]["constraint"] == "Stay scoped to the request."
 
 
+def test_plan_json_from_tool_args_normalizes_task_budget_percentages():
+    plan_json = plan_json_from_tool_args(
+        report_title="Allocated Research Plan",
+        report_toc=[{"title": "Main Section"}],
+        queries=[
+            {"query": "primary source evidence", "relevance_weight": 5, "task_category": "primary_data"},
+            {"query": "background context evidence", "relevance_weight": 1, "task_category": "foundations"},
+            {"query": "risk counterevidence", "relevance_weight": 4, "task_category": "counterevidence"},
+        ],
+        constraints=["Allocate budget by relevance and evidence difficulty."],
+    )
+
+    plan = json.loads(plan_json)
+    budget_percents = [query["budget_percent"] for query in plan["queries"]]
+
+    assert sum(budget_percents) == pytest.approx(100.0)
+    assert budget_percents == [50.0, 10.0, 40.0]
+    assert [query["task_id"] for query in plan["queries"]] == ["Q1", "Q2", "Q3"]
+    assert plan["queries"][0]["task_category"] == "primary_data"
+
+
 def test_plan_json_from_tool_args_accepts_minimax_item_wrappers():
     plan_json = plan_json_from_tool_args(
         report_title="Wrapped Plan",

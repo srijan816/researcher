@@ -32,6 +32,7 @@ from aiq_agent.agents.deep_researcher.custom_middleware import PlannerCommitGuar
 from aiq_agent.agents.deep_researcher.custom_middleware import PostWriteReadbackGuardMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SearchBudgetExhaustionRepairMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import TaskSearchBudgetMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ThinkingOnlyRepairMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolArgumentNormalizationMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolBudgetMiddleware
@@ -44,12 +45,14 @@ from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_exh
 from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_plan_validation_failures
 from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_planner_model_turns
 from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_recent_artifact_writes
+from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_task_search_counts
 from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_tool_counts
 from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_tool_limits
 from aiq_agent.agents.deep_researcher.custom_middleware import set_session_exhausted_tools
 from aiq_agent.agents.deep_researcher.custom_middleware import set_session_plan_validation_failures
 from aiq_agent.agents.deep_researcher.custom_middleware import set_session_planner_model_turns
 from aiq_agent.agents.deep_researcher.custom_middleware import set_session_recent_artifact_writes
+from aiq_agent.agents.deep_researcher.custom_middleware import set_session_task_search_counts
 from aiq_agent.agents.deep_researcher.custom_middleware import set_session_tool_counts
 from aiq_agent.agents.deep_researcher.custom_middleware import set_session_tool_limits
 
@@ -445,6 +448,54 @@ class TestToolBudgetMiddleware:
             reset_session_tool_counts(counts_token)
             reset_session_tool_limits(limits_token)
             reset_session_exhausted_tools(exhausted_token)
+
+
+class TestTaskSearchBudgetMiddleware:
+    """Tests for per-researcher-task search budgets."""
+
+    class Request:
+        def __init__(self, tool_name: str = "advanced_web_search_tool"):
+            self.tool_call = {"name": tool_name, "id": f"{tool_name}-1"}
+            self.messages = [
+                HumanMessage(
+                    content=(
+                        "You are researching task_id: Q2.\n"
+                        "task_category: primary_data\n"
+                        "budget_percent: 25\n"
+                        "Search budget: 2 search calls for this task.\n"
+                    )
+                )
+            ]
+
+    @pytest.mark.asyncio
+    async def test_enforces_per_task_search_budget(self):
+        middleware = TaskSearchBudgetMiddleware({"advanced_web_search_tool", "web_search_tool"})
+        token = set_session_task_search_counts({})
+        handler = AsyncMock(return_value=ToolMessage(content="ok", tool_call_id="search-1"))
+        try:
+            first = await middleware.awrap_tool_call(self.Request(), handler)
+            second = await middleware.awrap_tool_call(self.Request(), handler)
+            third = await middleware.awrap_tool_call(self.Request(), handler)
+
+            assert first.content == "ok"
+            assert second.content == "ok"
+            assert "TASK_SEARCH_BUDGET_EXHAUSTED" in third.content
+            assert handler.await_count == 2
+        finally:
+            reset_session_task_search_counts(token)
+
+    @pytest.mark.asyncio
+    async def test_ignores_non_search_tools(self):
+        middleware = TaskSearchBudgetMiddleware({"advanced_web_search_tool", "web_search_tool"})
+        token = set_session_task_search_counts({})
+        handler = AsyncMock(return_value=ToolMessage(content="written", tool_call_id="write-1"))
+        try:
+            result = await middleware.awrap_tool_call(self.Request("write_file"), handler)
+
+            assert result.content == "written"
+            assert handler.await_count == 1
+        finally:
+            reset_session_task_search_counts(token)
 
 
 class TestPlanFileValidationMiddleware:

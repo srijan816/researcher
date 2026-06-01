@@ -80,6 +80,8 @@ def test_regression_prompt_set_preloads_internal_plans_when_deterministic(deep_a
         plan = json.loads("\n".join(updated.files["/shared/plan.json"]["content"]))
         assert plan["report_title"] == case["expected_plan_title"], case["id"]
         assert plan["queries"], case["id"]
+        assert sum(query.get("budget_percent", 0) for query in plan["queries"]) == pytest.approx(100.0), case["id"]
+        assert all(query.get("search_budget") for query in plan["queries"]), case["id"]
         assert "Landscape" not in " ".join(section["title"] for section in plan["report_toc"]), case["id"]
 
 
@@ -89,3 +91,15 @@ def test_planner_prompt_uses_typed_write_plan_not_raw_json():
     assert "write_plan" in prompt
     assert "Never call\n`write_file` for `/shared/plan.json`" in prompt
     assert "```json" not in prompt
+
+
+def test_prompts_require_generic_task_budget_allocation():
+    planner_prompt = Path("src/aiq_agent/agents/deep_researcher/prompts/planner.j2").read_text()
+    orchestrator_prompt = Path("src/aiq_agent/agents/deep_researcher/prompts/orchestrator.j2").read_text()
+    researcher_prompt = Path("src/aiq_agent/agents/deep_researcher/prompts/researcher.j2").read_text()
+
+    assert "Research Task Decomposition" in planner_prompt
+    assert "budget_percent" in planner_prompt
+    assert "sum to exactly 100" in planner_prompt
+    assert "Search budget: N search calls for this task" in orchestrator_prompt
+    assert "Treat that per-task search budget as a hard cap" in researcher_prompt

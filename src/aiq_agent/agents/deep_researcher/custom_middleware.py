@@ -17,8 +17,10 @@
 
 import asyncio
 import contextvars
+import hashlib
 import json
 import logging
+import re
 from pathlib import Path
 
 from langchain.agents.middleware import AgentMiddleware
@@ -56,6 +58,9 @@ _session_planner_model_turns: contextvars.ContextVar[int | None] = contextvars.C
 )
 _session_recent_artifact_writes: contextvars.ContextVar[dict[str, int] | None] = contextvars.ContextVar(
     "_deep_research_session_recent_artifact_writes", default=None
+)
+_session_task_search_counts: contextvars.ContextVar[dict[str, int] | None] = contextvars.ContextVar(
+    "_deep_research_session_task_search_counts", default=None
 )
 
 _SEARCH_TOOL_FAMILY = {"advanced_web_search_tool", "web_search_tool", "exa_web_search_tool"}
@@ -131,6 +136,16 @@ def reset_session_recent_artifact_writes(token: contextvars.Token) -> None:
     _session_recent_artifact_writes.reset(token)
 
 
+def set_session_task_search_counts(counts: dict[str, int] | None) -> contextvars.Token:
+    """Set per-researcher-task search counts."""
+    return _session_task_search_counts.set(counts)
+
+
+def reset_session_task_search_counts(token: contextvars.Token) -> None:
+    """Restore previous per-researcher-task search counts."""
+    _session_task_search_counts.reset(token)
+
+
 def _budget_key(tool_name: str, scope: str | None = None) -> str:
     """Return the counter key for a tool, optionally scoped to an agent role."""
     family = _budget_family(tool_name)
@@ -191,6 +206,7 @@ def get_session_budget_snapshot() -> dict[str, object]:
         )
     return {
         "budgets": entries,
+        "task_search_counts": dict(_session_task_search_counts.get() or {}),
         "exhausted": exhausted,
         "planner_model_turns": _session_planner_model_turns.get() or 0,
         "plan_validation_failures": _session_plan_validation_failures.get() or 0,
@@ -1068,6 +1084,92 @@ class ToolBudgetMiddleware(AgentMiddleware):
             tool_call_id=tool_call.get("id", ""),
             name=tool_name,
         )
+
+
+class TaskSearchBudgetMiddleware(AgentMiddleware):
+    """Hard-cap search tools inside each researcher assignment.
+
+    The global researcher budget protects total spend, but it does not stop an
+    early branch from consuming searches intended for later branches. This
+    middleware reads the orchestrator's `Search budget: N search calls for this
+    task` line and enforces that cap per subagent task.
+    """
+
+    _BUDGET_PATTERNS = (
+        re.compile(r"Search budget:\s*(?P<count>\d+)\s+search calls?", re.IGNORECASE),
+        re.compile(r"['\"]search_budget['\"]\s*[:=]\s*(?P<count>\d+)", re.IGNORECASE),
+        re.compile(r"\bsearch_budget\s*[:=]\s*(?P<count>\d+)", re.IGNORECASE),
+    )
+    _TASK_ID_PATTERNS = (
+        re.compile(r"['\"]task_id['\"]\s*[:=]\s*['\"]?(?P<task_id>[A-Za-z0-9_.-]+)", re.IGNORECASE),
+        re.compile(r"\btask_id\s*[:=]\s*['\"]?(?P<task_id>[A-Za-z0-9_.-]+)", re.IGNORECASE),
+        re.compile(r"\bQ(?P<num>\d+)\b", re.IGNORECASE),
+    )
+
+    def __init__(self, search_tool_names: set[str]) -> None:
+        self.search_tool_names = search_tool_names
+
+    @staticmethod
+    def _message_text(request) -> str:
+        parts: list[str] = []
+        for message in getattr(request, "messages", []) or []:
+            if isinstance(message, HumanMessage):
+                content = message.content
+                parts.append(content if isinstance(content, str) else str(content))
+        return "\n".join(parts)
+
+    @classmethod
+    def _extract_budget(cls, text: str) -> int | None:
+        for pattern in cls._BUDGET_PATTERNS:
+            match = pattern.search(text)
+            if match:
+                return max(1, int(match.group("count")))
+        return None
+
+    @classmethod
+    def _extract_task_key(cls, text: str) -> str:
+        for pattern in cls._TASK_ID_PATTERNS:
+            match = pattern.search(text)
+            if match:
+                if "task_id" in match.groupdict() and match.group("task_id"):
+                    return match.group("task_id")
+                if "num" in match.groupdict() and match.group("num"):
+                    return f"Q{match.group('num')}"
+        digest = hashlib.sha1(text[:1000].encode("utf-8", errors="ignore")).hexdigest()[:12]
+        return f"task:{digest}"
+
+    async def awrap_tool_call(self, request, handler):
+        tool_name = request.tool_call.get("name", "") if hasattr(request, "tool_call") else ""
+        if tool_name not in self.search_tool_names:
+            return await handler(request)
+
+        text = self._message_text(request)
+        limit = self._extract_budget(text)
+        if limit is None:
+            return await handler(request)
+
+        task_key = self._extract_task_key(text)
+        counts = _session_task_search_counts.get()
+        if counts is None:
+            counts = {}
+            _session_task_search_counts.set(counts)
+
+        current_count = counts.get(task_key, 0)
+        if current_count >= limit:
+            logger.info("Task search budget exhausted for %s (%d/%d)", task_key, current_count, limit)
+            tool_call = request.tool_call if hasattr(request, "tool_call") else {}
+            return ToolMessage(
+                content=(
+                    f"TASK_SEARCH_BUDGET_EXHAUSTED for {task_key}: limit is {limit} search calls. "
+                    "Do not search again for this task. Write the notes, claim fragments, and any "
+                    "unverified gaps from evidence already gathered."
+                ),
+                tool_call_id=tool_call.get("id", ""),
+                name=tool_name,
+            )
+
+        counts[task_key] = current_count + 1
+        return await handler(request)
 
 
 class SearchBudgetExhaustionRepairMiddleware(AgentMiddleware):

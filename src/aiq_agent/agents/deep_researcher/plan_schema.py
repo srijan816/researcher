@@ -164,6 +164,11 @@ class PlanQuery(BaseModel):
 
     query: str
     tool: str = Field(default="advanced_web_search_tool")
+    task_id: str | None = None
+    task_category: str = Field(default="evidence")
+    relevance_weight: int = Field(default=1, ge=1, le=5)
+    budget_percent: float | None = None
+    search_budget: int | None = Field(default=None, ge=1)
     target_claims: list[PlanTargetClaim] = Field(default_factory=list)
     target_claim_ids: list[str] = Field(default_factory=list)
     target_sections: list[str] = Field(default_factory=list)
@@ -306,8 +311,32 @@ def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
     )
 
     queries: list[dict[str, Any]] = []
+    raw_queries = list(input_data.queries)
+    budget_percents = [query.budget_percent for query in raw_queries]
+    needs_budget_normalization = (
+        not raw_queries
+        or any(percent is None or percent <= 0 for percent in budget_percents)
+        or abs(sum(float(percent or 0) for percent in budget_percents) - 100.0) > 1.0
+    )
+    if needs_budget_normalization:
+        weights = [max(1, int(query.relevance_weight or 1)) for query in raw_queries] or [1]
+        weight_total = sum(weights) or 1
+        normalized_budget_percents = [round(weight / weight_total * 100.0, 1) for weight in weights]
+        if normalized_budget_percents:
+            normalized_budget_percents[-1] = round(
+                normalized_budget_percents[-1] + (100.0 - sum(normalized_budget_percents)), 1
+            )
+    else:
+        normalized_budget_percents = [round(float(percent or 0), 1) for percent in budget_percents]
+        if normalized_budget_percents:
+            normalized_budget_percents[-1] = round(
+                normalized_budget_percents[-1] + (100.0 - sum(normalized_budget_percents)), 1
+            )
+
     for index, query in enumerate(input_data.queries, start=1):
         query_dict = query.model_dump()
+        query_dict["task_id"] = query_dict.get("task_id") or f"Q{index}"
+        query_dict["budget_percent"] = normalized_budget_percents[index - 1]
         if not query_dict.get("target_sections"):
             query_dict["target_sections"] = section_titles[:]
         if not query_dict.get("target_claims"):

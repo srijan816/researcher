@@ -52,6 +52,7 @@ from .custom_middleware import SearchBudgetExhaustionRepairMiddleware
 from .custom_middleware import SequentialSearchMiddleware
 from .custom_middleware import SourceRegistryMiddleware
 from .custom_middleware import TaskBatchLimitMiddleware
+from .custom_middleware import TaskSearchBudgetMiddleware
 from .custom_middleware import ThinkingOnlyRepairMiddleware
 from .custom_middleware import ToolArgumentNormalizationMiddleware
 from .custom_middleware import ToolBudgetMiddleware
@@ -64,6 +65,7 @@ from .custom_middleware import reset_session_parallel_tool_limits
 from .custom_middleware import reset_session_plan_validation_failures
 from .custom_middleware import reset_session_planner_model_turns
 from .custom_middleware import reset_session_recent_artifact_writes
+from .custom_middleware import reset_session_task_search_counts
 from .custom_middleware import reset_session_tool_counts
 from .custom_middleware import reset_session_tool_limits
 from .custom_middleware import set_session_exhausted_tools
@@ -71,6 +73,7 @@ from .custom_middleware import set_session_parallel_tool_limits
 from .custom_middleware import set_session_plan_validation_failures
 from .custom_middleware import set_session_planner_model_turns
 from .custom_middleware import set_session_recent_artifact_writes
+from .custom_middleware import set_session_task_search_counts
 from .custom_middleware import set_session_tool_counts
 from .custom_middleware import set_session_tool_limits
 from .deepagents_runtime import DeepAgentsRuntime
@@ -401,6 +404,9 @@ class DeepResearcherAgent:
                 search_tool_names={"advanced_web_search_tool", "web_search_tool", "exa_web_search_tool"},
                 max_repairs=0,
                 scope=budget_scope,
+            ),
+            TaskSearchBudgetMiddleware(
+                search_tool_names={"advanced_web_search_tool", "web_search_tool", "exa_web_search_tool"}
             ),
             ToolBudgetMiddleware(
                 limits={
@@ -881,6 +887,38 @@ class DeepResearcherAgent:
         }
 
     @staticmethod
+    def _apply_query_budget_allocation(
+        queries: list[dict[str, Any]],
+        budget_profile: dict[str, Any],
+        *,
+        default_category: str = "evidence",
+    ) -> list[dict[str, Any]]:
+        """Attach generic task budget fields to researcher assignments."""
+        if not queries:
+            return queries
+
+        weights = [max(1, int(query.get("relevance_weight") or 1)) for query in queries]
+        weight_total = sum(weights) or 1
+        active_budget = max(len(queries), int(budget_profile.get("active_search_calls") or len(queries)))
+        per_task_cap = max(1, int(budget_profile.get("search_calls_per_task") or active_budget))
+
+        allocated: list[dict[str, Any]] = []
+        percents: list[float] = [round(weight / weight_total * 100.0, 1) for weight in weights]
+        percents[-1] = round(percents[-1] + (100.0 - sum(percents)), 1)
+        for index, query in enumerate(queries, start=1):
+            task = dict(query)
+            percent = float(task.get("budget_percent") or percents[index - 1])
+            task["task_id"] = task.get("task_id") or f"Q{index}"
+            task["task_category"] = task.get("task_category") or default_category
+            task["relevance_weight"] = weights[index - 1]
+            task["budget_percent"] = percent
+            task["search_budget"] = int(
+                task.get("search_budget") or max(1, min(per_task_cap, round(active_budget * percent / 100.0)))
+            )
+            allocated.append(task)
+        return allocated
+
+    @staticmethod
     def _budget_profile_for_state(
         state: DeepResearchAgentState,
         *,
@@ -929,6 +967,7 @@ class DeepResearcherAgent:
             else "No abbreviation glossary supplied."
         )
         sections = DeepResearcherAgent._structured_lesson_section_titles(scope)
+        budget_profile = depth_config.budget_profile(mode="lesson_first", section_count=len(sections))
 
         toc = [
             {
@@ -963,6 +1002,8 @@ class DeepResearcherAgent:
                     "Cover the exact lesson topic first so the report teaches the broader content before any "
                     "motion-specific debate branch."
                 ),
+                "task_category": "foundations",
+                "relevance_weight": 5,
                 "target_claims": [
                     DeepResearcherAgent._target_claim(
                         "C1",
@@ -989,6 +1030,8 @@ class DeepResearcherAgent:
                     "Collect source-backed raw material and examples that teach the topic itself, not only one "
                     "narrow argument or policy controversy."
                 ),
+                "task_category": "examples",
+                "relevance_weight": 3,
                 "target_claims": [
                     DeepResearcherAgent._target_claim(
                         "C3",
@@ -1015,6 +1058,8 @@ class DeepResearcherAgent:
                     "Gather enough evidence to connect the broader lesson to the final motion without allowing "
                     "the motion to replace the lesson topic."
                 ),
+                "task_category": "bridge",
+                "relevance_weight": 1,
                 "target_claims": [
                     DeepResearcherAgent._target_claim(
                         "C5",
@@ -1069,7 +1114,7 @@ class DeepResearcherAgent:
                     "verifiability_estimate": "mixed",
                 },
                 "source_strategy": DeepResearcherAgent._source_strategy_for_claims(),
-                "budget_profile": depth_config.budget_profile(mode="lesson_first", section_count=len(sections)),
+                "budget_profile": budget_profile,
                 "structured_lesson_scope_used_directly": True,
                 "exact_lesson_topic": topic,
                 "final_debate_motion": motion,
@@ -1083,7 +1128,7 @@ class DeepResearcherAgent:
             },
             "report_title": f"{topic} Content Research Dossier",
             "report_toc": toc,
-            "budget_profile": depth_config.budget_profile(mode="lesson_first", section_count=len(sections)),
+            "budget_profile": budget_profile,
             "constraints": [
                 {
                     "category": "content",
@@ -1156,7 +1201,11 @@ class DeepResearcherAgent:
                     "Prop/opp case-file structure",
                 ],
             },
-            "queries": queries,
+            "queries": DeepResearcherAgent._apply_query_budget_allocation(
+                queries,
+                budget_profile,
+                default_category="lesson_evidence",
+            ),
         }
         return json.dumps(plan, indent=2)
 
@@ -1187,6 +1236,10 @@ class DeepResearcherAgent:
         """Create a compact /shared/plan.json from an already approved user plan."""
         clean_query = DeepResearcherAgent._query_without_context(query)
         is_financial_screen = DeepResearcherAgent._is_financial_screen_query(clean_query)
+        budget_profile = depth_config.budget_profile(
+            mode="focused_screen" if is_financial_screen else "symmetric",
+            section_count=len(sections),
+        )
 
         toc = [
             {
@@ -1210,6 +1263,8 @@ class DeepResearcherAgent:
                         "Find and validate source-backed fair-value discount candidates in one bounded "
                         "researcher task without expanding the scope."
                     ),
+                    "task_category": "candidate_screening",
+                    "relevance_weight": 5,
                     "target_claims": [
                         DeepResearcherAgent._target_claim(
                             "C1",
@@ -1259,6 +1314,8 @@ class DeepResearcherAgent:
                     "tool": "advanced_web_search_tool",
                     "target_sections": [section],
                     "rationale": "Answer the approved plan section directly.",
+                    "task_category": "evidence",
+                    "relevance_weight": 1,
                     "target_claims": [
                         DeepResearcherAgent._target_claim(
                             f"C{index + 1}",
@@ -1308,22 +1365,16 @@ class DeepResearcherAgent:
                     "verifiability_estimate": "mixed",
                 },
                 "source_strategy": DeepResearcherAgent._source_strategy_for_claims(),
-                "budget_profile": depth_config.budget_profile(
-                    mode="focused_screen" if is_financial_screen else "symmetric",
-                    section_count=len(sections),
-                ),
+                "budget_profile": budget_profile,
                 "approved_plan_used_directly": True,
                 "out_of_scope": ["Expanding beyond the approved plan", "Generic background not requested by the user"],
             },
             "report_title": title,
             "report_toc": toc,
-            "budget_profile": depth_config.budget_profile(
-                mode="focused_screen" if is_financial_screen else "symmetric",
-                section_count=len(sections),
-            ),
+            "budget_profile": budget_profile,
             "constraints": constraints,
             "output_style": output_style,
-            "queries": queries,
+            "queries": DeepResearcherAgent._apply_query_budget_allocation(queries, budget_profile),
         }
         return json.dumps(plan, indent=2)
 
@@ -2251,6 +2302,7 @@ class DeepResearcherAgent:
         plan_validation_failures_token = set_session_plan_validation_failures(0)
         planner_model_turns_token = set_session_planner_model_turns(0)
         recent_artifact_writes_token = set_session_recent_artifact_writes({})
+        task_search_counts_token = set_session_task_search_counts({})
 
         messages = state.messages
         scope_request = self._query_without_context(self._latest_user_text(state))
@@ -2530,3 +2582,4 @@ class DeepResearcherAgent:
             reset_session_plan_validation_failures(plan_validation_failures_token)
             reset_session_planner_model_turns(planner_model_turns_token)
             reset_session_recent_artifact_writes(recent_artifact_writes_token)
+            reset_session_task_search_counts(task_search_counts_token)
