@@ -1,7 +1,9 @@
-# AI-Q Deep Research — MiniMax M3 + SearXNG/Jina (Zero Tavily)
+# AI-Q Deep Research — MiniMax M3/M2.7 + SearXNG/Jina (Zero Tavily)
 # Strategy:
 #   - MiniMax M3 synthesis for high-context reasoning
 #   - MiniMax M3 planner-fast for compact plan commits
+#   - Deeper tier uses MiniMax M2.7 highspeed with explicit thinking enabled
+#     for planner, researcher, and synthesis to recover the faster pre-M3 path
 #   - MiniMax M3 with thinking disabled for latency-sensitive intent, clarifier,
 #     shallow, and researcher loops
 #   - Exa → optional primary high-quality search when EXA_API_KEY is set
@@ -145,6 +147,60 @@ llms:
     stream_repetition_token_limit: 24
     max_retries: 1
 
+  minimax_m27_deeper_planner_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_DEEPER_PLANNER_MODEL:-MiniMax-M2.7-highspeed}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.2
+    top_p: 0.8
+    max_tokens: 12000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: enabled
+      budget_tokens: 2048
+    request_timeout: 300
+    stream_no_progress_timeout: 75
+    stream_repetition_token_limit: 24
+    max_retries: 1
+
+  minimax_m27_deeper_research_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_DEEPER_RESEARCH_MODEL:-MiniMax-M2.7-highspeed}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.25
+    top_p: 0.85
+    max_tokens: 10000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: enabled
+      budget_tokens: 2048
+    request_timeout: 360
+    stream_no_progress_timeout: 90
+    stream_repetition_token_limit: 24
+    max_retries: 1
+
+  minimax_m27_deeper_synthesis_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_DEEPER_SYNTHESIS_MODEL:-MiniMax-M2.7-highspeed}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.2
+    top_p: 0.8
+    max_tokens: 18000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: enabled
+      budget_tokens: 4096
+    request_timeout: 480
+    stream_no_progress_timeout: 120
+    stream_repetition_token_limit: 24
+    max_retries: 1
+
 functions:
   # Data Source Registry — SearXNG/Jina only, zero Tavily
   data_sources:
@@ -247,6 +303,9 @@ functions:
     _type: deep_research_agent
     orchestrator_llm: minimax_m3_synthesis_llm
     medium_orchestrator_llm: minimax_m3_synthesis_fast_llm
+    deeper_orchestrator_llm: minimax_m27_deeper_synthesis_llm
+    deeper_planner_llm: minimax_m27_deeper_planner_llm
+    deeper_researcher_llm: minimax_m27_deeper_research_llm
     researcher_llm: minimax_m3_research_llm
     planner_llm: minimax_m3_planner_fast_llm
     max_loops: 2

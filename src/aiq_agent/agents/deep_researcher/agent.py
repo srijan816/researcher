@@ -520,7 +520,7 @@ class DeepResearcherAgent:
                 **deepagents_prompt_context,
             ),
             "tools": self.planner_tools,
-            "model": self.llm_provider.get(LLMRole.PLANNER),
+            "model": self._planner_llm_for_state(state),
             "middleware": self._build_middleware_for_scope("planner"),
         }
         researcher_agent: dict[str, Any] = {
@@ -540,7 +540,7 @@ class DeepResearcherAgent:
                 **deepagents_prompt_context,
             ),
             "tools": self.all_tools,
-            "model": self.llm_provider.get(LLMRole.RESEARCHER),
+            "model": self._researcher_llm_for_state(state),
             "middleware": self._build_middleware_for_scope("researcher"),
         }
         if skill_sources is not None:
@@ -582,10 +582,24 @@ class DeepResearcherAgent:
         return agent.with_config({"recursion_limit": 1000})
 
     def _orchestrator_llm_for_state(self, state: DeepResearchAgentState) -> Any:
-        """Use the latency-first synthesis model for medium tier when configured."""
+        """Use tier-specific synthesis models when configured."""
         if state.research_depth == "medium" and self.llm_provider.has_role(LLMRole.MEDIUM_ORCHESTRATOR):
             return self.llm_provider.get(LLMRole.MEDIUM_ORCHESTRATOR)
+        if state.research_depth == "deeper" and self.llm_provider.has_role(LLMRole.DEEPER_ORCHESTRATOR):
+            return self.llm_provider.get(LLMRole.DEEPER_ORCHESTRATOR)
         return self.llm_provider.get(LLMRole.ORCHESTRATOR)
+
+    def _planner_llm_for_state(self, state: DeepResearchAgentState) -> Any:
+        """Use tier-specific planner models when configured."""
+        if state.research_depth == "deeper" and self.llm_provider.has_role(LLMRole.DEEPER_PLANNER):
+            return self.llm_provider.get(LLMRole.DEEPER_PLANNER)
+        return self.llm_provider.get(LLMRole.PLANNER)
+
+    def _researcher_llm_for_state(self, state: DeepResearchAgentState) -> Any:
+        """Use tier-specific researcher models when configured."""
+        if state.research_depth == "deeper" and self.llm_provider.has_role(LLMRole.DEEPER_RESEARCHER):
+            return self.llm_provider.get(LLMRole.DEEPER_RESEARCHER)
+        return self.llm_provider.get(LLMRole.RESEARCHER)
 
     @staticmethod
     def _latest_user_text(state: DeepResearchAgentState) -> str:

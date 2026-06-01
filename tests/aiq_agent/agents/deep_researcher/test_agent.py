@@ -570,6 +570,35 @@ class TestDeepResearcherAgent:
         assert agent._orchestrator_llm_for_state(medium) is medium_llm
         assert agent._orchestrator_llm_for_state(deep) is default_llm
 
+    def test_deeper_tier_uses_dedicated_model_roles_when_configured(self, real_tool):
+        """Deeper should be able to run on M2.7-specific role aliases."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        default_llm = MagicMock(name="default")
+        deeper_orchestrator = MagicMock(name="deeper_orchestrator")
+        deeper_planner = MagicMock(name="deeper_planner")
+        deeper_researcher = MagicMock(name="deeper_researcher")
+        provider = LLMProvider()
+        provider.set_default(default_llm)
+        provider.configure(LLMRole.ORCHESTRATOR, default_llm)
+        provider.configure(LLMRole.PLANNER, default_llm)
+        provider.configure(LLMRole.RESEARCHER, default_llm)
+        provider.configure(LLMRole.DEEPER_ORCHESTRATOR, deeper_orchestrator)
+        provider.configure(LLMRole.DEEPER_PLANNER, deeper_planner)
+        provider.configure(LLMRole.DEEPER_RESEARCHER, deeper_researcher)
+
+        agent = DeepResearcherAgent(llm_provider=provider, tools=[real_tool])
+
+        deeper = DeepResearchAgentState(messages=[HumanMessage(content="Compare models")], research_depth="deeper")
+        deep = DeepResearchAgentState(messages=[HumanMessage(content="Compare models")], research_depth="deep")
+
+        assert agent._orchestrator_llm_for_state(deeper) is deeper_orchestrator
+        assert agent._planner_llm_for_state(deeper) is deeper_planner
+        assert agent._researcher_llm_for_state(deeper) is deeper_researcher
+        assert agent._orchestrator_llm_for_state(deep) is default_llm
+        assert agent._planner_llm_for_state(deep) is default_llm
+        assert agent._researcher_llm_for_state(deep) is default_llm
+
     def test_researcher_context_pruning_is_tighter_than_orchestrator(self, mock_llm_provider, real_tool):
         """Subagents should keep compact context; final synthesis can use more."""
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent

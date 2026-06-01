@@ -16,7 +16,7 @@ def test_anthropic_compatible_config_preserves_thinking_controls():
     assert config.model_dump(exclude_none=True)["thinking"] == {"type": "disabled"}
 
 
-def test_minimax_active_config_uses_no_thinking_for_latency_sensitive_roles():
+def test_minimax_active_config_uses_m2_7_highspeed_for_deeper_tier():
     config_path = Path("configs/config_cli_minimax_ddgs.yml")
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
@@ -27,6 +27,12 @@ def test_minimax_active_config_uses_no_thinking_for_latency_sensitive_roles():
     assert llms["minimax_m3_research_llm"]["thinking"] == {"type": "disabled"}
     assert llms["minimax_m3_planner_fast_llm"]["thinking"] == {"type": "disabled"}
     assert llms["minimax_m3_synthesis_fast_llm"]["thinking"] == {"type": "disabled"}
+    assert llms["minimax_m27_deeper_planner_llm"]["model_name"].endswith("MiniMax-M2.7-highspeed}")
+    assert llms["minimax_m27_deeper_research_llm"]["model_name"].endswith("MiniMax-M2.7-highspeed}")
+    assert llms["minimax_m27_deeper_synthesis_llm"]["model_name"].endswith("MiniMax-M2.7-highspeed}")
+    assert llms["minimax_m27_deeper_planner_llm"]["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert llms["minimax_m27_deeper_research_llm"]["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert llms["minimax_m27_deeper_synthesis_llm"]["thinking"] == {"type": "enabled", "budget_tokens": 4096}
     assert functions["intent_classifier"]["llm"] == "minimax_m3_fast_llm"
     assert functions["clarifier_agent"]["llm"] == "minimax_m3_fast_llm"
     assert functions["clarifier_agent"]["planner_llm"] == "minimax_m3_fast_llm"
@@ -34,4 +40,7 @@ def test_minimax_active_config_uses_no_thinking_for_latency_sensitive_roles():
     assert functions["deep_research_agent"]["researcher_llm"] == "minimax_m3_research_llm"
     assert functions["deep_research_agent"]["orchestrator_llm"] == "minimax_m3_synthesis_llm"
     assert functions["deep_research_agent"]["medium_orchestrator_llm"] == "minimax_m3_synthesis_fast_llm"
+    assert functions["deep_research_agent"]["deeper_orchestrator_llm"] == "minimax_m27_deeper_synthesis_llm"
+    assert functions["deep_research_agent"]["deeper_planner_llm"] == "minimax_m27_deeper_planner_llm"
+    assert functions["deep_research_agent"]["deeper_researcher_llm"] == "minimax_m27_deeper_research_llm"
     assert functions["deep_research_agent"]["planner_llm"] == "minimax_m3_planner_fast_llm"

@@ -330,6 +330,30 @@ async def run_agent_job(
                 )
             planner_llm = None
             researcher_llm = None
+            medium_orchestrator_llm = None
+            deeper_orchestrator_llm = None
+            deeper_planner_llm = None
+            deeper_researcher_llm = None
+            if hasattr(fn_config, "medium_orchestrator_llm") and fn_config.medium_orchestrator_llm:
+                medium_orchestrator_llm = await builder.get_llm(
+                    fn_config.medium_orchestrator_llm,
+                    wrapper_type=LLMFrameworkEnum.LANGCHAIN,
+                )
+            if hasattr(fn_config, "deeper_orchestrator_llm") and fn_config.deeper_orchestrator_llm:
+                deeper_orchestrator_llm = await builder.get_llm(
+                    fn_config.deeper_orchestrator_llm,
+                    wrapper_type=LLMFrameworkEnum.LANGCHAIN,
+                )
+            if hasattr(fn_config, "deeper_planner_llm") and fn_config.deeper_planner_llm:
+                deeper_planner_llm = await builder.get_llm(
+                    fn_config.deeper_planner_llm,
+                    wrapper_type=LLMFrameworkEnum.LANGCHAIN,
+                )
+            if hasattr(fn_config, "deeper_researcher_llm") and fn_config.deeper_researcher_llm:
+                deeper_researcher_llm = await builder.get_llm(
+                    fn_config.deeper_researcher_llm,
+                    wrapper_type=LLMFrameworkEnum.LANGCHAIN,
+                )
             if hasattr(fn_config, "planner_llm") and fn_config.planner_llm:
                 planner_llm = await builder.get_llm(fn_config.planner_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
             if hasattr(fn_config, "researcher_llm") and fn_config.researcher_llm:
@@ -459,6 +483,14 @@ async def run_agent_job(
                     provider.set_default(llm)
                     if orchestrator_llm:
                         provider.configure(LLMRole.ORCHESTRATOR, orchestrator_llm)
+                    if medium_orchestrator_llm:
+                        provider.configure(LLMRole.MEDIUM_ORCHESTRATOR, medium_orchestrator_llm)
+                    if deeper_orchestrator_llm:
+                        provider.configure(LLMRole.DEEPER_ORCHESTRATOR, deeper_orchestrator_llm)
+                    if deeper_planner_llm:
+                        provider.configure(LLMRole.DEEPER_PLANNER, deeper_planner_llm)
+                    if deeper_researcher_llm:
+                        provider.configure(LLMRole.DEEPER_RESEARCHER, deeper_researcher_llm)
                     if planner_llm:
                         provider.configure(LLMRole.PLANNER, planner_llm)
                     if researcher_llm:
