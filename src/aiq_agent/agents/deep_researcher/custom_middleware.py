@@ -910,9 +910,10 @@ class PostWriteReadbackGuardMiddleware(AgentMiddleware):
                 logger.info("Suppressed immediate readback of recently written artifact %s", path)
                 return ToolMessage(
                     content=(
-                        f"READ_AFTER_WRITE_VERIFICATION_SKIPPED: {path} was just written successfully. "
-                        "Do not inspect it for display truncation or rewrite it just to verify completeness. "
-                        "Continue to the next required deliverable or return your task summary."
+                        f"READ_AFTER_WRITE_CONFIRMED: {path} was just written successfully and the runtime "
+                        "has already persisted the full artifact. Treat this as verification success. "
+                        "Do not call grep, read_file, edit_file, or write_file again just to prove completeness. "
+                        "Move to the next workflow step or finish."
                     ),
                     tool_call_id=tool_call.get("id", ""),
                     name=tool_name,

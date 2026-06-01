@@ -645,7 +645,7 @@ class TestPostWriteReadbackGuardMiddleware:
             second_read_result = await middleware.awrap_tool_call(self.Request("read_file"), handler)
 
             assert write_result.content == "written"
-            assert "READ_AFTER_WRITE_VERIFICATION_SKIPPED" in read_result.content
+            assert "READ_AFTER_WRITE_CONFIRMED" in read_result.content
             assert second_read_result.content == "actual file content"
             assert handler.await_count == 2
         finally:

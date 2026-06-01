@@ -1056,7 +1056,10 @@ def _evaluate_post_run_quality(db_url: str, job_id: str) -> list[str]:
         failed = ", ".join(dict.fromkeys(failed_researcher_tasks))
         problems.append(f"researcher task(s) failed: {failed}")
     if collected_sources:
-        expected_min = max(5, len(collected_sources) // 4)
+        # Search/extraction can collect hundreds or thousands of candidate URLs,
+        # especially with parallel M3 researcher lanes. A readable report should
+        # cite the sources it actually uses, not one quarter of every candidate.
+        expected_min = min(25, max(5, len(collected_sources) // 10))
         if len(collected_sources) >= 10 and len(cited_sources) < expected_min:
             problems.append(
                 f"cited sources too sparse ({len(cited_sources)} cited vs "

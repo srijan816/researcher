@@ -175,6 +175,48 @@ def test_post_run_quality_gates_pass_with_report_and_citation(tmp_path):
     assert _evaluate_post_run_quality(db_url, "job-quality-ok") == []
 
 
+def test_post_run_quality_sparse_gate_caps_candidate_source_expectation(tmp_path):
+    """Candidate-source fanout should not require citing hundreds of URLs."""
+    from aiq_api.jobs.event_store import EventStore
+
+    db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
+    store = EventStore(db_url, "job-quality-many-candidates")
+    store.store(
+        {
+            "type": "artifact.update",
+            "name": "/report.md",
+            "data": {"type": "file", "content": "# Report\n\nBody"},
+        }
+    )
+    for index in range(300):
+        url = f"https://example.com/source-{index}"
+        store.store(
+            {
+                "type": "artifact.update",
+                "name": url,
+                "data": {"type": "citation_source", "content": url, "url": url},
+            }
+        )
+    for index in range(25):
+        url = f"https://cited{index}.example.com/source"
+        store.store(
+            {
+                "type": "artifact.update",
+                "name": url,
+                "data": {
+                    "type": "citation_use",
+                    "content": url,
+                    "url": url,
+                    "source_class": "authoritative_third_party",
+                },
+            }
+        )
+
+    problems = _evaluate_post_run_quality(db_url, "job-quality-many-candidates")
+
+    assert not any("cited sources too sparse" in problem for problem in problems)
+
+
 def test_post_run_quality_flags_entity_heavy_plan_without_fact_ledger(tmp_path):
     """Entity-heavy plans must produce a fact ledger, not just a report."""
     from aiq_api.jobs.event_store import EventStore
