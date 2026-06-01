@@ -215,6 +215,7 @@ class AgentEventCallback(BaseCallbackHandler):
     SEARCH_TOOL_PATTERNS = {"search", "tavily", "web_search", "google", "bing"}
     TOOL_CALL_PATTERN = re.compile(r'\b[a-z][a-z0-9_]*\s*\(\s*(?:["\'{]|[a-z_]+\s*=)', re.IGNORECASE)
     SEARCH_RESULT_SNAPSHOT_LIMIT = 24000
+    TOOL_OUTPUT_SNAPSHOT_LIMIT = 12000
 
     AGENT_PATTERNS = {"agent"}
     AGENT_EXCLUDE_PATTERNS = {"middleware", "handler", "callback"}
@@ -606,6 +607,35 @@ class AgentEventCallback(BaseCallbackHandler):
         how to extract content and metadata from the tool input.
         """
         mapping = self._tool_mapping.get_mapping(tool_name)
+        if tool_name.lower() == "write_plan" and isinstance(tool_input, dict):
+            try:
+                from aiq_agent.agents.deep_researcher.plan_tools import plan_json_from_tool_args
+
+                plan_json = plan_json_from_tool_args(
+                    report_title=str(tool_input.get("report_title") or tool_input.get("title") or "Research Plan"),
+                    report_toc=tool_input.get("report_toc") or tool_input.get("sections") or [],
+                    queries=tool_input.get("queries") or tool_input.get("search_queries") or [],
+                    constraints=tool_input.get("constraints") or tool_input.get("requirements") or [],
+                    output_style=tool_input.get("output_style"),
+                    task_analysis=tool_input.get("task_analysis") or tool_input.get("analysis"),
+                    fact_ledger_targets=tool_input.get("fact_ledger_targets"),
+                )
+            except Exception:
+                logger.debug("Unable to render write_plan artifact preview", exc_info=True)
+                plan_json = str(tool_input)
+            agent_info = self._find_agent_for_run(run_id)
+            self._emit_artifact(
+                ArtifactType.FILE,
+                plan_json,
+                name="/shared/plan.json",
+                file_path="/shared/plan.json",
+                path="/shared/plan.json",
+                filename="plan.json",
+                workflow_source=agent_info[0] if agent_info else None,
+                agent_id=agent_info[1] if agent_info else None,
+            )
+            return
+
         if not mapping:
             return
 
@@ -702,7 +732,7 @@ class AgentEventCallback(BaseCallbackHandler):
             )
         )
 
-    TOOL_INPUT_TRIM_LIMIT = 500
+    TOOL_INPUT_TRIM_LIMIT = 6000
 
     def _trim_tool_input(self, parsed_input: Any) -> Any:
         """Trim tool input to a reasonable size for SSE streaming."""
@@ -714,6 +744,18 @@ class AgentEventCallback(BaseCallbackHandler):
         if isinstance(parsed_input, str):
             return parsed_input[: self.TOOL_INPUT_TRIM_LIMIT] + "..."
         return serialized[: self.TOOL_INPUT_TRIM_LIMIT] + "..."
+
+    def _trim_tool_output(self, output: Any) -> str | None:
+        """Return a bounded but useful tool-output snapshot for UI debugging."""
+        extracted = self._extract_tool_output(output)
+        if extracted is None:
+            return None
+        text = self._coerce_stream_text(extracted)
+        if not text:
+            text = str(extracted)
+        if len(text) > self.TOOL_OUTPUT_SNAPSHOT_LIMIT:
+            return text[: self.TOOL_OUTPUT_SNAPSHOT_LIMIT] + "\n\n[... tool output display shortened ...]"
+        return text
 
     def on_tool_start(self, serialized: dict | None, input_str: str, **kwargs) -> None:
         tool_name = serialized.get("name", "unknown") if serialized else "unknown"
@@ -746,13 +788,14 @@ class AgentEventCallback(BaseCallbackHandler):
         tool_name = self._run_id_to_name.pop(run_id, kwargs.get("name", "unknown"))
 
         agent_info = self._find_agent_for_run(run_id)
+        output_snapshot = self._trim_tool_output(output)
 
         self._emit(
             IntermediateStepEvent(
                 category=EventCategory.TOOL,
                 state=EventState.END,
                 name=tool_name,
-                data=None,
+                data=EventData(output=output_snapshot) if output_snapshot else None,
                 metadata=self._build_metadata_for_run(run_id),
             )
         )

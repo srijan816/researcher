@@ -20,8 +20,8 @@ import { Flex, Text, Button, Checkbox } from '@/adapters/ui'
 import { ChevronDown, Check, Close, Clock, Search, Document, Edit, Wand, LoadingSpinner } from '@/adapters/ui/icons'
 import type { DeepResearchToolCall } from '@/features/chat/types'
 
-/** Maximum characters for truncated query display */
-const MAX_QUERY_LENGTH = 120
+/** Maximum characters for collapsed query display */
+const MAX_QUERY_LENGTH = 360
 
 /** Tool names that are search/research tools */
 const SEARCH_TOOL_PATTERNS = ['search', 'web', 'tavily', 'google', 'bing']
@@ -122,26 +122,6 @@ const getToolDisplayName = (toolName: string): string => {
 }
 
 /**
- * Deduplicate tool calls by query text, keeping the most recent status
- */
-const dedupeToolCalls = (toolCalls: DeepResearchToolCall[]): DeepResearchToolCall[] => {
-  const seen = new Map<string, DeepResearchToolCall>()
-
-  for (const tc of toolCalls) {
-    const key = getToolCallDescription(tc, false)
-    const existing = seen.get(key)
-
-    if (!existing) {
-      seen.set(key, tc)
-    } else if (tc.status === 'complete' && existing.status !== 'complete') {
-      seen.set(key, tc)
-    }
-  }
-
-  return Array.from(seen.values())
-}
-
-/**
  * Expandable card showing a single agent's status, tool calls, and output.
  */
 export const AgentCard: FC<AgentCardProps> = ({ agent, defaultExpanded = true }) => {
@@ -152,7 +132,7 @@ export const AgentCard: FC<AgentCardProps> = ({ agent, defaultExpanded = true })
   const isError = agent.status === 'error'
 
   const rawToolCalls = agent.toolCalls || []
-  const toolCalls = dedupeToolCalls(rawToolCalls)
+  const toolCalls = rawToolCalls
   const completedToolCalls = toolCalls.filter((tc) => tc.status === 'complete')
   const searchToolCalls = toolCalls.filter((tc) => getToolType(tc.name) === 'search')
   const hasToolCalls = toolCalls.length > 0
@@ -249,11 +229,11 @@ export const AgentCard: FC<AgentCardProps> = ({ agent, defaultExpanded = true })
           gap="2"
           className="px-3 pb-3 border-t border-base pt-2"
         >
-          {/* Current task description - truncated */}
+          {/* Current task description - bounded but detailed */}
           {agent.currentTask && (
-            <Text kind="body/regular/sm" className="text-subtle line-clamp-3">
-              {agent.currentTask.length > 200
-                ? agent.currentTask.substring(0, 200) + '...'
+            <Text kind="body/regular/sm" className="text-subtle line-clamp-6">
+              {agent.currentTask.length > 1000
+                ? agent.currentTask.substring(0, 1000) + '...'
                 : agent.currentTask}
             </Text>
           )}
@@ -291,7 +271,7 @@ export const AgentCard: FC<AgentCardProps> = ({ agent, defaultExpanded = true })
                         <ToolIcon className="h-3 w-3 text-subtle shrink-0 mt-0.5" />
                         <Text
                           kind="body/regular/sm"
-                          className={`${isToolComplete ? 'text-subtle' : 'text-primary'} line-clamp-2`}
+                          className={`${isToolComplete ? 'text-subtle' : 'text-primary'} line-clamp-4`}
                         >
                           {isSearchType ? (
                             description

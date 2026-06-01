@@ -211,6 +211,22 @@ describe('AgentCard', () => {
 
       expect(screen.getByText('1/2 queries')).toBeInTheDocument()
     })
+
+    test('does not hide repeated identical tool calls', () => {
+      render(
+        <AgentCard
+          agent={createAgent({
+            toolCalls: [
+              createToolCall({ id: 'tc-1', input: { question: 'same query' } }),
+              createToolCall({ id: 'tc-2', input: { question: 'same query' } }),
+            ],
+          })}
+        />
+      )
+
+      expect(screen.getByText('2/2 queries')).toBeInTheDocument()
+      expect(screen.getAllByText('same query')).toHaveLength(2)
+    })
   })
 
   describe('accessibility', () => {

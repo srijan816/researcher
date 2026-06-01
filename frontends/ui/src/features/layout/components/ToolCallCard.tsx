@@ -72,7 +72,7 @@ const formatArguments = (args: Record<string, unknown>, pretty = false): string 
 const getPreviewText = (toolCall: ToolCallInfo): string => {
   if (toolCall.arguments) {
     const formatted = formatArguments(toolCall.arguments)
-    return formatted.length > 100 ? `${formatted.substring(0, 100)}...` : formatted
+    return formatted.length > 240 ? `${formatted.substring(0, 240)}...` : formatted
   }
   return ''
 }
@@ -206,7 +206,7 @@ export const ToolCallCard: FC<ToolCallCardProps> = ({ toolCall }) => {
               <Text kind="label/semibold/xs" className="text-subtle uppercase">
                 Result
               </Text>
-              <pre className="text-xs font-mono bg-surface-raised text-primary p-2 rounded overflow-x-auto whitespace-pre-wrap max-h-48">
+              <pre className="text-xs font-mono bg-surface-raised text-primary p-2 rounded overflow-x-auto whitespace-pre-wrap max-h-96">
                 {toolCall.result}
               </pre>
             </Flex>

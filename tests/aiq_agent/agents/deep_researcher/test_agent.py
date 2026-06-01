@@ -464,6 +464,42 @@ class TestDeepResearcherAgent:
             assert "Topic Landscape" in (updated.clarifier_result or "")
             assert "Approved Research Plan" in (updated.clarifier_result or "")
 
+    def test_lesson_prompt_passes_abbreviation_glossary_to_planner(
+        self,
+        mock_llm_provider,
+        real_tool,
+        mock_create_deep_agent,
+    ):
+        """Curriculum shorthand like OT should not be expanded into unrelated product terms."""
+        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+            )
+            state = DeepResearchAgentState(
+                messages=[
+                    HumanMessage(
+                        content=(
+                            "**Broad topic**: Middle East Conflict Debates\n"
+                            "**Final debate motion**: latest Israeli attacks for OT\n"
+                            "**Student tier**: OT\n\n"
+                            "The final report must have EXACTLY these 14 sections, in this order:\n"
+                            "1. Topic Landscape\n"
+                            "2. Core Concept\n"
+                            "3. How It Works\n"
+                        )
+                    )
+                ],
+            )
+
+            updated = agent._inject_approved_plan_if_available(state)
+
+            assert "Abbreviation glossary" in (updated.clarifier_result or "")
+            assert "OT = Official Teams" in (updated.clarifier_result or "")
+            assert "do not invent alternate meanings" in (updated.clarifier_result or "")
+
     def test_normalize_files_state_adds_missing_metadata(
         self,
         mock_llm_provider,
@@ -503,7 +539,7 @@ class TestDeepResearcherAgent:
             assert agent._tool_limits_for_state(shallow)["advanced_web_search_tool"] == 20
             assert agent._tool_limits_for_state(shallow)["planner:advanced_web_search_tool"] == 1
             assert agent._tool_limits_for_state(deep)["advanced_web_search_tool"] == 140
-            assert agent._tool_limits_for_state(deep)["planner:advanced_web_search_tool"] == 3
+            assert agent._tool_limits_for_state(deep)["planner:advanced_web_search_tool"] == 8
             assert agent._parallel_tool_limits_for_state(shallow)["task"] == 1
             assert agent._parallel_tool_limits_for_state(deep)["task"] == 3
 

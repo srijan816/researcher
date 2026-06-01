@@ -629,6 +629,28 @@ class DeepResearcherAgent:
         return f"**Approved Research Plan**\n\nTitle: {title}\n\nSections:\n{section_lines}"
 
     @staticmethod
+    def _format_structured_lesson_context(scope: dict[str, Any]) -> str:
+        """Format structured lesson scope with glossary notes for planner-agent."""
+
+        sections = DeepResearcherAgent._structured_lesson_section_titles(scope)
+        context = DeepResearcherAgent._format_approved_plan_context(
+            f"{scope['topic']} Content Research Dossier",
+            sections,
+        )
+        glossary = scope.get("glossary") or {}
+        if glossary:
+            glossary_lines = "\n".join(f"- {key} = {value}" for key, value in glossary.items())
+            context += (
+                "\n\nPlanner Context Notes:\n"
+                f"- Broad topic: {scope['topic']}\n"
+                f"- Final motion/application focus: {scope['motion']}\n"
+                "- Abbreviation glossary:\n"
+                f"{glossary_lines}\n"
+                "- Use glossary expansions when interpreting curriculum shorthand; do not invent alternate meanings."
+            )
+        return context
+
+    @staticmethod
     def _is_generic_approved_plan(title: str, sections: list[str]) -> bool:
         """Detect placeholder plans that should be replaced by real planning."""
         normalized_title = title.strip().lower()
@@ -804,12 +826,17 @@ class DeepResearcherAgent:
                     if len(section.strip()) >= 3
                 ][:16]
 
+        glossary: dict[str, str] = {}
+        if re.search(r"\bOT\b", text):
+            glossary["OT"] = "Official Teams"
+
         return {
             "topic": topic,
             "motion": motion,
             "report_type": report_type_match.group("report_type").strip() if report_type_match else None,
             "audience": audience_match.group("audience").strip() if audience_match else None,
             "sections": sections,
+            "glossary": glossary,
         }
 
     @staticmethod
@@ -888,6 +915,12 @@ class DeepResearcherAgent:
         motion = str(scope["motion"])
         report_type = scope.get("report_type") or "content_research"
         audience = scope.get("audience") or "the stated audience"
+        glossary = scope.get("glossary") or {}
+        glossary_note = (
+            "; ".join(f"{key} means {value}" for key, value in glossary.items())
+            if glossary
+            else "No abbreviation glossary supplied."
+        )
         sections = DeepResearcherAgent._structured_lesson_section_titles(scope)
 
         toc = [
@@ -1034,6 +1067,7 @@ class DeepResearcherAgent:
                 "exact_lesson_topic": topic,
                 "final_debate_motion": motion,
                 "report_type": report_type,
+                "glossary": glossary,
                 "out_of_scope": [
                     "Renaming the lesson around only the final motion",
                     "Letting an adjacent theme or single controversy replace the exact lesson topic",
@@ -1081,6 +1115,15 @@ class DeepResearcherAgent:
                     "verification": (
                         "All requested sections appear and no Arguments For/Against/Rebuttals section is introduced."
                     ),
+                },
+                {
+                    "category": "terminology",
+                    "constraint": (
+                        f"Interpret curriculum shorthand using this glossary: {glossary_note} "
+                        "Do not expand abbreviations into unrelated meanings."
+                    ),
+                    "rationale": "Prevents lesson metadata abbreviations from becoming false research scope.",
+                    "verification": "The report and queries do not reinterpret glossary abbreviations.",
                 },
                 {
                     "category": "source",
@@ -1358,11 +1401,7 @@ class DeepResearcherAgent:
         structured_scope = self._extract_structured_lesson_scope(clean_query)
         if structured_scope:
             logger.info("Deep Research: passing structured lesson scope to planner without preloading plan files")
-            sections = self._structured_lesson_section_titles(structured_scope)
-            plan_context = self._format_approved_plan_context(
-                f"{structured_scope['topic']} Content Research Dossier",
-                sections,
-            )
+            plan_context = self._format_structured_lesson_context(structured_scope)
             return state.model_copy(update={"files": files, "clarifier_result": plan_context})
 
         plan_context = state.clarifier_result or latest_query

@@ -30,6 +30,20 @@ def _unwrap_item(value: Any) -> Any:
     return value
 
 
+def _textish(value: Any, *keys: str) -> str | None:
+    """Extract a useful string from provider-specific text wrappers."""
+
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return None
+    for key in (*keys, "claim", "text", "$text", "value", "title", "constraint"):
+        item = value.get(key)
+        if isinstance(item, str) and item.strip():
+            return item
+    return None
+
+
 class PlanTargetClaim(BaseModel):
     """A compact claim or question a researcher should resolve."""
 
@@ -37,6 +51,19 @@ class PlanTargetClaim(BaseModel):
     claim_type: str = Field(default="discovery")
     claim: str
     required_source_class: str = Field(default="mixed")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_claim_shape(cls, value: Any) -> Any:
+        value = _unwrap_item(value)
+        text = _textish(value)
+        if text is not None:
+            if isinstance(value, dict):
+                normalized = dict(value)
+                normalized["claim"] = text
+                return normalized
+            return {"claim": text}
+        return value
 
     @field_validator("claim")
     @classmethod
@@ -76,6 +103,19 @@ class PlanConstraint(BaseModel):
     constraint: str
     rationale: str = Field(default="")
     verification: str = Field(default="")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_constraint_shape(cls, value: Any) -> Any:
+        value = _unwrap_item(value)
+        text = _textish(value)
+        if text is not None:
+            if isinstance(value, dict):
+                normalized = dict(value)
+                normalized["constraint"] = text
+                return normalized
+            return {"constraint": text}
+        return value
 
     @field_validator("constraint")
     @classmethod
@@ -154,7 +194,7 @@ class WritePlanInput(BaseModel):
     constraints: list[PlanConstraint | str]
     output_style: PlanOutputStyle | dict[str, Any] | None = None
     task_analysis: PlanTaskAnalysis | dict[str, Any] | None = None
-    fact_ledger_targets: dict[str, list[dict[str, Any]]] | None = None
+    fact_ledger_targets: dict[str, Any] | list[dict[str, Any]] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -181,6 +221,14 @@ class WritePlanInput(BaseModel):
     def _queries_are_non_empty(cls, value: list[PlanQuery]) -> list[PlanQuery]:
         if not value:
             raise ValueError("queries must contain at least one researcher assignment")
+        return value
+
+    @field_validator("fact_ledger_targets", mode="before")
+    @classmethod
+    def _normalize_fact_ledger_targets(cls, value: Any) -> Any:
+        value = _unwrap_item(value)
+        if isinstance(value, list):
+            return {"entities": value}
         return value
 
 
@@ -274,6 +322,9 @@ def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
             ]
             query_dict["target_claim_ids"] = [claim_id]
         elif not query_dict.get("target_claim_ids"):
+            for claim_index, claim in enumerate(query_dict["target_claims"], start=1):
+                if isinstance(claim, dict) and not claim.get("claim_id"):
+                    claim["claim_id"] = f"C{index}.{claim_index}"
             query_dict["target_claim_ids"] = [
                 claim["claim_id"]
                 for claim in query_dict["target_claims"]

@@ -119,6 +119,46 @@ def test_plan_json_from_tool_args_accepts_minimax_item_wrappers():
     assert plan["queries"][0]["target_claim_ids"] == ["C1"]
 
 
+def test_plan_json_from_tool_args_accepts_minimax_text_wrappers():
+    plan_json = plan_json_from_tool_args(
+        report_title="Middle East Conflict Debates",
+        report_toc=[{"title": "Topic Landscape"}],
+        queries=[
+            {
+                "query": "Middle East conflict debates broad foundations authoritative sources",
+                "target_claims": {
+                    "item": [
+                        {"text": "Recurring structural themes across Middle East conflicts"},
+                        {"$text": "Institutional architecture including UN and ICJ"},
+                    ]
+                },
+            }
+        ],
+        constraints={
+            "item": [
+                {"$text": "Topic-first breadth: do not let the motion sub-area dominate."},
+                {"text": "Strict citation: named events and years need inline citations."},
+            ]
+        },
+        fact_ledger_targets={
+            "item": [
+                {"entity": "Israel", "key_facts": "government and named operations"},
+                {"entity": "United Nations", "key_facts": "UNSC resolutions and humanitarian data"},
+            ]
+        },
+    )
+
+    plan = json.loads(plan_json)
+    assert PlanFileValidationMiddleware._validate_plan_payload(plan_json) == []
+    assert plan["queries"][0]["target_claims"][0]["claim"] == (
+        "Recurring structural themes across Middle East conflicts"
+    )
+    assert plan["queries"][0]["target_claims"][1]["claim"] == "Institutional architecture including UN and ICJ"
+    assert plan["queries"][0]["target_claim_ids"] == ["C1.1", "C1.2"]
+    assert plan["constraints"][0]["constraint"].startswith("Topic-first breadth")
+    assert plan["fact_ledger_targets"]["entities"][0]["entity"] == "Israel"
+
+
 def test_write_plan_tool_schema_does_not_expose_runtime_argument():
     schema_fields = create_write_plan_tool().args_schema.model_fields
 

@@ -204,7 +204,7 @@ describe('ToolCallCard', () => {
     })
 
     test('truncates long argument preview', () => {
-      const longArgs = { query: 'A'.repeat(150) }
+      const longArgs = { query: 'A'.repeat(300) }
 
       render(
         <ToolCallCard

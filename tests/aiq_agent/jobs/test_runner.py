@@ -588,6 +588,41 @@ class TestDeepResearchEventCallback:
         call_args = mock_store.store.call_args[0][0]
         assert call_args["type"] == "tool.end"
         assert call_args["name"] == "web_search"
+        assert call_args["data"]["output"] == "search results"
+
+    def test_write_plan_tool_start_emits_plan_file_artifact(self):
+        """The typed planner tool should surface /shared/plan.json in UI files."""
+        mock_store = MagicMock()
+        callback = DeepResearchEventCallback(event_store=mock_store)
+        callback._agent_run_ids["planner-run"] = "planner-agent"
+        callback._run_id_to_parent["tool-run"] = "planner-run"
+
+        callback.on_tool_start(
+            {"name": "write_plan"},
+            input_str=str(
+                {
+                    "report_title": "AI Use Cases 2026",
+                    "report_toc": [{"title": "Executive Summary"}, {"title": "Ranked Use Cases"}],
+                    "queries": [{"query": "AI use cases 2026 analyst reports"}],
+                    "constraints": ["Use authoritative sources for quantified impact."],
+                }
+            ),
+            run_id="tool-run",
+            parent_run_id="planner-run",
+        )
+
+        stored_events = [call[0][0] for call in mock_store.store.call_args_list]
+        plan_artifact = next(
+            event
+            for event in stored_events
+            if event["type"] == "artifact.update" and event["name"] == "/shared/plan.json"
+        )
+
+        assert plan_artifact["data"]["type"] == "file"
+        assert plan_artifact["data"]["file_path"] == "/shared/plan.json"
+        assert plan_artifact["data"]["filename"] == "plan.json"
+        assert "AI Use Cases 2026" in plan_artifact["data"]["content"]
+        assert plan_artifact["metadata"]["workflow"] == "planner-agent"
 
     def test_on_tool_start_without_event_store(self):
         """Test on_tool_start does nothing without event store."""
