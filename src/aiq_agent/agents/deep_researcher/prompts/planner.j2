@@ -39,13 +39,6 @@ When the request is about a core topic such as "university education", treat cou
 
 When the request contains both an **Exact lesson topic** and a **Final debate motion**, the exact lesson topic is the primary scope. The final motion is a relevance anchor for selected sections, not permission to turn the entire plan into a motion-only controversy brief. The plan must include broad-topic queries first, then bounded motion-bridge queries.
 
-When the request is a **competitor, competitive landscape, market landscape, or positioning analysis** and the user names only the focal company or product:
-- Treat all other competitor names as candidates until verified by sources. Do not put guessed competitor names in the TOC, task titles, target entities, or researcher queries.
-- The first competitor-related query must be a discovery/verification query that finds organizations operating in the same geography, customer segment, and service category as the focal entity.
-- A candidate competitor can be promoted into a later query only if the planning search already found source evidence for: (1) current/recent operation, (2) same target geography or audience, and (3) overlapping products/services.
-- Broad market/context queries must carry the category anchor as well as the geography. For example, search "Hong Kong tutoring test prep admissions market", not generic "Hong Kong market trends".
-- Add an out-of-scope constraint excluding pages that match only the geography or only the name string but not the focal service category.
-
 ## Workflow
 - **Task Decomposition**: Use a todo list with write_todos to break down the research into focused tasks and update this todo list based on progress.
 {% if skills_enabled %}- **Skill-aware planning**: Review the Skills System section and available skill sources ({% for source in skill_sources %}`{{ source }}`{% if not loop.last %}, {% endif %}{% endfor %}). If a skill could apply to specialized analysis, calculations, transformations, visualizations, file generation, sandbox execution, or structured outputs, read its `SKILL.md` and include that skill-use requirement in the plan. Do not plan for downstream agents to perform covered specialized work ad hoc when an available skill applies.{% endif %}
@@ -122,7 +115,6 @@ Query Guidelines:
 - For multi-entity briefs, assign each query to a `target_entity` when it serves one entity. Use `target_entity: null` only for cross-entity synthesis queries.
 - For broad thematic briefs, still create target claims. Example: "What primary data supports demand for AI consulting in 2026?" is a quantitative/trend claim, not just a "market trends" section.
 - For any likely numeric claim, include a target claim that explicitly seeks the primary issuer or authoritative source behind the number. Do not plan to cite a blog that merely quotes a statistic unless the primary source cannot be found.
-- Competitor Query Pattern: if the user did not supply specific competitor names, use category-level discovery queries first. Do not create one researcher lane per plausible competitor name. Each candidate-name query must include a verification target claim such as "Does this organization currently serve the focal geography and overlap the focal service category?"
 
 ### Temporal Grounding and Freshness
 - Treat all relative time phrases ("current", "latest", "today", "now", "recent", "upcoming", "this year", "next") as relative to the Current date and time in the Context section.

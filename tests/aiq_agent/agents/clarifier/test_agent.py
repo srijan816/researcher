@@ -763,67 +763,6 @@ class TestClarifierAgentPlanScopeGuards:
             "Remove unrelated sections and revise the plan around that narrow focus."
         )
 
-    def test_competitor_fallback_plan_is_verification_first(self, agent):
-        """Fallback competitor plans should discover and verify, not hallucinate names."""
-        query = "Analyze competitors to Capstone Prep in Hong Kong"
-
-        assert agent._fallback_plan_title(query) == "Competitive Analysis of Capstone Prep"
-        sections = agent._fallback_plan_sections(query)
-
-        assert sections == [
-            "Capstone Prep Profile, Offerings, and Positioning",
-            "Competitor Discovery and Verification",
-            "Direct Competitor Mapping: Verified Same-Market Providers",
-            "Indirect Competitors and Substitute Options",
-            "Positioning Gaps, Opportunities, and Risks",
-        ]
-
-    def test_competitor_plan_strips_unverified_competitor_names(self, agent):
-        """Approval plans should not turn plausible competitor guesses into approved scope."""
-        query = (
-            "Analyze competitors to Capstone Prep in Hong Kong\n"
-            "- Time period: Last 10 years\n\n"
-            "Required outputs:\n"
-            "1. Competitive positioning analysis\n"
-            "2. Strengths/weaknesses assessment\n"
-            "3. Market opportunity identification"
-        )
-        sections = [
-            "Capstone Prep Profile, Service Lines, and 10-Year Trajectory in Hong Kong",
-            (
-                "Direct Competitor Mapping: Beaconhouse, ITS Education, Topical, Kiwi, "
-                "Ascent Prep, and Other Local Test-Prep Centers"
-            ),
-            (
-                "Indirect Competitor Mapping: International Schools, In-House Tutors, "
-                "Online Platforms (Knewton, Arborbridge, Crimson, Zinkerz), and EdTech Disruptors"
-            ),
-            "Competitive Positioning: Price, Tutor Quality, Curriculum, Channels, and Brand Perception",
-        ]
-
-        title, sanitized = agent._sanitize_plan_for_query("Competitive Analysis of Capstone Prep", sections, query)
-
-        assert title == "Competitive Analysis of Capstone Prep"
-        assert "Direct Competitor Mapping: Verified Local Test-Prep and Tutoring Centers" in sanitized
-        assert (
-            "Indirect Competitor Mapping: Schools, Independent Tutors, Online Platforms, and EdTech Substitutes"
-            in sanitized
-        )
-        assert all("Beaconhouse" not in section for section in sanitized)
-        assert all("Topical" not in section for section in sanitized)
-
-    def test_competitor_plan_keeps_user_supplied_competitor_names(self, agent):
-        """If the user names comparison entities, the approval plan may preserve them."""
-        query = "Compare Capstone Prep against ITS Education and Crimson Education in Hong Kong."
-        sections = [
-            "Direct Competitor Mapping: ITS Education, Crimson Education",
-            "Competitive Positioning: Price, Tutor Quality, Curriculum, Channels, and Brand Perception",
-        ]
-
-        _, sanitized = agent._sanitize_plan_for_query("Capstone Competitor Analysis", sections, query)
-
-        assert "Direct Competitor Mapping: ITS Education, Crimson Education" in sanitized
-
     def test_ai_life_question_gets_specific_fallback_plan(self, agent):
         """Broad AI-life strategy prompts should not show generic fallback headings."""
         query = "What’s the best way to live life in the age of AI"

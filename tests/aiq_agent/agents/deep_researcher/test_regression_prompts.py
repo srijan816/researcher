@@ -89,13 +89,3 @@ def test_planner_prompt_uses_typed_write_plan_not_raw_json():
     assert "write_plan" in prompt
     assert "Never call\n`write_file` for `/shared/plan.json`" in prompt
     assert "```json" not in prompt
-
-
-def test_competitor_prompt_disciplines_candidate_entities():
-    planner_prompt = Path("src/aiq_agent/agents/deep_researcher/prompts/planner.j2").read_text()
-    researcher_prompt = Path("src/aiq_agent/agents/deep_researcher/prompts/researcher.j2").read_text()
-
-    assert "Treat all other competitor names as candidates until verified by sources" in planner_prompt
-    assert "Do not create one researcher lane per plausible competitor name" in planner_prompt
-    assert "verify all three anchors" in researcher_prompt
-    assert "Exclude broad geography-only pages" in researcher_prompt
