@@ -159,6 +159,46 @@ def test_plan_json_from_tool_args_accepts_minimax_text_wrappers():
     assert plan["fact_ledger_targets"]["entities"][0]["entity"] == "Israel"
 
 
+def test_plan_json_sanitizes_unverified_competitor_candidate_lanes():
+    plan_json = plan_json_from_tool_args(
+        report_title="Competitive Analysis of Capstone Prep",
+        report_toc=[
+            {"title": "Capstone Prep Profile"},
+            {"title": "Competitor Discovery and Verification"},
+        ],
+        queries=[
+            {
+                "query": (
+                    "Direct competitors to Capstone Prep in Hong Kong: ITS Education Asia, Topical Education, "
+                    "Kiwi Education, Ascent Prep, Beaconhouse, The Edge Learning Center, Brillanture, Aplus, "
+                    "MyGuru, United Asia, Paperclip, and any other visible local test-prep centers."
+                ),
+                "target_sections": ["Competitor Discovery and Verification"],
+            },
+            {
+                "query": (
+                    "Strategic benchmarking and consumer perception: parent/student reviews of Capstone Prep "
+                    "vs ITS Education, Topical, Kiwi, Ascent, Beaconhouse, Crimson, Zinkerz."
+                ),
+                "target_sections": ["Competitor Discovery and Verification"],
+            },
+        ],
+        constraints=["Verify candidates before treating them as competitors."],
+        task_analysis={
+            "user_intent": "Analyze competitors to Capstone Prep in Hong Kong.",
+            "explicit_requirements": ["competitive positioning analysis"],
+        },
+    )
+
+    plan = json.loads(plan_json)
+    query_text = " ".join(query["query"] for query in plan["queries"])
+
+    assert "ITS Education Asia, Topical Education" not in query_text
+    assert "Beaconhouse, The Edge" not in query_text
+    assert "verified same-market competitors" in query_text
+    assert "Direct competitor discovery and verification for Capstone Prep in Hong Kong" in query_text
+
+
 def test_write_plan_tool_schema_does_not_expose_runtime_argument():
     schema_fields = create_write_plan_tool().args_schema.model_fields
 
