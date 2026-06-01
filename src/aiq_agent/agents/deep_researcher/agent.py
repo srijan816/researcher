@@ -1456,13 +1456,14 @@ class DeepResearcherAgent:
             logger.info("Deep Research: seeded %d source URL(s) from resume files", seeded)
 
     def _inject_approved_plan_if_available(self, state: DeepResearchAgentState) -> DeepResearchAgentState:
-        """Carry approved-plan context, but never preload canonical plan files.
+        """Carry approved-plan context and seed a fresh current-request plan floor.
 
-        MiniMax M3 is sensitive to being told a plan already exists. Preloading
-        `/shared/plan.json` lets the orchestrator skip the planner-agent and can
-        turn a generic UI preview into the canonical research contract. Every
-        run should therefore start without plan files; the planner-agent must
-        commit a fresh plan with `write_plan`.
+        Stale/checkpointed plan files are always removed first. For structured
+        lesson prompts or already-approved rich plans, seed a deterministic
+        current-request plan so the orchestrator has an executable floor if a
+        planner subagent write does not propagate across the shared filesystem.
+        The orchestrator prompt still tells it to call planner-agent and refine
+        the plan rather than treating the floor as a reason to skip planning.
         """
         files = self._normalize_files_state(state.files)
         stale_plan_paths = {"/plan.json", "plan.json", "/shared/plan.json", "shared/plan.json"}
@@ -1470,10 +1471,13 @@ class DeepResearcherAgent:
 
         latest_query = self._latest_user_text(state)
         clean_query = self._query_without_context(latest_query)
+        depth_config = get_research_depth_config(state.research_depth)
         structured_scope = self._extract_structured_lesson_scope(clean_query)
         if structured_scope:
-            logger.info("Deep Research: passing structured lesson scope to planner without preloading plan files")
+            logger.info("Deep Research: seeding current-request structured lesson plan floor")
             plan_context = self._format_structured_lesson_context(structured_scope)
+            plan_json = self._build_structured_lesson_plan_json(structured_scope, latest_query, depth_config)
+            files = self._with_plan_floor(files, plan_json)
             return state.model_copy(update={"files": files, "clarifier_result": plan_context})
 
         plan_context = state.clarifier_result or latest_query
@@ -1484,10 +1488,10 @@ class DeepResearcherAgent:
             explicit_plan = self._explicit_plan_from_rich_query(latest_query)
             if explicit_plan:
                 title, sections = explicit_plan
-                logger.info(
-                    "Deep Research: passing deterministic rich-query plan context without preloading plan files"
-                )
+                logger.info("Deep Research: seeding current-request rich-query plan floor")
                 plan_context = self._format_approved_plan_context(title, sections)
+                plan_json = self._build_plan_json_from_approved_context(title, sections, latest_query, depth_config)
+                files = self._with_plan_floor(files, plan_json)
                 return state.model_copy(update={"files": files, "clarifier_result": plan_context})
             if self._is_financial_screen_query(clean_query):
                 title = "Stocks Trading 40-50% Below Estimated Fair Value"
@@ -1496,8 +1500,10 @@ class DeepResearcherAgent:
                     "Current price and fair-value evidence",
                     "Methodology caveats and source limitations",
                 ]
-                logger.info("Deep Research: passing focused stock-screen plan context without preloading plan files")
+                logger.info("Deep Research: seeding current-request focused stock-screen plan floor")
                 plan_context = self._format_approved_plan_context(title, sections)
+                plan_json = self._build_plan_json_from_approved_context(title, sections, latest_query, depth_config)
+                files = self._with_plan_floor(files, plan_json)
                 return state.model_copy(update={"files": files, "clarifier_result": plan_context})
             return state.model_copy(update={"files": files})
 
@@ -1506,8 +1512,10 @@ class DeepResearcherAgent:
             explicit_plan = self._explicit_plan_from_rich_query(latest_query)
             if explicit_plan:
                 title, sections = explicit_plan
-                logger.info("Deep Research: replacing generic approved plan with rich-query context only")
+                logger.info("Deep Research: replacing generic approved plan with rich-query plan floor")
                 plan_context = self._format_approved_plan_context(title, sections)
+                plan_json = self._build_plan_json_from_approved_context(title, sections, latest_query, depth_config)
+                files = self._with_plan_floor(files, plan_json)
                 return state.model_copy(update={"files": files, "clarifier_result": plan_context})
             logger.info("Deep Research: ignoring generic approved plan so planner-agent can create a specific TOC")
             return state.model_copy(
@@ -1517,8 +1525,19 @@ class DeepResearcherAgent:
                 }
             )
 
-        logger.info("Deep Research: passing approved plan preview as planner context only")
+        logger.info("Deep Research: seeding current-request approved-plan floor")
+        plan_json = self._build_plan_json_from_approved_context(title, sections, latest_query, depth_config)
+        files = self._with_plan_floor(files, plan_json)
         return state.model_copy(update={"files": files})
+
+    @staticmethod
+    def _with_plan_floor(files: dict[str, Any], plan_json: str) -> dict[str, Any]:
+        """Add a fresh executable plan to both canonical DeepAgents plan paths."""
+        updated = dict(files)
+        entry = DeepResearcherAgent._file_state_entry(plan_json)
+        updated["/shared/plan.json"] = entry
+        updated["/plan.json"] = entry
+        return updated
 
     @staticmethod
     def _tool_limits_for_state(state: DeepResearchAgentState) -> dict[str, int]:

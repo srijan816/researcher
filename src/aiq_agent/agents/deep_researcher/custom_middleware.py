@@ -822,6 +822,7 @@ class ArtifactWriteValidationMiddleware(AgentMiddleware):
         "TOOL_RESULT_DISPLAY_SHORTENED",
         "TOOL_ARGUMENT_DISPLAY_SHORTENED",
     )
+    _HISTORICAL_WRITE_MARKER = "WRITE_FILE_CONTENT_STORED_SUCCESSFULLY"
 
     @staticmethod
     def _target_path(args: dict) -> str:
@@ -843,7 +844,10 @@ class ArtifactWriteValidationMiddleware(AgentMiddleware):
                 continue
             for marker in cls._TRUNCATION_MARKERS:
                 if marker in value:
-                    errors.append(f"{key} contains truncation marker {marker!r}")
+                    if marker == cls._HISTORICAL_WRITE_MARKER:
+                        errors.append(f"{key} contains a historical write-redaction notice")
+                    else:
+                        errors.append(f"{key} contains a truncation/omission marker")
         return errors
 
     async def awrap_tool_call(self, request, handler):
@@ -859,12 +863,24 @@ class ArtifactWriteValidationMiddleware(AgentMiddleware):
 
         path = self._target_path(args) or "the target file"
         logger.warning("Rejected artifact write to %s: %s", path, "; ".join(errors))
+        copied_history_redaction = any("historical write-redaction" in error for error in errors)
+        if copied_history_redaction:
+            guidance = (
+                "You copied a prompt-history redaction notice, not real artifact content. Do not test the "
+                "write tool, do not copy prior tool-call arguments, and do not retry the same write with that "
+                "notice. Continue from the last successful artifact write. If a required artifact is genuinely "
+                "missing, write a short complete replacement from your own notes."
+            )
+        else:
+            guidance = (
+                "Rewrite a shorter complete artifact now. Do not copy callback display text, partial_json text, "
+                "or read_file truncation summaries into the file. Keep the file compact."
+            )
         return ToolMessage(
             content=(
                 f"ARTIFACT_WRITE_VALIDATION_FAILED: {path} was not written because the proposed file "
-                f"text contains truncation/omission markers: {'; '.join(errors)}.\n\n"
-                "Rewrite a shorter complete artifact now. Do not copy callback display text, "
-                "partial_json text, or read_file truncation summaries into the file. Keep the file compact."
+                f"text contains non-artifact display text: {'; '.join(dict.fromkeys(errors))}.\n\n"
+                f"{guidance}"
             ),
             tool_call_id=tool_call.get("id", ""),
             name=tool_name,
@@ -1684,12 +1700,15 @@ class ToolResultPruningMiddleware(AgentMiddleware):
                 changed = True
                 path_hint = args.get("file_path") or args.get("path") or args.get("filename")
                 if tool_name == "write_file" and key == "content":
-                    location = f" at {path_hint}" if path_hint else ""
-                    pruned[key] = (
-                        f"WRITE_FILE_CONTENT_STORED_SUCCESSFULLY{location}; {len(value)} characters are hidden "
-                        "from prompt history to save tokens. The write already executed. Do not rewrite or read "
-                        "the file merely to verify this hidden argument."
-                    )
+                    # Do not put sentence-shaped placeholder text in `content`.
+                    # MiniMax can later copy historical tool arguments verbatim
+                    # into a new write_file call, so the writable field must not
+                    # contain any fake artifact prose.
+                    pruned[key] = ""
+                    pruned["_aiq_history_content_redacted"] = True
+                    pruned["_aiq_history_content_chars"] = len(value)
+                    if path_hint:
+                        pruned["_aiq_history_content_path"] = str(path_hint)
                 else:
                     head = value[: self.max_tool_call_arg_chars].rstrip()
                     pruned[key] = (

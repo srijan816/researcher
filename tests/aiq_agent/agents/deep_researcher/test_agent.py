@@ -241,10 +241,10 @@ class TestDeepResearcherAgent:
                 ["Candidate Price/Fair Value Table", "Source Quality and Caveats"],
             )
 
-    def test_inject_approved_plan_does_not_preload_plan_file(
+    def test_inject_approved_plan_seeds_current_request_plan_floor(
         self, mock_llm_provider, real_tool, mock_create_deep_agent
     ):
-        """Approved previews should guide planning without becoming canonical plan files."""
+        """Approved previews should seed a fresh executable floor, not stale files."""
         with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
@@ -269,9 +269,12 @@ class TestDeepResearcherAgent:
 
             updated = agent._inject_approved_plan_if_available(state)
 
-            assert "/plan.json" not in updated.files
-            assert "/shared/plan.json" not in updated.files
+            assert "/plan.json" in updated.files
+            assert "/shared/plan.json" in updated.files
             assert updated.clarifier_result == state.clarifier_result
+            plan = json.loads("\n".join(updated.files["/shared/plan.json"]["content"]))
+            assert plan["report_title"] == "Current 40-50% Fair-Value Discount Candidates"
+            assert plan["queries"]
 
     def test_generic_approved_plan_does_not_preload_plan_file(
         self,
@@ -342,11 +345,14 @@ class TestDeepResearcherAgent:
 
             updated = agent._inject_approved_plan_if_available(state)
 
-            assert "/plan.json" not in updated.files
-            assert "/shared/plan.json" not in updated.files
+            assert "/plan.json" in updated.files
+            assert "/shared/plan.json" in updated.files
             assert "Top 10 Highest-Value AI Use Cases in 2026" in (updated.clarifier_result or "")
             assert "Executive Summary and Ranking Criteria" in (updated.clarifier_result or "")
             assert "generic placeholder" not in (updated.clarifier_result or "")
+            plan = json.loads("\n".join(updated.files["/shared/plan.json"]["content"]))
+            assert plan["report_title"] == "Top 10 Highest-Value AI Use Cases in 2026"
+            assert len(plan["queries"]) >= 2
 
     def test_structured_lesson_prompt_passes_topic_first_context_only(
         self,
@@ -388,11 +394,14 @@ class TestDeepResearcherAgent:
 
             updated = agent._inject_approved_plan_if_available(state)
 
-            assert "/plan.json" not in updated.files
-            assert "/shared/plan.json" not in updated.files
+            assert "/plan.json" in updated.files
+            assert "/shared/plan.json" in updated.files
             assert "Doctors & Patients Content Research Dossier" in (updated.clarifier_result or "")
             assert "Topic essentials" in (updated.clarifier_result or "")
             assert "Approved Research Plan" in (updated.clarifier_result or "")
+            plan = json.loads("\n".join(updated.files["/shared/plan.json"]["content"]))
+            assert plan["task_analysis"]["exact_lesson_topic"] == "Doctors & Patients"
+            assert "refuse to perform treatments" in plan["task_analysis"]["final_debate_motion"]
 
             state_with_existing_plan_context = state.model_copy(
                 update={
@@ -408,7 +417,7 @@ class TestDeepResearcherAgent:
                 state_with_existing_plan_context
             )
 
-            assert "/plan.json" not in updated_with_existing_plan_context.files
+            assert "/plan.json" in updated_with_existing_plan_context.files
             assert "Doctors & Patients Content Research Dossier" in (
                 updated_with_existing_plan_context.clarifier_result or ""
             )
@@ -458,8 +467,8 @@ class TestDeepResearcherAgent:
 
             updated = agent._inject_approved_plan_if_available(state)
 
-            assert "/plan.json" not in updated.files
-            assert "/shared/plan.json" not in updated.files
+            assert "/plan.json" in updated.files
+            assert "/shared/plan.json" in updated.files
             assert "Education and Tech Content Research Dossier" in (updated.clarifier_result or "")
             assert "Topic Landscape" in (updated.clarifier_result or "")
             assert "Approved Research Plan" in (updated.clarifier_result or "")

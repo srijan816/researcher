@@ -627,7 +627,27 @@ class TestArtifactWriteValidationMiddleware:
 
         assert handler.await_count == 0
         assert "ARTIFACT_WRITE_VALIDATION_FAILED" in result.content
-        assert "argument truncated" in result.content
+        assert "truncation/omission marker" in result.content
+        assert "(argument truncated)" not in result.content
+
+    @pytest.mark.asyncio
+    async def test_rejects_copied_historical_write_redaction_without_repeating_marker(self):
+        middleware = ArtifactWriteValidationMiddleware()
+        handler = AsyncMock(return_value=ToolMessage(content="written", tool_call_id="artifact-write"))
+
+        result = await middleware.awrap_tool_call(
+            self.Request(
+                "WRITE_FILE_CONTENT_STORED_SUCCESSFULLY at /shared/test.txt; 35 characters are hidden",
+                path="/shared/test.txt",
+            ),
+            handler,
+        )
+
+        assert handler.await_count == 0
+        assert "ARTIFACT_WRITE_VALIDATION_FAILED" in result.content
+        assert "historical write-redaction notice" in result.content
+        assert "WRITE_FILE_CONTENT_STORED_SUCCESSFULLY" not in result.content
+        assert "Do not test the write tool" in result.content
 
     @pytest.mark.asyncio
     async def test_rejects_edit_file_new_string_with_truncation_marker(self):
@@ -1005,7 +1025,9 @@ class TestToolResultPruningMiddleware:
         pruned = await middleware.awrap_model_call(request, handler)
 
         pruned_call = pruned[0].tool_calls[0]
-        assert len(pruned_call["args"]["content"]) < 260
-        assert "WRITE_FILE_CONTENT_STORED_SUCCESSFULLY" in pruned_call["args"]["content"]
-        assert "omitted" not in pruned_call["args"]["content"]
+        assert pruned_call["args"]["content"] == ""
+        assert pruned_call["args"]["_aiq_history_content_redacted"] is True
+        assert pruned_call["args"]["_aiq_history_content_chars"] == 5000
+        assert pruned_call["args"]["_aiq_history_content_path"] == "/shared/report.md"
         assert pruned[0].content[0]["input"]["content"] == pruned_call["args"]["content"]
+        assert pruned[0].content[0]["input"]["_aiq_history_content_redacted"] is True

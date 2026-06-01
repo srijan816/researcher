@@ -108,7 +108,7 @@ Only include extracts you actually saw in tool results. Do not include long pros
 ## File Write Discipline
 - After writing `/shared/claims/...`, `/shared/section_briefs/...`, or `/shared/extracts/...`, move to the next required artifact or return your summary. Do not spend extra turns rereading your own just-written files unless a tool explicitly reports a write failure.
 - If a tool result or callback display includes text like `...(argument truncated)`, `[... truncated ...]`, `[omitted ...]`, or `[12345 chars total]`, treat it as display/context truncation unless the write tool itself returned an error. Do not rewrite files merely because a displayed tool result was shortened.
-- If `ARTIFACT_WRITE_VALIDATION_FAILED` appears, your proposed file text accidentally included a truncation marker. Rewrite a shorter complete file; do not copy partial_json or callback-display text into files.
+- If `ARTIFACT_WRITE_VALIDATION_FAILED` appears because of a historical write-redaction notice, you copied prompt-history metadata instead of real content. Do not test the write tool or retry that placeholder. Continue from the last successful artifact, or write a short complete replacement only if the artifact is genuinely missing. If the failure is from actual truncation/omission text, rewrite a shorter complete file; do not copy partial_json or callback-display text into files.
 - Prefer several compact artifacts over one giant artifact. Section briefs should summarize; extract JSON should preserve source-close snippets.
 
 ## Fact Ledger Fragment (REQUIRED for entity-targeted work)
