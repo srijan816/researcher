@@ -547,9 +547,9 @@ class TestDeepResearcherAgent:
             assert agent._tool_limits_for_state(deep)["advanced_web_search_tool"] == 140
             assert agent._tool_limits_for_state(deep)["planner:advanced_web_search_tool"] == 8
             assert agent._parallel_tool_limits_for_state(shallow)["task"] == 1
-            assert agent._parallel_tool_limits_for_state(medium)["task"] == 4
-            assert agent._parallel_tool_limits_for_state(deeper)["task"] == 4
-            assert agent._parallel_tool_limits_for_state(deep)["task"] == 4
+            assert agent._parallel_tool_limits_for_state(medium)["task"] == 3
+            assert agent._parallel_tool_limits_for_state(deeper)["task"] == 3
+            assert agent._parallel_tool_limits_for_state(deep)["task"] == 3
 
     def test_medium_tier_uses_medium_orchestrator_when_configured(self, real_tool):
         """Medium should be able to run synthesis with the thinking-off orchestrator alias."""

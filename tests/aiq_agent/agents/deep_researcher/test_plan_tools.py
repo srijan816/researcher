@@ -138,6 +138,59 @@ def test_plan_json_from_tool_args_accepts_minimax_item_wrappers():
     assert plan["report_toc"][0]["subsections"][0]["title"] == "Nested Section"
     assert plan["queries"][0]["target_sections"] == ["Main Section"]
     assert plan["queries"][0]["target_claim_ids"] == ["C1"]
+    assert plan["task_analysis"]["claim_profile"]["claims"][0]["claim_id"] == "C1"
+
+
+def test_plan_json_from_tool_args_accepts_single_item_double_wrappers():
+    """Regression for M3 serializing one-item arrays as nested item objects."""
+
+    plan_json = plan_json_from_tool_args(
+        report_title="Single Wrapped Plan",
+        report_toc={
+            "item": {
+                "item": {
+                    "title": "Main Section",
+                    "subsections": {"item": {"item": {"title": "Only Subsection"}}},
+                }
+            }
+        },
+        queries={
+            "item": {
+                "item": {
+                    "query": "single wrapped query evidence",
+                    "target_sections": {"item": {"item": "Main Section"}},
+                    "target_claims": {
+                        "item": {
+                            "item": {
+                                "claim_id": "C1",
+                                "claim_type": "discovery",
+                                "claim": "Single wrapped target claim should normalize correctly",
+                                "required_source_class": "mixed",
+                            }
+                        }
+                    },
+                }
+            }
+        },
+        constraints={"item": {"item": "Stay scoped to the request."}},
+    )
+
+    plan = json.loads(plan_json)
+    assert PlanFileValidationMiddleware._validate_plan_payload(plan_json) == []
+    assert plan["report_toc"][0]["title"] == "Main Section"
+    assert plan["report_toc"][0]["subsections"][0]["title"] == "Only Subsection"
+    assert plan["queries"][0]["target_sections"] == ["Main Section"]
+    assert plan["queries"][0]["target_claim_ids"] == ["C1"]
+    assert plan["task_analysis"]["claim_profile"]["claims"] == [
+        {
+            "claim_id": "C1",
+            "claim_text": "Single wrapped target claim should normalize correctly",
+            "claim_type": "discovery",
+            "expected_answer_shape": "free_text",
+            "preferred_source_classes": ["mixed"],
+            "target_task_id": "Q1",
+        }
+    ]
 
 
 def test_plan_json_from_tool_args_accepts_minimax_text_wrappers():

@@ -8,12 +8,12 @@ def test_medium_is_first_class_depth_tier():
     assert normalize_research_depth("medium") == "medium"
     assert config.tier == "medium"
     assert config.advanced_web_search_limit == 64
-    assert config.max_parallel_researcher_tasks == 4
+    assert config.max_parallel_researcher_tasks == 3
 
 
-def test_deeper_and_deep_use_four_parallel_researchers():
-    assert get_research_depth_config("deeper").max_parallel_researcher_tasks == 4
-    assert get_research_depth_config("deep").max_parallel_researcher_tasks == 4
+def test_m3_heavy_tiers_use_three_parallel_researchers():
+    assert get_research_depth_config("deeper").max_parallel_researcher_tasks == 3
+    assert get_research_depth_config("deep").max_parallel_researcher_tasks == 3
 
 
 def test_standard_alias_routes_to_medium_latency_first_tier():

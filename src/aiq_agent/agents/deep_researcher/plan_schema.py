@@ -30,6 +30,24 @@ def _unwrap_item(value: Any) -> Any:
     return value
 
 
+def _as_list(value: Any) -> list[Any]:
+    """Return provider-wrapped list-ish values as a Python list.
+
+    Anthropic-style tool schemas often arrive from MiniMax as ``{"item": ...}``.
+    When there is only one child, the provider can preserve it as a single
+    object rather than a list, which previously pushed the planner into costly
+    "add a dummy second item" repair loops. List fields should accept that
+    single-object shape and normalize it here.
+    """
+
+    value = _unwrap_item(value)
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
 def _textish(value: Any, *keys: str) -> str | None:
     """Extract a useful string from provider-specific text wrappers."""
 
@@ -95,6 +113,11 @@ class PlanTocItem(BaseModel):
             raise ValueError("TOC title must be meaningful")
         return value[:180].rstrip(" .,:;")
 
+    @field_validator("subsections", mode="before")
+    @classmethod
+    def _subsections_are_listish(cls, value: Any) -> list[Any]:
+        return _as_list(value)
+
 
 class PlanConstraint(BaseModel):
     """Acceptance criterion for the final report."""
@@ -140,6 +163,11 @@ class PlanOutputStyle(BaseModel):
     def _normalize_wrapped_lists(cls, value: Any) -> Any:
         return _unwrap_item(value)
 
+    @field_validator("avoid", mode="before")
+    @classmethod
+    def _avoid_is_listish(cls, value: Any) -> list[Any]:
+        return _as_list(value)
+
 
 class PlanTaskAnalysis(BaseModel):
     """Compact analysis fields needed by downstream orchestration."""
@@ -157,6 +185,16 @@ class PlanTaskAnalysis(BaseModel):
     @classmethod
     def _normalize_wrapped_lists(cls, value: Any) -> Any:
         return _unwrap_item(value)
+
+    @field_validator("entities", mode="before")
+    @classmethod
+    def _entities_are_listish(cls, value: Any) -> list[Any]:
+        return _as_list(value)
+
+    @field_validator("explicit_requirements", "implicit_requirements", "out_of_scope", mode="before")
+    @classmethod
+    def _string_lists_are_listish(cls, value: Any) -> list[Any]:
+        return _as_list(value)
 
 
 class PlanQuery(BaseModel):
@@ -189,6 +227,11 @@ class PlanQuery(BaseModel):
             raise ValueError("query must be meaningful")
         return value
 
+    @field_validator("target_claims", "target_claim_ids", "target_sections", mode="before")
+    @classmethod
+    def _query_lists_are_listish(cls, value: Any) -> list[Any]:
+        return _as_list(value)
+
 
 class WritePlanInput(BaseModel):
     """Input accepted from the model by the typed `write_plan` tool."""
@@ -220,6 +263,11 @@ class WritePlanInput(BaseModel):
         if not value:
             raise ValueError("report_toc must contain at least one section")
         return value
+
+    @field_validator("report_toc", "queries", "constraints", mode="before")
+    @classmethod
+    def _top_level_lists_are_listish(cls, value: Any) -> list[Any]:
+        return _as_list(value)
 
     @field_validator("queries")
     @classmethod
@@ -281,6 +329,49 @@ def _source_strategy_for_queries() -> dict[str, Any]:
     }
 
 
+def _claim_profile_from_queries(queries: list[PlanQuery]) -> dict[str, Any]:
+    """Derive a compact claim profile from researcher query claim targets."""
+
+    claims: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for query_index, query in enumerate(queries, start=1):
+        for claim_index, claim in enumerate(query.target_claims, start=1):
+            claim_id = claim.claim_id or f"C{query_index}.{claim_index}"
+            if claim_id in seen:
+                continue
+            seen.add(claim_id)
+            claims.append(
+                {
+                    "claim_id": claim_id,
+                    "claim_text": claim.claim,
+                    "claim_type": claim.claim_type,
+                    "expected_answer_shape": "free_text",
+                    "preferred_source_classes": [claim.required_source_class or "mixed"],
+                    "target_task_id": query.task_id or f"Q{query_index}",
+                }
+            )
+
+    if not claims:
+        return {
+            "claim_density": "medium",
+            "verifiability": "mixed",
+            "claims": [],
+        }
+
+    claim_count = len(claims)
+    if claim_count < 8:
+        density = "low"
+    elif claim_count <= 24:
+        density = "medium"
+    else:
+        density = "high"
+    return {
+        "claim_density": density,
+        "verifiability": "mixed",
+        "claims": claims,
+    }
+
+
 def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
     """Expand compact tool arguments into the canonical `/shared/plan.json` shape."""
 
@@ -298,11 +389,20 @@ def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
         task_analysis_dict["source_strategy"] = _source_strategy_for_queries()
     task_analysis_dict.setdefault("claim_profile", {})
     if not task_analysis_dict["claim_profile"]:
-        task_analysis_dict["claim_profile"] = {
-            "claim_density": "medium",
-            "verifiability": "mixed",
-            "claims": [],
-        }
+        task_analysis_dict["claim_profile"] = _claim_profile_from_queries(list(input_data.queries))
+    elif not task_analysis_dict["claim_profile"].get("claims"):
+        derived_profile = _claim_profile_from_queries(list(input_data.queries))
+        if derived_profile.get("claims"):
+            task_analysis_dict["claim_profile"] = {
+                **task_analysis_dict["claim_profile"],
+                "claims": derived_profile["claims"],
+                "claim_density": task_analysis_dict["claim_profile"].get(
+                    "claim_density", derived_profile["claim_density"]
+                ),
+                "verifiability": task_analysis_dict["claim_profile"].get(
+                    "verifiability", derived_profile["verifiability"]
+                ),
+            }
 
     output_style = (
         input_data.output_style
