@@ -883,7 +883,7 @@ class PostWriteReadbackGuardMiddleware(AgentMiddleware):
     """
 
     _WRITE_TOOLS = {"write_file", "edit_file"}
-    _READ_TOOL = "read_file"
+    _READ_TOOLS = {"read_file", "grep"}
 
     def __init__(self, suppress_read_count: int = 2) -> None:
         self.suppress_read_count = max(0, suppress_read_count)
@@ -917,13 +917,13 @@ class PostWriteReadbackGuardMiddleware(AgentMiddleware):
             return await handler(request)
 
         path = self._target_path(args)
-        if tool_name == self._READ_TOOL and path and self._is_artifact_path(path):
+        if tool_name in self._READ_TOOLS and path and self._is_artifact_path(path):
             recent_writes = _session_recent_artifact_writes.get() or {}
             remaining = recent_writes.get(path, 0)
             if remaining > 0:
                 recent_writes[path] = remaining - 1
                 _session_recent_artifact_writes.set(recent_writes)
-                logger.info("Suppressed immediate readback of recently written artifact %s", path)
+                logger.info("Suppressed immediate %s readback of recently written artifact %s", tool_name, path)
                 return ToolMessage(
                     content=(
                         f"READ_AFTER_WRITE_CONFIRMED: {path} was just written successfully and the runtime "

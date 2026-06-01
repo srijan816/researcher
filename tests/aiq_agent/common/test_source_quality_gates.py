@@ -64,3 +64,21 @@ def test_source_quality_gates_use_shallow_thresholds():
 
     assert report.gate_results["domain_diversity"] == "pass"
     assert report.gate_results["weak_source_concentration"] == "warn"
+
+
+def test_source_quality_gates_warn_not_fail_when_unknown_classification_dominates():
+    report = evaluate_source_quality(
+        [
+            "https://bls.gov/report",
+            "https://gemconsortium.org/report",
+            "https://weforum.org/report",
+            "https://idc.com/report",
+            "https://arxiv.org/abs/1234.5678",
+            *[f"https://unmapped-example-{index}.com/source" for index in range(20)],
+        ],
+        tier="deep",
+    )
+
+    assert report.overall_status == "warn"
+    assert report.gate_results["authority_floor"] == "pass"
+    assert report.gate_results["classification_coverage"] == "warn"

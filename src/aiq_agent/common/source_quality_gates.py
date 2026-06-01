@@ -89,16 +89,30 @@ def evaluate_source_quality(
     else:
         gate_results["concentration"] = "pass"
 
+    unknown_count = class_counts.get("unknown", 0)
+    known_total = max(0, total - unknown_count)
     authoritative_count = sum(class_counts[source_class] for source_class in AUTHORITATIVE_CLASSES)
     authoritative_share = authoritative_count / total
-    if tier == "deep" and authoritative_share < 0.10:
+    authoritative_known_share = authoritative_count / known_total if known_total else 0.0
+    if tier == "deep" and known_total and authoritative_known_share < 0.10:
         gate_results["authority_floor"] = "fail"
-        failures.append(f"authoritative citation share below 10% ({authoritative_share:.0%})")
-    elif tier == "deep" and authoritative_share < 0.25:
+        failures.append(
+            f"authoritative citation share among classified sources below 10% ({authoritative_known_share:.0%})"
+        )
+    elif tier == "deep" and (not known_total or authoritative_known_share < 0.25):
         gate_results["authority_floor"] = "warn"
-        warnings.append(f"authoritative citation share below 25% ({authoritative_share:.0%})")
+        warnings.append(
+            "authoritative citation share among classified sources below 25% "
+            f"({authoritative_known_share:.0%}; raw share {authoritative_share:.0%})"
+        )
     else:
         gate_results["authority_floor"] = "pass"
+
+    if total and unknown_count / total > 0.50:
+        gate_results["classification_coverage"] = "warn"
+        warnings.append(f"source classifier coverage is low ({unknown_count / total:.0%} unknown)")
+    else:
+        gate_results["classification_coverage"] = "pass"
 
     weak_count = sum(class_counts[source_class] for source_class in WEAK_DERIVATIVE_CLASSES)
     weak_share = weak_count / total

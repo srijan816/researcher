@@ -721,6 +721,28 @@ class TestPostWriteReadbackGuardMiddleware:
         finally:
             reset_session_recent_artifact_writes(token)
 
+    @pytest.mark.asyncio
+    async def test_skips_immediate_grep_after_successful_write(self):
+        middleware = PostWriteReadbackGuardMiddleware(suppress_read_count=1)
+        token = set_session_recent_artifact_writes({})
+        handler = AsyncMock(
+            side_effect=[
+                ToolMessage(content="written", tool_call_id="write_file-1", name="write_file"),
+                ToolMessage(content="grep result", tool_call_id="grep-1", name="grep"),
+            ]
+        )
+        try:
+            write_result = await middleware.awrap_tool_call(self.Request("write_file"), handler)
+            grep_result = await middleware.awrap_tool_call(self.Request("grep"), handler)
+            second_grep_result = await middleware.awrap_tool_call(self.Request("grep"), handler)
+
+            assert write_result.content == "written"
+            assert "READ_AFTER_WRITE_CONFIRMED" in grep_result.content
+            assert second_grep_result.content == "grep result"
+            assert handler.await_count == 2
+        finally:
+            reset_session_recent_artifact_writes(token)
+
 
 class TestPlannerCommitGuardMiddleware:
     """Tests for planner turn-budget commit enforcement."""
