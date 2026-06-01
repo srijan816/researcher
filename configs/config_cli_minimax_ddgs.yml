@@ -1,6 +1,8 @@
 # AI-Q Deep Research — MiniMax M3 + SearXNG/Jina (Zero Tavily)
 # Strategy:
-#   - MiniMax M3 → intent classifier, clarifier, planner, orchestrator, and researcher
+#   - MiniMax M3 synthesis/planner for high-context reasoning
+#   - MiniMax M3 with thinking disabled for latency-sensitive intent, clarifier,
+#     shallow, and researcher loops
 #   - Exa → optional primary high-quality search when EXA_API_KEY is set
 #   - SearXNG → self-hosted metasearch JSON results and free fallback
 #   - Jina Reader → full-page markdown extraction for the top results
@@ -29,6 +31,40 @@ general:
         level: INFO
 
 llms:
+  minimax_m3_fast_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_FAST_MODEL:-MiniMax-M3}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.2
+    top_p: 0.8
+    max_tokens: 6000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: disabled
+    request_timeout: 240
+    stream_no_progress_timeout: 60
+    stream_repetition_token_limit: 24
+    max_retries: 1
+
+  minimax_m3_research_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_RESEARCH_MODEL:-MiniMax-M3}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.25
+    top_p: 0.85
+    max_tokens: 10000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: disabled
+    request_timeout: 420
+    stream_no_progress_timeout: 90
+    stream_repetition_token_limit: 24
+    max_retries: 1
+
   minimax_m3_llm:
     _type: anthropic
     model_name: ${MINIMAX_TEXT_MODEL:-MiniMax-M3}
@@ -152,13 +188,13 @@ functions:
 
   intent_classifier:
     _type: intent_classifier
-    llm: minimax_m3_planner_llm
-    llm_timeout: 240
+    llm: minimax_m3_fast_llm
+    llm_timeout: 120
 
   clarifier_agent:
     _type: clarifier_agent
-    llm: minimax_m3_planner_llm
-    planner_llm: minimax_m3_planner_llm
+    llm: minimax_m3_fast_llm
+    planner_llm: minimax_m3_fast_llm
     max_turns: 3
     enable_plan_approval: true
     log_response_max_chars: 2000
@@ -166,7 +202,7 @@ functions:
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: minimax_m3_llm
+    llm: minimax_m3_research_llm
     exclude_tools:
       - advanced_web_search_tool
     max_llm_turns: 20
@@ -175,7 +211,7 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: minimax_m3_synthesis_llm
-    researcher_llm: minimax_m3_llm
+    researcher_llm: minimax_m3_research_llm
     planner_llm: minimax_m3_planner_llm
     max_loops: 2
     exclude_tools:

@@ -13,6 +13,7 @@ import logging
 import re
 from collections import Counter
 from collections import deque
+from typing import Any
 
 from pydantic import AliasChoices
 from pydantic import ConfigDict
@@ -159,6 +160,13 @@ class AnthropicCompatibleModelConfig(LLMBaseConfig, RetryMixin, OptimizableMixin
         default=32,
         ge=0,
         description="Abort a streamed call after this many repeated same-word tokens; 0 disables.",
+    )
+    thinking: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Anthropic-compatible reasoning controls. MiniMax M3 supports "
+            "{'type': 'disabled'} for lower-latency non-reasoning calls."
+        ),
     )
     temperature: float | None = OptimizableField(
         default=None,
