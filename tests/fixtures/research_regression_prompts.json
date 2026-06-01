@@ -33,5 +33,12 @@
     "prompt": "Which U.S. large-cap stocks are trading 40-50% below Morningstar fair value?",
     "expected_plan_title": "Stocks Trading 40-50% Below Estimated Fair Value",
     "expected_section_terms": ["Candidate", "Price", "Caveats"]
+  },
+  {
+    "id": "capstone_competitor_hk",
+    "tier": "medium",
+    "prompt": "Analyze competitors to Capstone Prep in Hong Kong. Required outputs: competitive positioning analysis, strengths/weaknesses assessment, and market opportunity identification.",
+    "expected_plan_title": "Competitive Analysis of Capstone Prep",
+    "expected_section_terms": ["Profile", "Discovery", "Verified", "Indirect", "Opportunities"]
   }
 ]

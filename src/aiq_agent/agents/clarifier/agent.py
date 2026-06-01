@@ -613,6 +613,9 @@ class ClarifierAgent:
             return "Living Well in the Age of AI"
         if ClarifierAgent._is_precise_financial_screen(clean_query):
             return "Stocks Trading 40-50% Below Estimated Fair Value"
+        if ClarifierAgent._is_competitor_research_query(clean_query):
+            focal = ClarifierAgent._extract_competitor_focal_entity(clean_query)
+            return f"Competitive Analysis of {focal}" if focal else "Competitive Landscape Analysis"
         domain_match = re.search(r"\b([a-z0-9][a-z0-9-]*(?:\.[a-z]{2,})+)\b", clean_query, re.IGNORECASE)
         if domain_match and re.search(r"\bmoneti[sz]e|business|revenue\b", clean_query, re.IGNORECASE):
             return f"Monetizing {domain_match.group(1)}"
@@ -653,6 +656,18 @@ class ClarifierAgent:
                 "Candidate Valuation Table",
                 "Price and Fair-Value Evidence",
                 "Source Quality and Caveats",
+            ]
+        if ClarifierAgent._is_competitor_research_query(query):
+            focal = ClarifierAgent._extract_competitor_focal_entity(query)
+            profile = (
+                f"{focal} Profile, Offerings, and Positioning" if focal else "Focal Company Profile and Positioning"
+            )
+            return [
+                profile,
+                "Competitor Discovery and Verification",
+                "Direct Competitor Mapping: Verified Same-Market Providers",
+                "Indirect Competitors and Substitute Options",
+                "Positioning Gaps, Opportunities, and Risks",
             ]
         if "risk" in clean_query or "hallucination" in clean_query or "governance" in clean_query:
             return [
@@ -1009,6 +1024,8 @@ class ClarifierAgent:
         ):
             title, sections = explicit_plan
 
+        sections = self._sanitize_unverified_competitor_sections(sections, query)
+
         if not title or self._looks_like_instruction_leak(title):
             title = "Focused Research Plan"
 
@@ -1033,6 +1050,112 @@ class ClarifierAgent:
             and not self._looks_like_placeholder_section(section)
         ]
         return title, clean_sections or fallback_sections
+
+    @staticmethod
+    def _is_competitor_research_query(query: str | None) -> bool:
+        """Return True for competitor/market-positioning requests."""
+        if not query:
+            return False
+        lowered = query.lower()
+        return any(
+            marker in lowered
+            for marker in (
+                "competitor",
+                "competition",
+                "competitive positioning",
+                "market positioning",
+                "competitive landscape",
+            )
+        )
+
+    @staticmethod
+    def _extract_competitor_focal_entity(query: str | None) -> str | None:
+        """Extract the focal company from common competitor-analysis phrasing."""
+        if not query:
+            return None
+        normalized = re.sub(r"\s+", " ", query).strip()
+        match = re.search(
+            r"\b(?:competitors?\s+(?:to|for|of|against)\s+|compare\s+)(?P<entity>[A-Z][A-Za-z0-9&.' -]{2,80})",
+            normalized,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        entity = match.group("entity")
+        entity = re.split(
+            r"\s+(?:in|within|across|over|for|and|versus|vs\.?|with)\b|[,;:\n]",
+            entity,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        entity = entity.strip(" .,:;\"'")
+        return entity if len(entity) >= 3 else None
+
+    @staticmethod
+    def _names_appear_in_query(names: list[str], query: str | None) -> int:
+        """Count listed entity names that appear in the user's own request/context."""
+        if not query:
+            return 0
+        haystack = re.sub(r"\s+", " ", query).lower()
+        count = 0
+        for name in names:
+            normalized = re.sub(r"\s+", " ", name).strip(" .,:;()[]{}\"'").lower()
+            if len(normalized) >= 3 and normalized in haystack:
+                count += 1
+        return count
+
+    @classmethod
+    def _sanitize_unverified_competitor_sections(cls, sections: list[str], query: str | None) -> list[str]:
+        """
+        Remove plausible-but-unverified competitor lists from approval-plan headings.
+
+        The approval UI is a plan, not a finding. For competitor research, specific
+        competitor names should appear only when the user supplied them or when the
+        later research stage has verified them. This keeps a plausible LLM guess from
+        becoming an approved scope anchor.
+        """
+        if not cls._is_competitor_research_query(query):
+            return sections
+
+        sanitized: list[str] = []
+        for section in sections:
+            prefix, separator, suffix = section.partition(":")
+            lowered_prefix = prefix.lower()
+            if not separator or "competitor" not in lowered_prefix:
+                sanitized.append(section)
+                continue
+
+            candidate_names = [
+                part.strip(" .,:;()[]{}\"'")
+                for part in re.split(r",|\band\b|/|;", suffix)
+                if part.strip(" .,:;()[]{}\"'")
+            ]
+            # A colon followed by several proper names is usually the hallucination
+            # pattern. If the user named most of them, keep the section intact.
+            looks_like_entity_list = len(candidate_names) >= 2 and any(
+                re.search(r"\b[A-Z][A-Za-z0-9&.'-]{2,}", name) for name in candidate_names
+            )
+            if not looks_like_entity_list:
+                sanitized.append(section)
+                continue
+
+            supplied_count = cls._names_appear_in_query(candidate_names, query)
+            if supplied_count >= max(2, len(candidate_names) // 2):
+                sanitized.append(section)
+                continue
+
+            if "indirect" in lowered_prefix:
+                replacement = (
+                    "Indirect Competitor Mapping: Schools, Independent Tutors, Online Platforms, and EdTech Substitutes"
+                )
+            elif "direct" in lowered_prefix:
+                replacement = "Direct Competitor Mapping: Verified Local Test-Prep and Tutoring Centers"
+            else:
+                replacement = "Competitor Identification and Verification"
+            if replacement not in sanitized:
+                sanitized.append(replacement)
+
+        return sanitized
 
     def _plan_quality_issue(self, title: str | None, sections: list[str], query: str | None) -> str | None:
         """Return why a plan should be repaired before it reaches the approval UI."""
