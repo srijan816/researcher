@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 from typing import Literal
 
@@ -277,70 +276,6 @@ def _source_strategy_for_queries() -> dict[str, Any]:
     }
 
 
-_COMPETITOR_PLAN_MARKERS = (
-    "competitor",
-    "competitive landscape",
-    "competitive positioning",
-    "market landscape",
-    "market positioning",
-)
-
-
-def _looks_like_competitor_plan(*texts: str | None) -> bool:
-    combined = " ".join(text or "" for text in texts).lower()
-    return any(marker in combined for marker in _COMPETITOR_PLAN_MARKERS)
-
-
-def _candidate_list_count(text: str) -> int:
-    """Heuristic count for comma-separated proper-name candidate lists."""
-
-    proper_names = re.findall(r"\b[A-Z][A-Za-z0-9&.'-]{2,}(?:\s+[A-Z][A-Za-z0-9&.'-]{2,}){0,3}", text)
-    return len({name.strip() for name in proper_names})
-
-
-def _sanitize_competitor_query_text(query: str) -> str:
-    """
-    Keep competitor plans in discovery mode until candidates are verified.
-
-    M3 can turn plausible local competitors into named researcher lanes before
-    evidence exists. This post-processor preserves the focal company and market
-    but removes long unverified candidate lists from executable queries.
-    """
-
-    normalized = " ".join(query.split()).strip()
-    lowered = normalized.lower()
-    if "competitor" not in lowered and "competitive" not in lowered and "benchmark" not in lowered:
-        return normalized
-
-    direct_match = re.search(
-        r"\b(?P<prefix>direct competitors?\s+to\s+(?P<focal>[^:]{3,140}?))\s*:\s*(?P<candidates>.+)",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if direct_match and _candidate_list_count(direct_match.group("candidates")) >= 3:
-        focal = direct_match.group("focal").strip(" .,:;")
-        return (
-            f"Direct competitor discovery and verification for {focal}: identify same-market providers, "
-            "then verify current/recent operation, geography or audience overlap, service overlap, pricing, "
-            "scale, locations, and notable developments."
-        )
-
-    benchmark_match = re.search(
-        r"\b(?P<focal>[A-Z][A-Za-z0-9&.' -]{2,80}?)\s+vs\s+(?P<candidates>[^.]{10,220})",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if benchmark_match and _candidate_list_count(benchmark_match.group("candidates")) >= 3:
-        focal = benchmark_match.group("focal").strip(" .,:;")
-        return (
-            f"Strategic benchmarking and consumer perception for {focal} and verified same-market competitors: "
-            "review parent/student feedback, tutor quality, pricing complaints, score-improvement claims, "
-            "switching behavior, and brand awareness."
-        )
-
-    return normalized
-
-
 def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
     """Expand compact tool arguments into the canonical `/shared/plan.json` shape."""
 
@@ -369,18 +304,10 @@ def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
         if isinstance(input_data.output_style, PlanOutputStyle)
         else PlanOutputStyle.model_validate(input_data.output_style or {})
     )
-    competitor_plan = _looks_like_competitor_plan(
-        input_data.report_title,
-        task_analysis.user_intent,
-        " ".join(section_titles),
-        " ".join(str(requirement) for requirement in task_analysis.explicit_requirements),
-    )
 
     queries: list[dict[str, Any]] = []
     for index, query in enumerate(input_data.queries, start=1):
         query_dict = query.model_dump()
-        if competitor_plan:
-            query_dict["query"] = _sanitize_competitor_query_text(query_dict["query"])
         if not query_dict.get("target_sections"):
             query_dict["target_sections"] = section_titles[:]
         if not query_dict.get("target_claims"):
