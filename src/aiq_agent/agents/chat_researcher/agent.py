@@ -130,7 +130,7 @@ class ChatResearcherAgent:
             if (
                 update.get("user_intent")
                 and update["user_intent"].intent == "research"
-                and (state.force_deep_research or state.research_depth in {"deeper", "deep"})
+                and (state.force_deep_research or state.research_depth in {"medium", "deeper", "deep"})
             ):
                 update["depth_decision"] = DepthDecision(
                     decision="deep",
@@ -350,7 +350,7 @@ class ChatResearcherAgent:
             """From combined orchestration: meta -> END (response already in messages), else by depth."""
             if state.user_intent and state.user_intent.intent == "meta":
                 return "END"
-            if state.force_deep_research or state.research_depth in {"deeper", "deep"}:
+            if state.force_deep_research or state.research_depth in {"medium", "deeper", "deep"}:
                 return "clarifier"
             if state.research_depth == "shallow":
                 return "shallow_research"

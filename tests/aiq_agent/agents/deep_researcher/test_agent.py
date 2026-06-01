@@ -534,14 +534,41 @@ class TestDeepResearcherAgent:
                 messages=[HumanMessage(content="Compare models")],
                 research_depth="shallow",
             )
+            medium = DeepResearchAgentState(messages=[HumanMessage(content="Compare models")], research_depth="medium")
+            deeper = DeepResearchAgentState(messages=[HumanMessage(content="Compare models")], research_depth="deeper")
             deep = DeepResearchAgentState(messages=[HumanMessage(content="Compare models")], research_depth="deep")
 
             assert agent._tool_limits_for_state(shallow)["advanced_web_search_tool"] == 20
             assert agent._tool_limits_for_state(shallow)["planner:advanced_web_search_tool"] == 1
+            assert agent._tool_limits_for_state(medium)["advanced_web_search_tool"] == 64
+            assert agent._tool_limits_for_state(medium)["planner:advanced_web_search_tool"] == 7
+            assert agent._tool_limits_for_state(deeper)["advanced_web_search_tool"] == 64
+            assert agent._tool_limits_for_state(deeper)["planner:advanced_web_search_tool"] == 7
             assert agent._tool_limits_for_state(deep)["advanced_web_search_tool"] == 140
             assert agent._tool_limits_for_state(deep)["planner:advanced_web_search_tool"] == 8
             assert agent._parallel_tool_limits_for_state(shallow)["task"] == 1
-            assert agent._parallel_tool_limits_for_state(deep)["task"] == 3
+            assert agent._parallel_tool_limits_for_state(medium)["task"] == 4
+            assert agent._parallel_tool_limits_for_state(deeper)["task"] == 4
+            assert agent._parallel_tool_limits_for_state(deep)["task"] == 4
+
+    def test_medium_tier_uses_medium_orchestrator_when_configured(self, real_tool):
+        """Medium should be able to run synthesis with the thinking-off orchestrator alias."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        default_llm = MagicMock(name="default_orchestrator")
+        medium_llm = MagicMock(name="medium_orchestrator")
+        provider = LLMProvider()
+        provider.set_default(default_llm)
+        provider.configure(LLMRole.ORCHESTRATOR, default_llm)
+        provider.configure(LLMRole.MEDIUM_ORCHESTRATOR, medium_llm)
+
+        agent = DeepResearcherAgent(llm_provider=provider, tools=[real_tool])
+
+        medium = DeepResearchAgentState(messages=[HumanMessage(content="Compare models")], research_depth="medium")
+        deep = DeepResearchAgentState(messages=[HumanMessage(content="Compare models")], research_depth="deep")
+
+        assert agent._orchestrator_llm_for_state(medium) is medium_llm
+        assert agent._orchestrator_llm_for_state(deep) is default_llm
 
     def test_researcher_context_pruning_is_tighter_than_orchestrator(self, mock_llm_provider, real_tool):
         """Subagents should keep compact context; final synthesis can use more."""

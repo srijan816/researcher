@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 from typing import Literal
 
-ResearchDepthTier = Literal["shallow", "deeper", "deep"]
+ResearchDepthTier = Literal["shallow", "medium", "deeper", "deep"]
 DEFAULT_RESEARCH_DEPTH: ResearchDepthTier = "deeper"
 
 
@@ -124,7 +124,7 @@ RESEARCH_DEPTH_CONFIGS: dict[ResearchDepthTier, ResearchDepthConfig] = {
         label="Deeper",
         source_target="32-64",
         max_researcher_tasks=5,
-        max_parallel_researcher_tasks=3,
+        max_parallel_researcher_tasks=4,
         search_calls_per_task=12,
         planner_search_limit=7,
         advanced_web_search_limit=64,
@@ -136,12 +136,28 @@ RESEARCH_DEPTH_CONFIGS: dict[ResearchDepthTier, ResearchDepthConfig] = {
             "independent analysis, comparisons, and caveats."
         ),
     ),
+    "medium": ResearchDepthConfig(
+        tier="medium",
+        label="Medium",
+        source_target="32-64",
+        max_researcher_tasks=5,
+        max_parallel_researcher_tasks=4,
+        search_calls_per_task=12,
+        planner_search_limit=7,
+        advanced_web_search_limit=64,
+        web_search_limit=20,
+        stock_quote_limit=8,
+        planner_guidance=(
+            "Use the deeper evidence budget with a latency-first execution style: keep planning compact, "
+            "run bounded researcher tasks in parallel, and reserve the synthesis step for heavier reasoning."
+        ),
+    ),
     "deep": ResearchDepthConfig(
         tier="deep",
         label="Deep",
         source_target="90-150+",
         max_researcher_tasks=10,
-        max_parallel_researcher_tasks=3,
+        max_parallel_researcher_tasks=4,
         search_calls_per_task=14,
         planner_search_limit=8,
         advanced_web_search_limit=140,
@@ -163,9 +179,8 @@ def normalize_research_depth(value: Any) -> ResearchDepthTier:
         aliases = {
             "quick": "shallow",
             "light": "shallow",
-            "standard": "deeper",
+            "standard": "medium",
             "balanced": "deeper",
-            "medium": "deeper",
             "comprehensive": "deep",
             "maximum": "deep",
             "max": "deep",

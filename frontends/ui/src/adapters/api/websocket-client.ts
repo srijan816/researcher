@@ -26,7 +26,7 @@ import {
 } from './schemas'
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
-type ResearchDepth = 'shallow' | 'deeper' | 'deep'
+type ResearchDepth = 'shallow' | 'medium' | 'deeper' | 'deep'
 
 /** Context passed with connection status changes */
 export interface ConnectionChangeContext {
@@ -136,7 +136,8 @@ export class NATWebSocketClient {
    * @param researchDepth - Optional source/depth tier for deep research
    */
   sendMessage = (content: string, enabledDataSources?: string[], researchDepth: ResearchDepth = 'deeper'): void => {
-    const forceDeepResearch = apiConfig.forceDeepResearch || researchDepth === 'deeper' || researchDepth === 'deep'
+    const forceDeepResearch =
+      apiConfig.forceDeepResearch || researchDepth === 'medium' || researchDepth === 'deeper' || researchDepth === 'deep'
     const dataSources = enabledDataSources && enabledDataSources.length > 0 ? enabledDataSources : ['web_search']
 
     // Format the text content as JSON with query and data_sources

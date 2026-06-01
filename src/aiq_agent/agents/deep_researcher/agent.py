@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from deepagents import create_deep_agent
@@ -563,7 +564,7 @@ class DeepResearcherAgent:
         deepagents_kwargs = self.deepagents_runtime.create_agent_kwargs
 
         agent = create_deep_agent(
-            model=self.llm_provider.get(LLMRole.ORCHESTRATOR),
+            model=self._orchestrator_llm_for_state(state),
             tools=self.orchestrator_tools,
             system_prompt=orchestrator_instructions,
             subagents=self._get_subagents(state),
@@ -573,6 +574,12 @@ class DeepResearcherAgent:
             **deepagents_kwargs,
         )
         return agent.with_config({"recursion_limit": 1000})
+
+    def _orchestrator_llm_for_state(self, state: DeepResearchAgentState) -> Any:
+        """Use the latency-first synthesis model for medium tier when configured."""
+        if state.research_depth == "medium" and self.llm_provider.has_role(LLMRole.MEDIUM_ORCHESTRATOR):
+            return self.llm_provider.get(LLMRole.MEDIUM_ORCHESTRATOR)
+        return self.llm_provider.get(LLMRole.ORCHESTRATOR)
 
     @staticmethod
     def _latest_user_text(state: DeepResearchAgentState) -> str:
@@ -2259,11 +2266,18 @@ class DeepResearcherAgent:
         last_error = None
         try:
             max_retries = 2
+            workflow_started_at = perf_counter()
             for attempt in range(max_retries):
                 try:
+                    attempt_started_at = perf_counter()
                     result = await agent.ainvoke(
                         state,
                         config={"callbacks": self.callbacks} if self.callbacks else None,
+                    )
+                    logger.info(
+                        "Deep Research timing: primary agent attempt %d completed in %.1fs",
+                        attempt + 1,
+                        perf_counter() - attempt_started_at,
                     )
                     self._merge_structured_research_artifacts_into_result(result)
                     last_error = None
@@ -2360,9 +2374,15 @@ class DeepResearcherAgent:
                 next_state["messages"] = list(messages) + [HumanMessage(content=feedback_msg)]
 
                 try:
+                    retry_started_at = perf_counter()
                     result = await agent.ainvoke(
                         next_state,
                         config={"callbacks": self.callbacks} if self.callbacks else None,
+                    )
+                    logger.info(
+                        "Deep Research timing: feedback retry %d completed in %.1fs",
+                        attempt + 1,
+                        perf_counter() - retry_started_at,
                     )
                     self._merge_structured_research_artifacts_into_result(result)
                     last_error = None
@@ -2424,6 +2444,7 @@ class DeepResearcherAgent:
                 raise RuntimeError(f"Deep research report drifted from the requested topic: {scope_reason}")
 
             # Post-process: verify citations against source registry
+            postprocess_started_at = perf_counter()
             if self.source_registry_middleware._get_registry().all_sources():
                 registry = self.source_registry_middleware._get_registry()
                 verification = verify_citations(final_message, registry)
@@ -2461,6 +2482,11 @@ class DeepResearcherAgent:
             # Post-process: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
             sanitization = sanitize_report(final_message)
             final_message = sanitization.sanitized_report
+            logger.info(
+                "Deep Research timing: post-processing completed in %.1fs; total workflow %.1fs",
+                perf_counter() - postprocess_started_at,
+                perf_counter() - workflow_started_at,
+            )
 
             # Re-emit the verified/sanitized report so the frontend overwrites
             # the raw version that on_llm_end auto-emitted during ainvoke().

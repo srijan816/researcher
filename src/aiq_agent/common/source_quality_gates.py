@@ -17,7 +17,7 @@ from .source_classification import SourceClassification
 from .source_classification import classify_url
 from .source_classification import normalize_source_class
 
-ResearchTier = Literal["shallow", "deeper", "deep"]
+ResearchTier = Literal["shallow", "medium", "deeper", "deep"]
 GateStatus = Literal["pass", "warn", "fail"]
 
 
@@ -73,8 +73,8 @@ def evaluate_source_quality(
     failures: list[str] = []
     warnings: list[str] = []
 
-    min_domains = {"shallow": 2, "deeper": 3, "deep": 4}[tier]
-    max_dominant_share = {"shallow": 0.70, "deeper": 0.60, "deep": 0.50}[tier]
+    min_domains = {"shallow": 2, "medium": 3, "deeper": 3, "deep": 4}[tier]
+    max_dominant_share = {"shallow": 0.70, "medium": 0.60, "deeper": 0.60, "deep": 0.50}[tier]
     distinct_domains = len(domain_counts)
 
     if distinct_domains < min_domains:

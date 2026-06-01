@@ -1,6 +1,7 @@
 # AI-Q Deep Research — MiniMax M3 + SearXNG/Jina (Zero Tavily)
 # Strategy:
-#   - MiniMax M3 synthesis/planner for high-context reasoning
+#   - MiniMax M3 synthesis for high-context reasoning
+#   - MiniMax M3 planner-fast for compact plan commits
 #   - MiniMax M3 with thinking disabled for latency-sensitive intent, clarifier,
 #     shallow, and researcher loops
 #   - Exa → optional primary high-quality search when EXA_API_KEY is set
@@ -95,6 +96,23 @@ llms:
     stream_repetition_token_limit: 24
     max_retries: 2
 
+  minimax_m3_planner_fast_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_PLANNER_FAST_MODEL:-MiniMax-M3}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.15
+    top_p: 0.8
+    max_tokens: 12000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: disabled
+    request_timeout: 300
+    stream_no_progress_timeout: 75
+    stream_repetition_token_limit: 24
+    max_retries: 1
+
   minimax_m3_synthesis_llm:
     _type: anthropic
     model_name: ${MINIMAX_SYNTHESIS_MODEL:-MiniMax-M3}
@@ -109,6 +127,23 @@ llms:
     stream_no_progress_timeout: 120
     stream_repetition_token_limit: 24
     max_retries: 2
+
+  minimax_m3_synthesis_fast_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_SYNTHESIS_FAST_MODEL:-MiniMax-M3}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.2
+    top_p: 0.8
+    max_tokens: 18000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: disabled
+    request_timeout: 480
+    stream_no_progress_timeout: 90
+    stream_repetition_token_limit: 24
+    max_retries: 1
 
 functions:
   # Data Source Registry — SearXNG/Jina only, zero Tavily
@@ -211,8 +246,9 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: minimax_m3_synthesis_llm
+    medium_orchestrator_llm: minimax_m3_synthesis_fast_llm
     researcher_llm: minimax_m3_research_llm
-    planner_llm: minimax_m3_planner_llm
+    planner_llm: minimax_m3_planner_fast_llm
     max_loops: 2
     exclude_tools:
       - web_search_tool

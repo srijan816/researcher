@@ -13,7 +13,7 @@ import type { DataSourceFromAPI } from '@/adapters/api'
 export type ThemeMode = 'light' | 'dark' | 'system'
 
 /** Research source/depth tiers */
-export type ResearchDepth = 'shallow' | 'deeper' | 'deep'
+export type ResearchDepth = 'shallow' | 'medium' | 'deeper' | 'deep'
 
 /** Panels that can be opened on the right side */
 export type RightPanelType = 'research' | 'data-sources' | 'settings' | 'docs' | null

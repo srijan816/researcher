@@ -31,6 +31,7 @@ export type InputAreaVariant = 'dock' | 'hero'
 
 const RESEARCH_DEPTH_OPTIONS: Array<{ value: ResearchDepth; label: string; title: string }> = [
   { value: 'shallow', label: 'Shallow', title: 'Target 10-20 sources' },
+  { value: 'medium', label: 'Medium', title: 'Target 32-64 sources, faster thinking-off research' },
   { value: 'deeper', label: 'Deeper', title: 'Target 32-64 sources' },
   { value: 'deep', label: 'Deep', title: 'Target 90-150+ sources' },
 ]
@@ -454,7 +455,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                 Mode
               </span>
               <div
-                className={`grid min-w-0 flex-1 grid-cols-3 rounded border border-base p-0.5 sm:w-[12.5rem] sm:flex-none ${
+                className={`grid min-w-0 flex-1 grid-cols-4 rounded border border-base p-0.5 sm:w-[16.5rem] sm:flex-none ${
                   isHero ? 'bg-surface-raised-30' : 'bg-surface-base'
                 }`}
                 role="group"

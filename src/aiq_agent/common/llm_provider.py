@@ -34,6 +34,7 @@ class LLMRole(StrEnum):
     GRADER = "grader"
     SUMMARIZER = "summarizer"
     ORCHESTRATOR = "orchestrator"
+    MEDIUM_ORCHESTRATOR = "medium_orchestrator"
     REFLECTION = "reflection"
     CLARIFIER = "clarifier"
     META_CHATTER = "meta_chatter"

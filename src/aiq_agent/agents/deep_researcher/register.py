@@ -48,6 +48,10 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
     """Configuration for the deep research agent."""
 
     orchestrator_llm: LLMRef = Field(..., description="LLM for orchestrator")
+    medium_orchestrator_llm: LLMRef | None = Field(
+        default=None,
+        description="Optional thinking-off orchestrator/synthesis LLM for the medium tier",
+    )
     researcher_llm: LLMRef | None = Field(default=None, description="LLM for researcher")
     planner_llm: LLMRef | None = Field(default=None, description="LLM for planner")
     tools: list[FunctionRef | FunctionGroupRef] = Field(
@@ -101,6 +105,12 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
     provider.set_default(llm)
 
     provider.configure(LLMRole.ORCHESTRATOR, llm)
+    if config.medium_orchestrator_llm:
+        medium_orchestrator_llm = await builder.get_llm(
+            config.medium_orchestrator_llm,
+            wrapper_type=LLMFrameworkEnum.LANGCHAIN,
+        )
+        provider.configure(LLMRole.MEDIUM_ORCHESTRATOR, medium_orchestrator_llm)
     if config.researcher_llm:
         researcher_llm = await builder.get_llm(config.researcher_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
         provider.configure(LLMRole.RESEARCHER, researcher_llm)

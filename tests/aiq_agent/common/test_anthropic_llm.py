@@ -25,10 +25,13 @@ def test_minimax_active_config_uses_no_thinking_for_latency_sensitive_roles():
 
     assert llms["minimax_m3_fast_llm"]["thinking"] == {"type": "disabled"}
     assert llms["minimax_m3_research_llm"]["thinking"] == {"type": "disabled"}
+    assert llms["minimax_m3_planner_fast_llm"]["thinking"] == {"type": "disabled"}
+    assert llms["minimax_m3_synthesis_fast_llm"]["thinking"] == {"type": "disabled"}
     assert functions["intent_classifier"]["llm"] == "minimax_m3_fast_llm"
     assert functions["clarifier_agent"]["llm"] == "minimax_m3_fast_llm"
     assert functions["clarifier_agent"]["planner_llm"] == "minimax_m3_fast_llm"
     assert functions["shallow_research_agent"]["llm"] == "minimax_m3_research_llm"
     assert functions["deep_research_agent"]["researcher_llm"] == "minimax_m3_research_llm"
     assert functions["deep_research_agent"]["orchestrator_llm"] == "minimax_m3_synthesis_llm"
-    assert functions["deep_research_agent"]["planner_llm"] == "minimax_m3_planner_llm"
+    assert functions["deep_research_agent"]["medium_orchestrator_llm"] == "minimax_m3_synthesis_fast_llm"
+    assert functions["deep_research_agent"]["planner_llm"] == "minimax_m3_planner_fast_llm"

@@ -157,10 +157,10 @@ describe('useLayoutStore', () => {
   })
 
   describe('setTheme', () => {
-    test('sets light theme', () => {
+    test('keeps the current dark-only theme when light is requested', () => {
       useLayoutStore.getState().setTheme('light')
 
-      expect(useLayoutStore.getState().theme).toBe('light')
+      expect(useLayoutStore.getState().theme).toBe('dark')
     })
 
     test('sets dark theme', () => {
@@ -169,12 +169,12 @@ describe('useLayoutStore', () => {
       expect(useLayoutStore.getState().theme).toBe('dark')
     })
 
-    test('sets system theme', () => {
+    test('keeps the current dark-only theme when system is requested', () => {
       useLayoutStore.setState({ theme: 'dark' })
 
       useLayoutStore.getState().setTheme('system')
 
-      expect(useLayoutStore.getState().theme).toBe('system')
+      expect(useLayoutStore.getState().theme).toBe('dark')
     })
   })
 
@@ -183,6 +183,12 @@ describe('useLayoutStore', () => {
       useLayoutStore.getState().setResearchDepth('deep')
 
       expect(useLayoutStore.getState().researchDepth).toBe('deep')
+    })
+
+    test('sets medium research depth tier', () => {
+      useLayoutStore.getState().setResearchDepth('medium')
+
+      expect(useLayoutStore.getState().researchDepth).toBe('medium')
     })
   })
 })
