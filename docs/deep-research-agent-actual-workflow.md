@@ -217,8 +217,9 @@ Actual behavior:
 
 - Generates only a lightweight UI-facing plan: title plus 4-7 section names.
 - This is not the same as `/shared/plan.json`.
-- If the user approves it, code preloads a compact `/shared/plan.json` from the approved title/sections.
-- If the plan is detected as generic fallback, the deep planner is supposed to ignore it and create a new specific plan.
+- If the user approves it, the preview is passed only as planning context.
+- The deep planner must still create a fresh canonical `/shared/plan.json` with `write_plan`.
+- Generic fallback previews are stripped or replaced with more specific context before the planner runs.
 
 Important excerpt:
 
@@ -311,14 +312,18 @@ This middleware trims historical tool call arguments before future model calls. 
 
 ## Deep Workflow Step by Step
 
-### Step 0. Preload approved plan or structured lesson plan
+### Step 0. Strip stale plan files and pass only planning context
 
 Before the deep agent runs, `DeepResearcherAgent._inject_approved_plan_if_available()` checks:
 
-- If `/plan.json` or `/shared/plan.json` already exists, keep it.
-- If the user query has structured lesson fields like `Exact lesson topic:` and `Final debate motion:`, build a deterministic topic-first plan.
-- If the clarifier produced an approved plan, build `/shared/plan.json` from it.
-- If the approved plan looks generic, ignore it and let the deep planner run.
+- Remove any existing `/plan.json` or `/shared/plan.json` from preloaded state.
+- If the user query has structured lesson fields like `Exact lesson topic:` and `Final debate motion:`,
+  pass a topic-first approved-plan context string to the planner.
+- If the clarifier produced an approved preview, pass it as context only.
+- If the approved preview looks generic, strip it or replace it with more specific context from the query.
+
+This is deliberate. A plan file is only trusted after the planner-agent writes it in the current run.
+No new deep research job should start with a canonical plan file already present.
 
 Important code:
 
@@ -338,13 +343,13 @@ The orchestrator is told:
 ```text
 You are never a direct-answer chatbot in this workflow. Every invocation, even one that looks simple, must run the deep research process:
 - Track progress with `write_todos`.
-- Use an existing `/shared/plan.json`, an approved plan, or the `planner-agent`.
+- Call `planner-agent` if `/shared/plan.json` does not exist.
 - Delegate factual gathering to `researcher-agent`.
 - Ensure at least one search/source-capturing tool result has been used before final writing.
 - Never answer from memory, never claim web research is unnecessary, and never invent source URLs.
 ```
 
-The orchestrator either reads an existing plan or delegates to planner-agent.
+For new jobs, no plan file should be preloaded, so the orchestrator should delegate to planner-agent.
 
 ### Step 2. Planner-agent creates `/shared/plan.json`
 

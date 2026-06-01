@@ -849,8 +849,8 @@ class AgentEventCallback(BaseCallbackHandler):
                 )
             )
 
-    THINKING_TRIM_LIMIT = 300
-    THINKING_TRIM_SUFFIX = " [Trimmed - check traces for full logs]"
+    THINKING_TRIM_LIMIT = 6000
+    THINKING_TRIM_SUFFIX = "\n\n[Thought display shortened after 6000 characters.]"
 
     def on_llm_end(self, response, **kwargs) -> None:
         run_id = str(kwargs.get("run_id", ""))

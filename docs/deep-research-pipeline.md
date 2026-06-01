@@ -336,7 +336,7 @@ The clarifier also has defensive logic for common failure modes:
 2. If MiniMax outputs Markdown instead of JSON, the parser tries to recover a title and section list.
 3. If the plan title leaks instruction text like "You are Deep Research", the title is replaced.
 4. If sections are generic placeholders like "Introduction", "Findings", or "Conclusion", they are replaced with topic-specific fallback sections.
-5. If the task is a structured lesson prompt with `Exact lesson topic` and `Final debate motion`, the deep researcher can later preload a topic-first plan to prevent drift.
+5. Structured lesson prompts are passed to the deep planner as topic-first context, but no canonical plan file is preloaded.
 
 ## Step 8: Shallow Research Path
 
@@ -672,9 +672,9 @@ Tracks URLs returned by source tools so final citations can be verified.
 
 The deep researcher also has special anti-drift handling:
 
-1. It detects generic approved plans and ignores them.
-2. It detects structured lesson prompts with exact topic and debate motion.
-3. It can preload a topic-first `/shared/plan.json`.
+1. It removes stale `/plan.json` and `/shared/plan.json` files before each run.
+2. It detects generic approved plans and strips or replaces them with specific context.
+3. It detects structured lesson prompts with exact topic and debate motion and passes topic-first context to the planner.
 4. It checks whether a final deep research report matches the original request scope.
 5. It rejects raw provider protocol blocks as final reports.
 

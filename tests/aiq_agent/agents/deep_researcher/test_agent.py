@@ -241,8 +241,10 @@ class TestDeepResearcherAgent:
                 ["Candidate Price/Fair Value Table", "Source Quality and Caveats"],
             )
 
-    def test_inject_approved_plan_preloads_plan_file(self, mock_llm_provider, real_tool, mock_create_deep_agent):
-        """Approved plans should preload /shared/plan.json so planner-agent can be skipped."""
+    def test_inject_approved_plan_does_not_preload_plan_file(
+        self, mock_llm_provider, real_tool, mock_create_deep_agent
+    ):
+        """Approved previews should guide planning without becoming canonical plan files."""
         with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
@@ -267,21 +269,9 @@ class TestDeepResearcherAgent:
 
             updated = agent._inject_approved_plan_if_available(state)
 
-            assert "/plan.json" in updated.files
-            content = "\n".join(updated.files["/plan.json"]["content"])
-            assert "Current 40-50% Fair-Value Discount Candidates" in content
-            assert updated.files["/plan.json"]["created_at"]
-            assert updated.files["/plan.json"]["modified_at"]
-            assert "approved_plan_used_directly" in content
-            assert "Generic background not requested" in content
-
-            plan = json.loads(content)
-            assert plan["output_style"]["mode"] == "focused_screen"
-            assert plan["budget_profile"]["mode"] == "focused_screen"
-            assert plan["budget_profile"]["reserve_search_calls"] >= 0
-            assert len(plan["queries"]) == 1
-            assert "stock_quote_tool" in " ".join(plan["constraints"])
-            assert "compact final report" in " ".join(plan["constraints"]).lower()
+            assert "/plan.json" not in updated.files
+            assert "/shared/plan.json" not in updated.files
+            assert updated.clarifier_result == state.clarifier_result
 
     def test_generic_approved_plan_does_not_preload_plan_file(
         self,
@@ -317,13 +307,13 @@ class TestDeepResearcherAgent:
             assert "/shared/plan.json" not in updated.files
             assert "generic placeholder" in (updated.clarifier_result or "")
 
-    def test_fallback_like_approved_plan_for_rich_query_preloads_deterministic_plan(
+    def test_fallback_like_approved_plan_for_rich_query_passes_specific_context_only(
         self,
         mock_llm_provider,
         real_tool,
         mock_create_deep_agent,
     ):
-        """Rich prompts should not fall back into planner-agent just because the UI preview was generic."""
+        """Rich prompts should replace generic context, while planner-agent still writes the plan."""
         with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
@@ -352,22 +342,19 @@ class TestDeepResearcherAgent:
 
             updated = agent._inject_approved_plan_if_available(state)
 
-            assert "/plan.json" in updated.files
-            assert "/shared/plan.json" in updated.files
-            content = "\n".join(updated.files["/shared/plan.json"]["content"])
-            plan = json.loads(content)
-            assert plan["report_title"] == "Top 10 Highest-Value AI Use Cases in 2026"
-            assert plan["report_toc"][0]["title"] == "Executive Summary and Ranking Criteria"
-            assert plan["queries"]
+            assert "/plan.json" not in updated.files
+            assert "/shared/plan.json" not in updated.files
+            assert "Top 10 Highest-Value AI Use Cases in 2026" in (updated.clarifier_result or "")
+            assert "Executive Summary and Ranking Criteria" in (updated.clarifier_result or "")
             assert "generic placeholder" not in (updated.clarifier_result or "")
 
-    def test_structured_lesson_prompt_preloads_topic_first_plan(
+    def test_structured_lesson_prompt_passes_topic_first_context_only(
         self,
         mock_llm_provider,
         real_tool,
         mock_create_deep_agent,
     ):
-        """Lesson prompts with a broad topic and narrow motion should get a topic-first plan."""
+        """Lesson prompts with a broad topic should not preload stale plan files."""
         with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
@@ -401,16 +388,10 @@ class TestDeepResearcherAgent:
 
             updated = agent._inject_approved_plan_if_available(state)
 
-            assert "/plan.json" in updated.files
-            content = "\n".join(updated.files["/plan.json"]["content"])
-            plan = json.loads(content)
-
-            assert plan["task_analysis"]["structured_lesson_scope_used_directly"] is True
-            assert plan["output_style"]["topic_anchor"] == "Doctors & Patients"
-            assert "allow doctors to refuse" in plan["output_style"]["motion_anchor"]
-            assert "do not center the final debate motion" in plan["queries"][0]["query"]
-            assert "bounded motion relevance" in plan["queries"][-1]["query"]
-            assert "at least half the report body cover the broad topic" in json.dumps(plan["constraints"]).lower()
+            assert "/plan.json" not in updated.files
+            assert "/shared/plan.json" not in updated.files
+            assert "Doctors & Patients Content Research Dossier" in (updated.clarifier_result or "")
+            assert "Topic essentials" in (updated.clarifier_result or "")
             assert "Approved Research Plan" in (updated.clarifier_result or "")
 
             state_with_existing_plan_context = state.model_copy(
@@ -426,15 +407,14 @@ class TestDeepResearcherAgent:
             updated_with_existing_plan_context = agent._inject_approved_plan_if_available(
                 state_with_existing_plan_context
             )
-            content_with_existing_plan_context = "\n".join(
-                updated_with_existing_plan_context.files["/plan.json"]["content"]
+
+            assert "/plan.json" not in updated_with_existing_plan_context.files
+            assert "Doctors & Patients Content Research Dossier" in (
+                updated_with_existing_plan_context.clarifier_result or ""
             )
-            plan_with_existing_plan_context = json.loads(content_with_existing_plan_context)
+            assert "Conscientious objection only" not in (updated_with_existing_plan_context.clarifier_result or "")
 
-            assert plan_with_existing_plan_context["output_style"]["topic_anchor"] == "Doctors & Patients"
-            assert "Conscientious objection only" not in content_with_existing_plan_context
-
-    def test_broad_topic_markdown_lesson_prompt_preloads_topic_first_plan(
+    def test_broad_topic_markdown_lesson_prompt_passes_topic_first_context_only(
         self,
         mock_llm_provider,
         real_tool,
@@ -478,13 +458,10 @@ class TestDeepResearcherAgent:
 
             updated = agent._inject_approved_plan_if_available(state)
 
-            assert "/shared/plan.json" in updated.files
-            plan = json.loads("\n".join(updated.files["/shared/plan.json"]["content"]))
-            assert plan["task_analysis"]["structured_lesson_scope_used_directly"] is True
-            assert plan["output_style"]["topic_anchor"] == "Education and Tech"
-            assert "mandate teachers to use AI" in plan["output_style"]["motion_anchor"]
-            assert len(plan["report_toc"]) == 14
-            assert plan["report_toc"][0]["title"].startswith("Topic Landscape")
+            assert "/plan.json" not in updated.files
+            assert "/shared/plan.json" not in updated.files
+            assert "Education and Tech Content Research Dossier" in (updated.clarifier_result or "")
+            assert "Topic Landscape" in (updated.clarifier_result or "")
             assert "Approved Research Plan" in (updated.clarifier_result or "")
 
     def test_normalize_files_state_adds_missing_metadata(

@@ -822,19 +822,7 @@ class DeepResearcherAgent:
         motion = str(scope["motion"])
         report_type = scope.get("report_type") or "content_research"
         audience = scope.get("audience") or "the stated audience"
-        sections = list(scope.get("sections") or [])
-
-        if not sections:
-            sections = [
-                "Research scope and final motion anchor",
-                "Age and audience assumptions",
-                "Topic essentials: definitions, key terms, and background concepts",
-                "Factual findings with citations",
-                "Key examples and case studies",
-                "Important tensions and misconceptions",
-                "Motion relevance notes",
-                "Source table and final bibliography",
-            ]
+        sections = DeepResearcherAgent._structured_lesson_section_titles(scope)
 
         toc = [
             {
@@ -1057,6 +1045,23 @@ class DeepResearcherAgent:
         return json.dumps(plan, indent=2)
 
     @staticmethod
+    def _structured_lesson_section_titles(scope: dict[str, Any]) -> list[str]:
+        """Return requested lesson/dossier section titles, with the current default shape."""
+        sections = list(scope.get("sections") or [])
+        if sections:
+            return [str(section) for section in sections]
+        return [
+            "Research scope and final motion anchor",
+            "Age and audience assumptions",
+            "Topic essentials: definitions, key terms, and background concepts",
+            "Factual findings with citations",
+            "Key examples and case studies",
+            "Important tensions and misconceptions",
+            "Motion relevance notes",
+            "Source table and final bibliography",
+        ]
+
+    @staticmethod
     def _build_plan_json_from_approved_context(
         title: str,
         sections: list[str],
@@ -1270,29 +1275,29 @@ class DeepResearcherAgent:
             logger.info("Deep Research: seeded %d source URL(s) from resume files", seeded)
 
     def _inject_approved_plan_if_available(self, state: DeepResearchAgentState) -> DeepResearchAgentState:
-        """Preload /shared/plan.json when clarification already produced an approved plan."""
+        """Carry approved-plan context, but never preload canonical plan files.
+
+        MiniMax M3 is sensitive to being told a plan already exists. Preloading
+        `/shared/plan.json` lets the orchestrator skip the planner-agent and can
+        turn a generic UI preview into the canonical research contract. Every
+        run should therefore start without plan files; the planner-agent must
+        commit a fresh plan with `write_plan`.
+        """
         files = self._normalize_files_state(state.files)
-        if "/plan.json" in files or "/shared/plan.json" in files:
-            return state.model_copy(update={"files": files})
+        stale_plan_paths = {"/plan.json", "plan.json", "/shared/plan.json", "shared/plan.json"}
+        files = {path: value for path, value in files.items() if path not in stale_plan_paths}
 
         latest_query = self._latest_user_text(state)
         clean_query = self._query_without_context(latest_query)
-        depth_config = get_research_depth_config(state.research_depth)
         structured_scope = self._extract_structured_lesson_scope(clean_query)
         if structured_scope:
-            plan_json = self._build_structured_lesson_plan_json(structured_scope, latest_query, depth_config)
-            logger.info("Deep Research: preloading topic-first structured lesson plan into /shared/plan.json")
-            plan_file = self._file_state_entry(plan_json)
-            merged_files = {
-                **files,
-                "/plan.json": plan_file,
-                "/shared/plan.json": plan_file,
-            }
+            logger.info("Deep Research: passing structured lesson scope to planner without preloading plan files")
+            sections = self._structured_lesson_section_titles(structured_scope)
             plan_context = self._format_approved_plan_context(
                 f"{structured_scope['topic']} Content Research Dossier",
-                [str(section["title"]) for section in json.loads(plan_json)["report_toc"]],
+                sections,
             )
-            return state.model_copy(update={"files": merged_files, "clarifier_result": plan_context})
+            return state.model_copy(update={"files": files, "clarifier_result": plan_context})
 
         plan_context = state.clarifier_result or latest_query
         approved_plan = self._extract_approved_plan(plan_context)
@@ -1302,16 +1307,11 @@ class DeepResearcherAgent:
             explicit_plan = self._explicit_plan_from_rich_query(latest_query)
             if explicit_plan:
                 title, sections = explicit_plan
-                plan_json = self._build_plan_json_from_approved_context(title, sections, latest_query, depth_config)
-                logger.info("Deep Research: preloading deterministic rich-query plan into /shared/plan.json")
-                plan_file = self._file_state_entry(plan_json)
-                merged_files = {
-                    **files,
-                    "/plan.json": plan_file,
-                    "/shared/plan.json": plan_file,
-                }
+                logger.info(
+                    "Deep Research: passing deterministic rich-query plan context without preloading plan files"
+                )
                 plan_context = self._format_approved_plan_context(title, sections)
-                return state.model_copy(update={"files": merged_files, "clarifier_result": plan_context})
+                return state.model_copy(update={"files": files, "clarifier_result": plan_context})
             if self._is_financial_screen_query(clean_query):
                 title = "Stocks Trading 40-50% Below Estimated Fair Value"
                 sections = [
@@ -1319,33 +1319,19 @@ class DeepResearcherAgent:
                     "Current price and fair-value evidence",
                     "Methodology caveats and source limitations",
                 ]
-                plan_json = self._build_plan_json_from_approved_context(title, sections, latest_query, depth_config)
-                logger.info("Deep Research: preloading focused stock-screen plan into /shared/plan.json")
-                plan_file = self._file_state_entry(plan_json)
-                merged_files = {
-                    **files,
-                    "/plan.json": plan_file,
-                    "/shared/plan.json": plan_file,
-                }
+                logger.info("Deep Research: passing focused stock-screen plan context without preloading plan files")
                 plan_context = self._format_approved_plan_context(title, sections)
-                return state.model_copy(update={"files": merged_files, "clarifier_result": plan_context})
-            return state
+                return state.model_copy(update={"files": files, "clarifier_result": plan_context})
+            return state.model_copy(update={"files": files})
 
         title, sections = approved_plan
         if self._is_generic_approved_plan(title, sections):
             explicit_plan = self._explicit_plan_from_rich_query(latest_query)
             if explicit_plan:
                 title, sections = explicit_plan
-                plan_json = self._build_plan_json_from_approved_context(title, sections, latest_query, depth_config)
-                logger.info("Deep Research: replacing generic approved plan with deterministic rich-query plan")
-                plan_file = self._file_state_entry(plan_json)
-                merged_files = {
-                    **files,
-                    "/plan.json": plan_file,
-                    "/shared/plan.json": plan_file,
-                }
+                logger.info("Deep Research: replacing generic approved plan with rich-query context only")
                 plan_context = self._format_approved_plan_context(title, sections)
-                return state.model_copy(update={"files": merged_files, "clarifier_result": plan_context})
+                return state.model_copy(update={"files": files, "clarifier_result": plan_context})
             logger.info("Deep Research: ignoring generic approved plan so planner-agent can create a specific TOC")
             return state.model_copy(
                 update={
@@ -1354,15 +1340,8 @@ class DeepResearcherAgent:
                 }
             )
 
-        plan_json = self._build_plan_json_from_approved_context(title, sections, latest_query, depth_config)
-        logger.info("Deep Research: preloading approved plan into /shared/plan.json")
-        plan_file = self._file_state_entry(plan_json)
-        merged_files = {
-            **files,
-            "/plan.json": plan_file,
-            "/shared/plan.json": plan_file,
-        }
-        return state.model_copy(update={"files": merged_files})
+        logger.info("Deep Research: passing approved plan preview as planner context only")
+        return state.model_copy(update={"files": files})
 
     @staticmethod
     def _tool_limits_for_state(state: DeepResearchAgentState) -> dict[str, int]:

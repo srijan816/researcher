@@ -1168,6 +1168,8 @@ def _build_resume_files_from_events(db_url: str, job_id: str) -> dict[str, dict]
         if artifact_type == "file" and content:
             raw_path = data.get("file_path") or data.get("path") or data.get("filename") or event.get("name")
             path = _resume_state_path(raw_path, f"/resume_file_{len(files) + 1}.md")
+            if path in {"/plan.json", "plan.json", "/shared/plan.json", "shared/plan.json"}:
+                continue
             files[path] = _file_entry(content if isinstance(content, str) else str(content))
             continue
 
