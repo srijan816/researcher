@@ -123,6 +123,8 @@ export const useAuth = (): AuthContext => {
           image: session.user.image,
         }
       : null,
+    role: session?.role,
+    mustChangePassword: session?.mustChangePassword,
     accessToken: session?.accessToken,
     idToken: session?.idToken,
     error: session?.error,

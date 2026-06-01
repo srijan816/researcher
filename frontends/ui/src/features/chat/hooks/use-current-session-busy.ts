@@ -42,6 +42,8 @@ export const useIsCurrentSessionBusy = (): boolean => {
   const isStreaming = useChatStore((state) => state.isStreaming)
   const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)
   const deepResearchStatus = useChatStore((state) => state.deepResearchStatus)
+  const deepResearchOwnerConversationId = useChatStore((state) => state.deepResearchOwnerConversationId)
+  const currentConversationId = useChatStore((state) => state.currentConversation?.id ?? null)
 
   // --- Persisted state (safety net, covers page refresh) ---
 
@@ -55,13 +57,18 @@ export const useIsCurrentSessionBusy = (): boolean => {
   // Check persisted HITL pending interaction (already in partialize)
   const hasPendingInteraction = useChatStore((state) => state.pendingInteraction !== null)
 
+  const isCurrentSessionDeepResearchOwner =
+    currentConversationId !== null && deepResearchOwnerConversationId === currentConversationId
+  const hasActiveEphemeralDeepResearch =
+    isCurrentSessionDeepResearchOwner &&
+    (isDeepResearchStreaming ||
+      (deepResearchStatus !== null && ['submitted', 'running'].includes(deepResearchStatus)))
+
   return (
     // Ephemeral: WebSocket streaming (shallow thinking)
     isStreaming ||
-    // Ephemeral: Deep research SSE is actively streaming
-    isDeepResearchStreaming ||
-    // Ephemeral: Deep research job in non-terminal state
-    (deepResearchStatus !== null && ['submitted', 'running'].includes(deepResearchStatus)) ||
+    // Ephemeral: Deep research belongs to the current session.
+    hasActiveEphemeralDeepResearch ||
     // Persisted: Deep research job detected in message history (covers refresh gap)
     hasActiveJobInHistory ||
     // Persisted: HITL prompt waiting for user response

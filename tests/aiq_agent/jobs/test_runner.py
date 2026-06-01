@@ -76,6 +76,11 @@ from aiq_api.jobs.callbacks import EventCategory
 from aiq_api.jobs.callbacks import EventData
 from aiq_api.jobs.callbacks import EventState
 from aiq_api.jobs.callbacks import IntermediateStepEvent
+from aiq_api.jobs.runner import _build_success_output
+from aiq_api.jobs.runner import _emit_quality_audit_artifacts
+from aiq_api.jobs.runner import _evaluate_post_run_quality
+from aiq_api.jobs.runner import _is_usable_report
+from aiq_api.jobs.runner import _recover_report_from_events
 
 
 @pytest.fixture(name="event_store_cache_guard", autouse=True)
@@ -86,6 +91,255 @@ def fixture_event_store_cache_guard():
     EventStore.dispose_all_engines()
     yield
     EventStore.dispose_all_engines()
+
+
+def test_post_run_quality_gates_detect_missing_report_and_citations(tmp_path):
+    """Post-run gates flag runs that never wrote report.md or cited verified sources."""
+    from aiq_api.jobs.event_store import EventStore
+
+    db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
+    store = EventStore(db_url, "job-quality")
+    store.store(
+        {
+            "type": "artifact.update",
+            "name": "https://example.com/source",
+            "data": {
+                "type": "citation_source",
+                "content": "https://example.com/source",
+                "url": "https://example.com/source",
+            },
+        }
+    )
+
+    problems = _evaluate_post_run_quality(db_url, "job-quality")
+
+    assert "no /report.md file artifact was produced" in problems
+    assert "final report emitted no citation_use events" in problems
+
+
+def test_quality_warnings_are_preserved_in_success_output():
+    """Non-fatal quality problems should be returned with the usable report."""
+    output = _build_success_output("# Report", quality_warnings=["source diversity low"])
+
+    assert output["report"] == "# Report"
+    assert output["quality_status"] == "warning"
+    assert output["quality_warnings"] == ["source diversity low"]
+
+
+def test_quality_audit_artifact_is_persisted(tmp_path):
+    """Quality warnings should be visible through the event/artifact stream."""
+    from aiq_api.jobs.event_store import EventStore
+
+    db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
+    store = EventStore(db_url, "job-quality-warning")
+
+    _emit_quality_audit_artifacts(store, ["source diversity low", "claim table under-resolved"])
+
+    events = EventStore.get_events(db_url, "job-quality-warning", 0, 100)
+    event_types = [event.get("type") for event in events]
+    artifact = next(event for event in events if event.get("type") == "artifact.update")
+
+    assert "artifact.update" in event_types
+    assert "quality.warning" in event_types
+    assert artifact["name"] == "quality_audit"
+    assert artifact["data"]["type"] == "quality_audit"
+    assert artifact["data"]["warnings"] == ["source diversity low", "claim table under-resolved"]
+
+
+def test_post_run_quality_gates_pass_with_report_and_citation(tmp_path):
+    """Post-run gates pass when report file and citation_use artifacts exist."""
+    from aiq_api.jobs.event_store import EventStore
+
+    db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
+    store = EventStore(db_url, "job-quality-ok")
+    store.store(
+        {
+            "type": "artifact.update",
+            "name": "/report.md",
+            "data": {"type": "file", "content": "# Report\n\nBody"},
+        }
+    )
+    for artifact_type in ("citation_source", "citation_use"):
+        store.store(
+            {
+                "type": "artifact.update",
+                "name": "https://example.com/source",
+                "data": {
+                    "type": artifact_type,
+                    "content": "https://example.com/source",
+                    "url": "https://example.com/source",
+                },
+            }
+        )
+
+    assert _evaluate_post_run_quality(db_url, "job-quality-ok") == []
+
+
+def test_post_run_quality_flags_entity_heavy_plan_without_fact_ledger(tmp_path):
+    """Entity-heavy plans must produce a fact ledger, not just a report."""
+    from aiq_api.jobs.event_store import EventStore
+
+    db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
+    store = EventStore(db_url, "job-quality-ledger-missing")
+    store.store(
+        {
+            "type": "artifact.update",
+            "name": "/shared/plan.json",
+            "data": {
+                "type": "file",
+                "content": """
+                {
+                  "task_analysis": {
+                    "entities": [
+                      {"name": "Grok Imagine", "centrality": "central"},
+                      {"name": "Claude Opus 4.6", "centrality": "central"},
+                      {"name": "MiniMax M3", "centrality": "central"}
+                    ]
+                  },
+                  "fact_ledger_targets": {
+                    "Grok Imagine": [{"question": "Pricing?", "answer_type": "table"}],
+                    "Claude Opus 4.6": [{"question": "Context window?", "answer_type": "number"}],
+                    "MiniMax M3": [{"question": "Supported tools?", "answer_type": "short_text"}]
+                  }
+                }
+                """,
+            },
+        }
+    )
+    store.store({"type": "artifact.update", "name": "/report.md", "data": {"type": "file", "content": "# Report"}})
+    store.store(
+        {
+            "type": "artifact.update",
+            "name": "https://docs.x.ai/docs/grok-imagine",
+            "data": {
+                "type": "citation_use",
+                "url": "https://docs.x.ai/docs/grok-imagine",
+                "source_class": "first_party",
+            },
+        }
+    )
+
+    problems = _evaluate_post_run_quality(db_url, "job-quality-ledger-missing")
+
+    assert any("missing /shared/fact_ledger.json" in problem for problem in problems)
+
+
+def test_post_run_quality_flags_central_entity_with_zero_verified_facts(tmp_path):
+    """Every central entity in an entity-heavy plan needs at least one verified ledger fact."""
+    from aiq_api.jobs.event_store import EventStore
+
+    db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
+    store = EventStore(db_url, "job-quality-ledger-empty-entity")
+    store.store(
+        {
+            "type": "artifact.update",
+            "name": "/shared/plan.json",
+            "data": {
+                "type": "file",
+                "content": """
+                {
+                  "task_analysis": {
+                    "entities": [
+                      {"name": "Grok Imagine", "centrality": "central"},
+                      {"name": "Claude Opus 4.6", "centrality": "central"},
+                      {"name": "MiniMax M3", "centrality": "central"}
+                    ]
+                  }
+                }
+                """,
+            },
+        }
+    )
+    store.store(
+        {
+            "type": "artifact.update",
+            "name": "/shared/fact_ledger.json",
+            "data": {
+                "type": "file",
+                "content": """
+                {
+                  "entries": [
+                    {
+                      "entity": "Grok Imagine",
+                      "fact": "Official docs describe Grok Imagine.",
+                      "source_url": "https://docs.x.ai/docs/grok-imagine",
+                      "source_extract": "Grok Imagine is described here.",
+                      "source_class": "first_party",
+                      "confidence": "high",
+                      "status": "verified"
+                    }
+                  ]
+                }
+                """,
+            },
+        }
+    )
+    store.store({"type": "artifact.update", "name": "/report.md", "data": {"type": "file", "content": "# Report"}})
+    store.store(
+        {
+            "type": "artifact.update",
+            "name": "https://docs.x.ai/docs/grok-imagine",
+            "data": {"type": "citation_use", "url": "https://docs.x.ai/docs/grok-imagine"},
+        }
+    )
+
+    problems = _evaluate_post_run_quality(db_url, "job-quality-ledger-empty-entity")
+
+    assert any("Claude Opus 4.6" in problem and "MiniMax M3" in problem for problem in problems)
+
+
+def test_recovery_rejects_thinking_payload_and_combines_research_files(tmp_path):
+    """Recovery must not promote raw MiniMax thinking blocks as final reports."""
+    from aiq_api.jobs.event_store import EventStore
+
+    db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
+    store = EventStore(db_url, "job-recover-notes")
+    thinking_payload = (
+        "[{'thinking': 'I should now write the final report, but have not done so.', 'type': 'thinking', 'index': 0}]"
+    )
+    store.store(
+        {
+            "type": "artifact.update",
+            "name": None,
+            "data": {"type": "output", "output_category": "final_report", "content": thinking_payload},
+        }
+    )
+    for url in ("https://example.com/source-a", "https://example.com/source-b"):
+        store.store(
+            {
+                "type": "artifact.update",
+                "name": url,
+                "data": {"type": "citation_source", "content": url, "url": url},
+            }
+        )
+    store.store(
+        {
+            "type": "artifact.update",
+            "name": "/shared/first_research.md",
+            "data": {
+                "type": "file",
+                "content": "# First Research\n\n" + ("Alpha findings with evidence. " * 80),
+            },
+        }
+    )
+    store.store(
+        {
+            "type": "artifact.update",
+            "name": "/shared/second_research.txt",
+            "data": {
+                "type": "file",
+                "content": "# Second Research\n\n" + ("Beta findings with trade-offs. " * 80),
+            },
+        }
+    )
+
+    recovered = _recover_report_from_events(db_url, "job-recover-notes")
+
+    assert not _is_usable_report(thinking_payload)
+    assert recovered is not None
+    assert "first_research.md" in recovered
+    assert "second_research.txt" in recovered
+    assert "I should now write the final report" not in recovered
 
 
 class TestIntermediateStepEvent:
@@ -218,6 +472,21 @@ class TestDeepResearchEventCallback:
         callback = DeepResearchEventCallback(event_store=mock_store)
 
         assert callback._event_store == mock_store
+
+    def test_emit_final_report_persists_report_md_file_and_output(self):
+        """A verified final report should be durable as both /report.md and final output."""
+        mock_store = MagicMock()
+        callback = DeepResearchEventCallback(event_store=mock_store)
+
+        callback.emit_final_report("# Final Report\n\nComplete cited report content.")
+
+        stored_events = [call[0][0] for call in mock_store.store.call_args_list]
+        assert [event["type"] for event in stored_events] == ["artifact.update", "artifact.update"]
+        assert stored_events[0]["name"] == "/report.md"
+        assert stored_events[0]["data"]["type"] == "file"
+        assert stored_events[0]["data"]["output_category"] == "final_report"
+        assert stored_events[1]["data"]["type"] == "output"
+        assert stored_events[1]["data"]["output_category"] == "final_report"
 
     def test_get_chain_name_from_serialized_name(self):
         """Test _get_chain_name extracts name from serialized dict."""
@@ -360,6 +629,87 @@ class TestDeepResearchEventCallback:
         assert call_args["type"] == "llm.start"
         assert call_args["name"] == "gpt-4"
 
+    def test_on_llm_new_token_extracts_minimax_thinking_block(self):
+        """MiniMax can stream Anthropic-style thinking blocks instead of strings."""
+        mock_store = MagicMock()
+        callback = DeepResearchEventCallback(event_store=mock_store)
+
+        callback.on_llm_new_token([{"type": "thinking", "thinking": "checking fresh sources", "index": 0}])
+
+        mock_store.store.assert_called_once()
+        call_args = mock_store.store.call_args[0][0]
+        assert call_args["type"] == "llm.chunk"
+        assert call_args["data"]["chunk"] == "checking fresh sources"
+
+    def test_on_llm_new_token_drops_signature_only_thinking_block(self):
+        """Signature-only MiniMax stream blocks should not reach the UI."""
+        mock_store = MagicMock()
+        callback = DeepResearchEventCallback(event_store=mock_store)
+
+        callback.on_llm_new_token([{"type": "thinking", "signature": "abc123", "index": 0}])
+
+        mock_store.store.assert_not_called()
+
+    def test_on_llm_new_token_drops_degenerate_repetition_chunk(self):
+        """Provider repetition loops should not flood persisted SSE events."""
+        mock_store = MagicMock()
+        callback = DeepResearchEventCallback(event_store=mock_store)
+
+        callback.on_llm_new_token(" puppet" * 30)
+
+        mock_store.store.assert_not_called()
+
+    def test_on_llm_end_normalizes_object_thinking_metadata(self):
+        """llm.end metadata.thinking must always be a string for React rendering."""
+        mock_store = MagicMock()
+        callback = DeepResearchEventCallback(event_store=mock_store)
+
+        mock_message = MagicMock()
+        mock_message.content = "Response content"
+        mock_message.tool_calls = None
+        mock_message.additional_kwargs = {
+            "thinking": {"type": "thinking", "thinking": "structured reasoning", "index": 0}
+        }
+        mock_message.response_metadata = {}
+        mock_message.usage_metadata = None
+
+        mock_generation = MagicMock()
+        mock_generation.message = mock_message
+
+        mock_result = MagicMock()
+        mock_result.generations = [[mock_generation]]
+
+        callback._run_id_to_name["run-1"] = "MiniMax-M3"
+        callback.on_llm_end(response=mock_result, run_id="run-1")
+
+        call_args = mock_store.store.call_args_list[0][0][0]
+        assert call_args["type"] == "llm.end"
+        assert call_args["metadata"]["thinking"] == "structured reasoning"
+
+    def test_on_llm_end_does_not_emit_thinking_only_output_artifact(self):
+        """MiniMax thinking-only final turns must not be persisted as report drafts."""
+        mock_store = MagicMock()
+        callback = DeepResearchEventCallback(event_store=mock_store)
+
+        mock_message = MagicMock()
+        mock_message.content = [{"type": "thinking", "thinking": "I should write the report now.", "index": 0}]
+        mock_message.tool_calls = None
+        mock_message.additional_kwargs = {}
+        mock_message.response_metadata = {}
+        mock_message.usage_metadata = None
+
+        mock_generation = MagicMock()
+        mock_generation.message = mock_message
+
+        mock_result = MagicMock()
+        mock_result.generations = [[mock_generation]]
+
+        callback._run_id_to_name["run-1"] = "MiniMax-M3"
+        callback.on_llm_end(response=mock_result, run_id="run-1")
+
+        stored_events = [call[0][0] for call in mock_store.store.call_args_list]
+        assert [event["type"] for event in stored_events] == ["llm.end"]
+
 
 class TestSubmitDeepResearchJob:
     """Tests for the submit_deep_research_job function."""
@@ -435,8 +785,39 @@ class TestSubmitDeepResearchJob:
         assert result == "test-job-id"
         mock_job_store.submit_job.assert_called_once()
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
-        # data_sources is second-to-last (auth_token is last)
-        assert job_args[-2] == ["web_search"]
+        # Tail args are available_documents, data_sources, auth_token, research_depth.
+        assert job_args[-3] == ["web_search"]
+
+    @pytest.mark.asyncio
+    async def test_submit_agent_job_passes_research_depth(self):
+        """Test submit_agent_job forwards research_depth into worker args."""
+        from aiq_api.jobs.submit import submit_agent_job
+
+        mock_job_store = MagicMock()
+        mock_job_store.ensure_job_id.return_value = "test-job-id"
+        mock_job_store.submit_job = AsyncMock(return_value=None)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
+                "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+            },
+        ):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.submit.get_current_principal", return_value=self.principal):
+                    with patch("aiq_api.jobs.submit.create_job_access"):
+                        result = await submit_agent_job(
+                            agent_type="deep_researcher",
+                            input_text="test query",
+                            owner="test@example.com",
+                            research_depth="deep",
+                        )
+
+        assert result == "test-job-id"
+        mock_job_store.submit_job.assert_called_once()
+        job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
+        assert job_args[-1] == "deep"
 
     @pytest.mark.asyncio
     async def test_submit_with_custom_job_id(self):
@@ -1236,6 +1617,249 @@ class TestJobCancelledEventComparison:
             assert "type" in event
             assert event["type"].startswith("job.")
             assert "data" in event
+
+
+class TestReportRecovery:
+    """Tests for async-job report selection and recovery."""
+
+    def test_prefer_report_ignores_model_failure_artifact(self):
+        """A model-call error artifact should not override a real report."""
+        from aiq_api.jobs.runner import _prefer_report
+
+        report = "# Real Report\n\n## Findings\n\nUseful content.\n\n## Sources\n[1] Example: https://example.com"
+        failure = "Model call failed after 2 attempts with APIConnectionError: Connection error."
+
+        assert _prefer_report(report, failure) == report
+
+    def test_extract_report_from_events_skips_model_failure_final_report(self, tmp_path):
+        """Report recovery should choose report.md over a later final_report error string."""
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.jobs.runner import _extract_report_from_events
+
+        db_path = tmp_path / "report_recovery.db"
+        db_url = f"sqlite:///{db_path}"
+        job_id = "report-recovery-job"
+        event_store = EventStore(db_url, job_id)
+        report = "# Real Report\n\n## Findings\n\nUseful content.\n\n## Sources\n[1] Example: https://example.com"
+
+        event_store.store(
+            {
+                "type": "artifact.update",
+                "data": {
+                    "type": "file",
+                    "filename": "/report.md",
+                    "content": report,
+                },
+            }
+        )
+        event_store.store(
+            {
+                "type": "artifact.update",
+                "data": {
+                    "type": "output",
+                    "output_category": "final_report",
+                    "content": "Model call failed after 2 attempts with APIConnectionError: Connection error.",
+                },
+            }
+        )
+
+        assert _extract_report_from_events(db_url, job_id) == report
+
+    def test_search_result_snapshots_do_not_count_as_final_report(self, tmp_path):
+        """Raw search snapshots are resume material, not a polished final report."""
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.jobs.runner import _recover_report_from_events
+
+        db_path = tmp_path / "search_snapshot_recovery.db"
+        db_url = f"sqlite:///{db_path}"
+        job_id = "search-snapshot-job"
+        event_store = EventStore(db_url, job_id)
+        search_snapshot = (
+            "Result 1: Agent UI dashboards need status, handoff controls, progress timelines, "
+            "error recovery states, and transparent reasoning traces. https://example.com/agent-ui\n"
+        ) * 20
+
+        event_store.store(
+            {
+                "type": "artifact.update",
+                "data": {
+                    "type": "citation_source",
+                    "content": "https://example.com/agent-ui\\nPublished",
+                    "url": "https://example.com/agent-ui\\nPublished",
+                },
+            }
+        )
+        event_store.store(
+            {
+                "type": "artifact.update",
+                "data": {
+                    "type": "output",
+                    "output_category": "search_result",
+                    "content": search_snapshot,
+                },
+            }
+        )
+
+        assert _recover_report_from_events(db_url, job_id) is None
+
+    def test_recovered_consolidated_file_appends_source_inventory(self, tmp_path):
+        """Recovered consolidated notes should preserve collected URLs."""
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.jobs.runner import _recover_report_from_events
+
+        db_path = tmp_path / "consolidated_recovery.db"
+        db_url = f"sqlite:///{db_path}"
+        job_id = "consolidated-recovery-job"
+        event_store = EventStore(db_url, job_id)
+
+        event_store.store(
+            {
+                "type": "artifact.update",
+                "data": {
+                    "type": "citation_source",
+                    "content": "https://example.com/source-a",
+                    "url": "https://example.com/source-a",
+                },
+            }
+        )
+        event_store.store(
+            {
+                "type": "artifact.update",
+                "data": {
+                    "type": "citation_source",
+                    "content": "https://example.com/source-b",
+                    "url": "https://example.com/source-b",
+                },
+            }
+        )
+        event_store.store(
+            {
+                "type": "artifact.update",
+                "name": "/shared/consolidated_findings.md",
+                "data": {
+                    "type": "file",
+                    "content": ("# Consolidated Findings\n\nImportant evidence from one branch.\n\n" * 30).strip(),
+                },
+            }
+        )
+
+        recovered = _recover_report_from_events(db_url, job_id)
+
+        assert recovered is not None
+        assert "## Additional Sources Collected During Run" in recovered
+        assert "https://example.com/source-a" in recovered
+        assert "https://example.com/source-b" in recovered
+
+    def test_recovery_rejects_off_topic_intermediate_file(self, tmp_path):
+        """A university query should not recover a career-pathways artifact as the final report."""
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.jobs.runner import _recover_report_from_events
+
+        db_path = tmp_path / "off_topic_recovery.db"
+        db_url = f"sqlite:///{db_path}"
+        job_id = "off-topic-recovery-job"
+        event_store = EventStore(db_url, job_id)
+
+        event_store.store(
+            {
+                "type": "job.submitted",
+                "data": {
+                    "agent_type": "deep_researcher",
+                    "input": "University education costs and outcomes for a debate lesson",
+                    "owner": "tester@example.com",
+                    "data_sources": [],
+                    "research_depth": "shallow",
+                },
+            }
+        )
+        event_store.store(
+            {
+                "type": "artifact.update",
+                "name": "/shared/alternative_pathways_primary_debate_lesson.txt",
+                "data": {
+                    "type": "file",
+                    "content": (
+                        "# Alternate Ways to Get to Your Career\n\n"
+                        "This guide is about apprenticeships, VET, jobs without a degree, and other alternatives."
+                    )
+                    * 40,
+                },
+            }
+        )
+
+        assert _recover_report_from_events(db_url, job_id) is None
+
+    def test_deep_research_recovery_compiles_intermediate_notes(self, tmp_path):
+        """Deep-research jobs should compile notes, not serve a raw recovered bundle."""
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.jobs.runner import _recover_report_from_events
+
+        db_path = tmp_path / "shallow_tier_intermediate_recovery.db"
+        db_url = f"sqlite:///{db_path}"
+        job_id = "shallow-tier-intermediate-recovery-job"
+        event_store = EventStore(db_url, job_id)
+
+        event_store.store(
+            {
+                "type": "job.submitted",
+                "data": {
+                    "agent_type": "deep_researcher",
+                    "input": "University education value debate for primary students",
+                    "owner": "tester@example.com",
+                    "data_sources": [],
+                    "research_depth": "shallow",
+                },
+            }
+        )
+        event_store.store(
+            {
+                "type": "artifact.update",
+                "name": "https://example.com/university-outcomes",
+                "data": {
+                    "type": "citation_source",
+                    "content": "https://example.com/university-outcomes",
+                    "url": "https://example.com/university-outcomes",
+                },
+            }
+        )
+        event_store.store(
+            {
+                "type": "artifact.update",
+                "name": "/shared/university_education_debate_research.txt",
+                "data": {
+                    "type": "file",
+                    "content": (
+                        "# University Education Value Debate - Primary Student Research Notes\n\n"
+                        "Evidence about university education, costs, outcomes, and student debate framing. "
+                    )
+                    * 60,
+                },
+            }
+        )
+
+        recovered = _recover_report_from_events(db_url, job_id)
+
+        assert recovered is not None
+        assert recovered.startswith("# University education value debate")
+        assert "## Synthesis Status" in recovered
+        assert "Recovered Research Report" not in recovered
+        assert "university education" in recovered.lower()
+        assert "https://example.com/university-outcomes" in recovered
+
+    def test_recovered_reference_urls_exclude_source_inventory(self):
+        """Citation-use recovery should only count report references, not the raw appendix."""
+        from aiq_api.jobs.runner import _extract_report_reference_urls
+
+        report = (
+            "# Report\n\n"
+            "Finding [1].\n\n"
+            "## Sources\n\n"
+            "[1] Primary: https://example.com/primary\n\n"
+            "## Additional Sources Collected During Run\n\n"
+            "- https://example.com/raw-discovery\n"
+        )
+
+        assert _extract_report_reference_urls(report) == ["https://example.com/primary"]
 
 
 class TestSQLAlchemyPoolFilter:

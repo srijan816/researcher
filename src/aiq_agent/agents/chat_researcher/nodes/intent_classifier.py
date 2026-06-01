@@ -17,7 +17,7 @@
 
 import asyncio
 import logging
-from datetime import datetime
+import re
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.messages import BaseMessage
 from langchain_core.messages import SystemMessage
 
+from aiq_agent.common import current_datetime_context
 from aiq_agent.common import extract_json
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
@@ -34,6 +35,7 @@ from aiq_agent.common import render_prompt_template
 from ..models import ChatResearcherState
 from ..models import DepthDecision
 from ..models import IntentResult
+from ..utils import coerce_content_text
 from ..utils import trim_message_history
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,73 @@ _LLM_UNAVAILABLE_MESSAGE = (
     "Please check your LLM API key and that the configured model is available for your account."
 )
 _LLM_TIMEOUT_MESSAGE = "The model service took too long to respond and the request timed out. "
+_BARE_HITL_RESPONSE_MESSAGE = (
+    "I received an approval-style reply, but there is no active plan approval attached to this message. "
+    "Please use the plan buttons or send the research request again."
+)
+_BARE_HITL_RESPONSES = {
+    "approve",
+    "approved",
+    "yes",
+    "ok",
+    "proceed",
+    "continue",
+    "go ahead",
+    "looks good",
+    "y",
+    "accept",
+    "skip",
+    "reject",
+    "rejected",
+    "no",
+    "cancel",
+    "stop",
+    "abort",
+    "n",
+}
+_OBVIOUS_RESEARCH_MARKERS = (
+    "deep research",
+    "conduct research",
+    "research plan",
+    "search/browse",
+    "search extensively",
+    "market validation",
+    "market reports",
+    "competitor landscape",
+    "cross-verify",
+    "cited analysis",
+    "sources/analogs",
+    "final output format",
+)
+_DEEP_RESEARCH_MARKERS = (
+    "deep research",
+    "deepest possible",
+    "comprehensive",
+    "multi-criteria",
+    "trend analysis",
+    "market validation",
+    "competitor landscape",
+    "cross-verify",
+    "extensively",
+    "fully agentically",
+)
+
+_NAMED_ENTITY_RE = re.compile(
+    r"\b(?:[A-Z][A-Za-z0-9.+-]*(?:\s+[A-Z0-9][A-Za-z0-9.+-]*){0,4}|[A-Za-z]+[\s-]+(?:M|GPT|Opus|Sonnet|Gemini|Grok|Claude|Llama|Mistral)\s*\d(?:\.\d+)*)\b"
+)
+_GENERIC_ENTITY_WORDS = {
+    "AI",
+    "API",
+    "US",
+    "UK",
+    "What",
+    "How",
+    "Why",
+    "Research",
+    "Deep Research",
+    "Final",
+    "Output",
+}
 
 
 def _is_llm_api_unavailable(err: BaseException) -> bool:
@@ -62,6 +131,33 @@ def _is_timeout_error(err: BaseException) -> bool:
         return True
     msg = str(err).strip().lower()
     return "504" in msg or "gateway time-out" in msg or "gateway timeout" in msg
+
+
+def _obvious_research_depth(query: str) -> str | None:
+    """Fast-path unmistakable research prompts so long instructions do not waste a model call."""
+    lowered = query.lower()
+    marker_count = sum(1 for marker in _OBVIOUS_RESEARCH_MARKERS if marker in lowered)
+    if marker_count < 2 and not (len(query) > 2500 and marker_count >= 1):
+        return None
+
+    if any(marker in lowered for marker in _DEEP_RESEARCH_MARKERS) or len(query) > 2500:
+        return "deep"
+    return "shallow"
+
+
+def _extract_named_entities(query: str) -> list[dict[str, str]]:
+    """Cheap entity hint for routing; the planner performs the authoritative inventory."""
+    seen: set[str] = set()
+    entities: list[dict[str, str]] = []
+    for raw in _NAMED_ENTITY_RE.findall(query):
+        name = re.sub(r"\s+", " ", raw).strip(" ,.;:()[]{}")
+        if len(name) < 3 or name in _GENERIC_ENTITY_WORDS or name.lower() in seen:
+            continue
+        if name.lower() == name:
+            continue
+        seen.add(name.lower())
+        entities.append({"name": name, "type": "other"})
+    return entities[:20]
 
 
 class IntentClassifier:
@@ -102,9 +198,26 @@ class IntentClassifier:
             }
 
         user_info = state.user_info or {}
-        current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        current_datetime = current_datetime_context()
         last_content = messages[-1].content
         query = last_content if isinstance(last_content, str) else str(last_content or "")
+        if query.strip().lower() in _BARE_HITL_RESPONSES:
+            return {
+                "user_intent": IntentResult(intent="meta", raw=None),
+                "messages": [AIMessage(content=_BARE_HITL_RESPONSE_MESSAGE)],
+            }
+
+        obvious_depth = _obvious_research_depth(query)
+        named_entities = _extract_named_entities(query)
+        if obvious_depth:
+            raw = {"named_entities": named_entities} if named_entities else None
+            return {
+                "user_intent": IntentResult(intent="research", raw=raw),
+                "depth_decision": DepthDecision(
+                    decision="deep" if len(named_entities) >= 3 else obvious_depth,
+                    raw_reasoning="Obvious research instruction detected without an intent-classifier model call.",
+                ),
+            }
 
         system_content = render_prompt_template(
             self.prompt,
@@ -123,7 +236,7 @@ class IntentClassifier:
                 timeout=self.llm_timeout,
             )
 
-            response_text = (response.content or "").strip()
+            response_text = coerce_content_text(response.content).strip()
             parsed = extract_json(response_text)
 
             if not parsed or not isinstance(parsed, dict):
@@ -137,6 +250,13 @@ class IntentClassifier:
             meta_response = parsed.get("meta_response")
             research_depth = (parsed.get("research_depth") or "shallow").strip().lower()
             depth_reasoning = parsed.get("depth_reasoning") or ""
+            parsed_entities = parsed.get("named_entities")
+            if not isinstance(parsed_entities, list):
+                parsed_entities = named_entities
+                parsed["named_entities"] = parsed_entities
+            if intent == "research" and len(parsed_entities) >= 3:
+                research_depth = "deep"
+                depth_reasoning = "Entity density override: multi-entity queries require per-entity research."
 
             update: dict[str, Any] = {
                 "user_intent": IntentResult(intent=intent, raw=parsed),

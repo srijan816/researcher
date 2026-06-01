@@ -24,15 +24,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import uuid
+from typing import Any
 
 from aiq_agent.auth import Principal
 from aiq_agent.auth import get_current_principal
+from aiq_agent.common import DEFAULT_RESEARCH_DEPTH
+from aiq_agent.common import ResearchDepthTier
 from aiq_api.auth import get_current_trace_tags
 
 from ..registry import get_agent_config
 from .access import _make_no_auth_principal
 from .access import create_job_access
 from .access import rollback_job_submission
+from .event_store import EventStore
 from .runner import run_agent_job
 
 logger = logging.getLogger(__name__)
@@ -119,6 +124,7 @@ async def submit_agent_job(
     expiry_seconds: int = 86400,
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
+    research_depth: ResearchDepthTier = DEFAULT_RESEARCH_DEPTH,
     auth_token: str | None = None,
 ) -> str:
     """
@@ -136,6 +142,7 @@ async def submit_agent_job(
         expiry_seconds: Job expiry time in seconds (default 24h).
         available_documents: Optional list of document dicts with file_name and summary.
         data_sources: Optional list of allowed data sources to enforce in the worker.
+        research_depth: Source/depth tier for deep research workloads.
         auth_token: Optional auth token to propagate to the Dask worker for
             data sources that require authentication.
 
@@ -234,9 +241,25 @@ async def submit_agent_job(
                 available_documents,
                 data_sources,
                 auth_token,
+                research_depth,
             ],
         )
         await loop.run_in_executor(None, create_job_access, resolved_job_id, principal, db_url)
+        await loop.run_in_executor(
+            None,
+            lambda: EventStore(db_url, resolved_job_id).store(
+                {
+                    "type": "job.submitted",
+                    "data": {
+                        "agent_type": agent_type,
+                        "input": input_text,
+                        "owner": owner,
+                        "data_sources": data_sources,
+                        "research_depth": research_depth,
+                    },
+                }
+            ),
+        )
     except Exception:
         try:
             await loop.run_in_executor(None, rollback_job_submission, resolved_job_id, db_url)
@@ -264,12 +287,99 @@ async def submit_agent_job(
     return resolved_job_id
 
 
+async def resume_agent_job(
+    *,
+    job_id: str,
+    agent_type: str,
+    input_text: str,
+    owner: str,
+    principal: Principal,
+    expiry_seconds: int,
+    available_documents: list[dict] | None = None,
+    data_sources: list[str] | None = None,
+    research_depth: ResearchDepthTier = DEFAULT_RESEARCH_DEPTH,
+    auth_token: str | None = None,
+    resume_files: dict[str, Any] | None = None,
+) -> str:
+    """Requeue an existing failed/interrupted job ID with recovered virtual files."""
+    from dask.distributed import Variable
+    from dask.distributed import fire_and_forget
+
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStore
+
+    agent_config = get_agent_config(agent_type)
+    scheduler_address = os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
+    db_url = os.environ.get("NAT_JOB_STORE_DB_URL", "sqlite:///./data/jobs.db")
+    config_path = os.environ.get("NAT_CONFIG_FILE", "")
+    log_level = int(os.environ.get("NAT_FASTAPI_LOG_LEVEL", "20"))
+    use_threads = os.environ.get("NAT_USE_DASK_THREADS", "0") == "1"
+
+    if not scheduler_address:
+        raise RuntimeError("Async job resume requires NAT_DASK_SCHEDULER_ADDRESS to be set")
+
+    if auth_token is None:
+        from aiq_agent.auth import get_auth_token
+
+        auth_token = get_auth_token()
+
+    job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
+    await job_store.update_status(job_id, JobStatus.RUNNING, error=None, output=None)
+
+    EventStore(db_url, job_id).store(
+        {
+            "type": "job.resumed",
+            "data": {
+                "agent_type": agent_type,
+                "input": input_text,
+                "owner": owner,
+                "data_sources": data_sources,
+                "research_depth": research_depth,
+                "resume_files": sorted((resume_files or {}).keys()),
+            },
+        }
+    )
+
+    future = job_store.dask_client.submit(
+        run_agent_job,
+        not use_threads,
+        log_level,
+        scheduler_address,
+        db_url,
+        config_path,
+        job_id,
+        input_text,
+        agent_config.class_path,
+        agent_config.config_name,
+        *_get_parent_trace_context(),
+        available_documents,
+        data_sources,
+        auth_token,
+        research_depth,
+        resume_files,
+        key=f"{job_id}-resume-{uuid.uuid4().hex}",
+    )
+    Variable(name=job_id, client=job_store.dask_client).set(future, timeout="5 s")
+    fire_and_forget(future)
+
+    logger.info(
+        "Resumed %s job %s for owner %s (%s:%s)",
+        agent_type,
+        job_id,
+        owner,
+        principal.type,
+        principal.sub,
+    )
+    return job_id
+
+
 # Backwards compatibility alias
 async def submit_deep_research_job(
     input_text: str,
     owner: str,
     job_id: str | None = None,
     expiry_seconds: int = 86400,
+    research_depth: ResearchDepthTier = DEFAULT_RESEARCH_DEPTH,
 ) -> str:
     """
     Submit a deep research job.
@@ -283,4 +393,5 @@ async def submit_deep_research_job(
         owner=owner,
         job_id=job_id,
         expiry_seconds=expiry_seconds,
+        research_depth=research_depth,
     )

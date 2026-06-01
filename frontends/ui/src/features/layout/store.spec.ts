@@ -12,6 +12,7 @@ describe('useLayoutStore', () => {
       rightPanel: null,
       researchPanelTab: 'plan',
       dataSourcesPanelTab: 'connections',
+      researchDepth: 'deeper',
       theme: 'system',
     })
   })
@@ -24,6 +25,7 @@ describe('useLayoutStore', () => {
       expect(state.rightPanel).toBeNull()
       expect(state.researchPanelTab).toBe('plan')
       expect(state.dataSourcesPanelTab).toBe('connections')
+      expect(state.researchDepth).toBe('deeper')
     })
   })
 
@@ -173,6 +175,14 @@ describe('useLayoutStore', () => {
       useLayoutStore.getState().setTheme('system')
 
       expect(useLayoutStore.getState().theme).toBe('system')
+    })
+  })
+
+  describe('setResearchDepth', () => {
+    test('sets research depth tier', () => {
+      useLayoutStore.getState().setResearchDepth('deep')
+
+      expect(useLayoutStore.getState().researchDepth).toBe('deep')
     })
   })
 })

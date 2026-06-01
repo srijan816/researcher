@@ -24,21 +24,25 @@ vi.mock('@/hooks/use-session-url', () => ({
 }))
 
 // Mock the chat store
+const defaultChatState = () => ({
+  currentConversation: { id: 'session-1', title: 'Test Session' },
+  conversations: [],
+  currentUserId: 'default-user',
+  getUserConversations: vi.fn(() => []),
+  selectConversation: mockSelectConversation,
+  startNewSessionDraft: mockStartNewSessionDraft,
+  deleteConversation: mockDeleteConversation,
+  deleteAllConversations: mockDeleteAllConversations,
+  updateConversationTitle: mockUpdateConversationTitle,
+  isStreaming: false,
+  pendingInteraction: null,
+  isDeepResearchStreaming: false,
+  deepResearchOwnerConversationId: null,
+})
+
 vi.mock('@/features/chat', () => ({
-  useChatStore: vi.fn((selector?: (s: any) => any) => {
-    const state = {
-      currentConversation: { id: 'session-1', title: 'Test Session' },
-      getUserConversations: vi.fn(() => []),
-      selectConversation: mockSelectConversation,
-      startNewSessionDraft: mockStartNewSessionDraft,
-      deleteConversation: mockDeleteConversation,
-      deleteAllConversations: mockDeleteAllConversations,
-      updateConversationTitle: mockUpdateConversationTitle,
-      isStreaming: false,
-      pendingInteraction: null,
-      isDeepResearchStreaming: false,
-      deepResearchOwnerConversationId: null,
-    }
+  useChatStore: vi.fn((selector?: (state: any) => any) => {
+    const state = defaultChatState()
     return selector ? selector(state) : state
   }),
   useDeepResearch: vi.fn(() => ({
@@ -52,7 +56,7 @@ vi.mock('@/features/chat', () => ({
 
 // Mock the layout store
 vi.mock('../store', () => ({
-  useLayoutStore: vi.fn((selector?: (s: any) => any) => {
+  useLayoutStore: vi.fn((selector?: (state: any) => any) => {
     const state = {
       rightPanel: null,
       isSessionsPanelOpen: false,
@@ -64,20 +68,23 @@ vi.mock('../store', () => ({
   }),
 }))
 
+vi.mock('@/adapters/api', () => ({
+  deleteAllConversationSnapshots: vi.fn().mockResolvedValue(undefined),
+  deleteConversationSnapshot: vi.fn().mockResolvedValue(undefined),
+}))
+
 // Mock child components
 vi.mock('./AppBar', () => ({
   AppBar: ({
     sessionTitle,
     onNewSession,
-    isNewSessionDisabled,
   }: {
     sessionTitle: string
     onNewSession?: () => void
-    isNewSessionDisabled?: boolean
   }) => (
     <>
       <div data-testid="app-bar">{sessionTitle}</div>
-      <button type="button" onClick={onNewSession} disabled={isNewSessionDisabled}>
+      <button type="button" onClick={onNewSession}>
         Header New Session
       </button>
     </>
@@ -108,12 +115,30 @@ vi.mock('./SettingsPanel', () => ({
   SettingsPanel: () => <div data-testid="settings-panel">Settings Panel</div>,
 }))
 
+vi.mock('./DocsPanel', () => ({
+  DocsPanel: () => <div data-testid="docs-panel">Docs Panel</div>,
+}))
+
 import { useChatStore } from '@/features/chat'
 import { useLayoutStore } from '../store'
 
 describe('MainLayout', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(useChatStore).mockImplementation((selector?: (state: any) => any) => {
+      const state = defaultChatState()
+      return selector ? selector(state) : state
+    })
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (state: any) => any) => {
+      const state = {
+        rightPanel: null,
+        isSessionsPanelOpen: false,
+        setSessionsPanelOpen: vi.fn(),
+        enabledDataSourceIds: ['source-1', 'source-2'],
+        closeRightPanel: mockCloseRightPanel,
+      }
+      return selector ? selector(state) : state
+    })
   })
 
   test('renders all main sections', () => {
@@ -135,20 +160,8 @@ describe('MainLayout', () => {
   })
 
   test('shows "New Session" when no current conversation', () => {
-    vi.mocked(useChatStore).mockImplementationOnce((selector?: (s: any) => any) => {
-      const state = {
-        currentConversation: null,
-        getUserConversations: vi.fn(() => []),
-        selectConversation: vi.fn(),
-        startNewSessionDraft: vi.fn(),
-        deleteConversation: vi.fn(),
-        deleteAllConversations: vi.fn(),
-        updateConversationTitle: vi.fn(),
-        isStreaming: false,
-        pendingInteraction: null,
-        isDeepResearchStreaming: false,
-        deepResearchOwnerConversationId: null,
-      }
+    vi.mocked(useChatStore).mockImplementation((selector?: (state: any) => any) => {
+      const state = { ...defaultChatState(), currentConversation: null }
       return selector ? selector(state) : state
     })
 
@@ -184,36 +197,35 @@ describe('MainLayout', () => {
     expect(mockCloseRightPanel).toHaveBeenCalledOnce()
   })
 
-  test('disables new session action while shallow streaming is active', () => {
-    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+  test('keeps new session action available while shallow streaming is active', async () => {
+    const user = userEvent.setup()
+    const startNewSessionDraft = vi.fn()
+
+    vi.mocked(useChatStore).mockImplementation((selector?: (state: any) => any) => {
       const state = {
-        currentConversation: { id: 'session-1', title: 'Test Session' },
-        getUserConversations: vi.fn(() => []),
-        selectConversation: vi.fn(),
-        startNewSessionDraft: vi.fn(),
-        deleteConversation: vi.fn(),
-        deleteAllConversations: vi.fn(),
-        updateConversationTitle: vi.fn(),
+        ...defaultChatState(),
+        startNewSessionDraft,
         isStreaming: true,
-        pendingInteraction: null,
-        isDeepResearchStreaming: false,
-        deepResearchOwnerConversationId: null,
       }
       return selector ? selector(state) : state
     })
 
     render(<MainLayout />)
 
-    expect(screen.getByRole('button', { name: /header new session/i })).toBeDisabled()
+    const newSessionButton = screen.getByRole('button', { name: /header new session/i })
+    expect(newSessionButton).not.toBeDisabled()
+    await user.click(newSessionButton)
+    expect(startNewSessionDraft).toHaveBeenCalledOnce()
   })
 
   test('adjusts chat width when details panel is open', () => {
-    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (state: any) => any) => {
       const state = {
         rightPanel: 'research',
         isSessionsPanelOpen: false,
         setSessionsPanelOpen: vi.fn(),
         enabledDataSourceIds: ['source-1', 'source-2'],
+        closeRightPanel: mockCloseRightPanel,
       }
       return selector ? selector(state) : state
     })
@@ -226,12 +238,13 @@ describe('MainLayout', () => {
   })
 
   test('shows full width when details panel is closed', () => {
-    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (state: any) => any) => {
       const state = {
         rightPanel: null,
         isSessionsPanelOpen: false,
         setSessionsPanelOpen: vi.fn(),
         enabledDataSourceIds: ['source-1', 'source-2'],
+        closeRightPanel: mockCloseRightPanel,
       }
       return selector ? selector(state) : state
     })

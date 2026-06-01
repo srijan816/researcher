@@ -44,6 +44,8 @@ from fastapi import APIRouter
 from fastapi import FastAPI
 from pydantic import Field
 
+from aiq_api.auth.local_users import get_local_auth_secret
+from aiq_api.auth.local_users import local_auth_enabled
 from aiq_api.auth.middleware import AuthMiddleware
 from nat.builder.workflow_builder import WorkflowBuilder
 from nat.cli.register_workflow import register_front_end
@@ -56,8 +58,10 @@ from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontE
 from .jobs.connection_manager import get_connection_manager
 from .jobs.event_store import EventStore
 from .routes.collections import add_collection_routes
+from .routes.conversations import register_conversation_routes
 from .routes.documents import add_document_routes
 from .routes.jobs import register_job_routes
+from .routes.prompts import register_prompt_routes
 from .websocket_reconnect import configure_websocket_auth
 from .websocket_reconnect import install_reconnectable_handler
 
@@ -118,6 +122,37 @@ def _load_validators_from_entry_points() -> list:
         except Exception as e:
             logger.warning("Failed to load validators from entry point '%s': %s", ep.name, e)
     return validators
+
+
+def _load_static_api_key_validators() -> list:
+    """Load simple bearer API keys from AIQ_API_KEYS for external app access."""
+    keys = [key.strip() for key in os.getenv("AIQ_API_KEYS", "").split(",") if key.strip()]
+    if not keys:
+        return []
+    from aiq_api.auth.api_key_validator import StaticAPIKeyValidator
+
+    logger.info("Loaded StaticAPIKeyValidator with %d configured key(s)", len(keys))
+    return [StaticAPIKeyValidator(keys)]
+
+
+def _load_generated_api_key_validator() -> list:
+    """Load the DB-backed validator for generated ``aiq_`` API keys."""
+    db_url = os.getenv("AIQ_API_KEY_DB_URL") or os.getenv("NAT_JOB_STORE_DB_URL") or "sqlite:///./jobs.db"
+    from aiq_api.auth.api_key_validator import DatabaseAPIKeyValidator
+
+    logger.info("Loaded DatabaseAPIKeyValidator using %s", db_url[:50])
+    return [DatabaseAPIKeyValidator(db_url)]
+
+
+def _load_local_user_token_validator() -> list:
+    """Load backend-signed local user token validator when enabled."""
+    if not local_auth_enabled():
+        return []
+    db_url = os.getenv("AIQ_AUTH_DB_URL") or os.getenv("NAT_JOB_STORE_DB_URL") or "sqlite:///./jobs.db"
+    from aiq_api.auth.local_user_validator import LocalUserTokenValidator
+
+    logger.info("Loaded LocalUserTokenValidator using %s", db_url[:50])
+    return [LocalUserTokenValidator(db_url, get_local_auth_secret())]
 
 
 class AIQAPIConfig(FastApiFrontEndConfig, name="aiq_api"):
@@ -208,7 +243,13 @@ class AIQAPIWorker(FastApiFrontEndPluginWorker):
         logger.info("Knowledge API routes registered")
 
         require_auth = os.getenv("REQUIRE_AUTH", "false").lower() == "true"
-        validators = _validators + _load_validators_from_entry_points()
+        validators = (
+            _validators
+            + _load_local_user_token_validator()
+            + _load_generated_api_key_validator()
+            + _load_static_api_key_validators()
+            + _load_validators_from_entry_points()
+        )
         if require_auth and not validators:
             raise RuntimeError(
                 "REQUIRE_AUTH=true but no validators have been registered. "
@@ -232,6 +273,23 @@ class AIQAPIWorker(FastApiFrontEndPluginWorker):
         # =====================================================================
         # Async Job API routes
         # =====================================================================
+        from .routes.api_keys import register_api_key_routes
+        from .routes.auth import register_local_auth_routes
+
+        db_url = getattr(self, "_db_url", None) or os.environ.get("NAT_JOB_STORE_DB_URL", "sqlite:///./data/jobs.db")
+        if local_auth_enabled():
+            await register_local_auth_routes(app, os.environ.get("AIQ_AUTH_DB_URL") or db_url)
+            logger.info("Local auth routes registered")
+
+        await register_api_key_routes(app, os.environ.get("AIQ_API_KEY_DB_URL") or db_url)
+        logger.info("API key routes registered")
+
+        register_conversation_routes(app, db_url)
+        logger.info("Conversation snapshot routes registered")
+
+        register_prompt_routes(app)
+        logger.info("Prompt inspection routes registered")
+
         await register_job_routes(app, builder, self)
         logger.info("Async Job API routes registered")
 

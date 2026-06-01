@@ -225,6 +225,8 @@ export interface Conversation {
   id: string
   /** Owner of this session - used to filter sessions by user */
   userId: string
+  /** Human-readable owner label for administrator history views */
+  ownerDisplayName?: string
   title: string
   messages: ChatMessage[]
   createdAt: Date
@@ -251,6 +253,21 @@ export interface PendingInteraction {
 
 /** Deep research job status (from SSE stream) */
 export type DeepResearchJobStatus = 'submitted' | 'running' | 'success' | 'failure' | 'interrupted'
+
+/** Lightweight backend job used to sync research history into sessions. */
+export interface ResearchHistoryJob {
+  job_id: string
+  status: DeepResearchJobStatus
+  owner_auth_type?: string | null
+  owner_subject?: string | null
+  owner_display_name?: string | null
+  input?: string | null
+  title?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  has_report: boolean
+  error?: string | null
+}
 
 /** Citation source from deep research */
 export interface CitationSource {
@@ -362,6 +379,14 @@ export interface DeepResearchFile {
   timestamp: Date
 }
 
+/** Last visible action from the deep research stream. */
+export interface DeepResearchActivity {
+  kind: 'status' | 'agent' | 'model' | 'tool' | 'search' | 'file' | 'report' | 'warning'
+  message: string
+  detail?: string
+  timestamp: Date
+}
+
 /** Chat state for Zustand store */
 export interface ChatState {
   /** Current authenticated user ID - used for filtering sessions */
@@ -418,6 +443,8 @@ export interface ChatState {
   deepResearchFiles: DeepResearchFile[]
   /** Whether the full stream data (artifacts, tool calls, etc.) has been loaded for current job */
   deepResearchStreamLoaded: boolean
+  /** Latest human-readable activity from the deep research stream */
+  deepResearchActivity: DeepResearchActivity | null
 
   // Plan state (for PlanTab in ResearchPanel)
   /** Messages for the PlanTab (clarification questions, plan preview, etc.) */
@@ -477,6 +504,10 @@ export interface ChatActions {
   updateConversationTitle: (conversationId: string, title: string) => void
   /** Persist enabled data source IDs to the current conversation for per-session storage */
   saveDataSourcesToConversation: (ids: string[]) => void
+  /** Merge backend-backed research jobs into local sessions for cross-device/cross-origin sync */
+  syncResearchHistory: (jobs: ResearchHistoryJob[]) => void
+  /** Merge backend-backed full UI conversation snapshots into local sessions */
+  mergeServerConversations: (conversations: Conversation[]) => void
 
   // New actions for thinking/report content and status/prompts
 
@@ -620,11 +651,18 @@ export interface ChatActions {
   setLoadedJobId: (jobId: string) => void
   /** Mark that full stream data has been loaded for current job */
   setStreamLoaded: (loaded: boolean) => void
+  /** Set the latest visible deep research activity */
+  setDeepResearchActivity: (
+    activity: Omit<DeepResearchActivity, 'timestamp'> | null,
+    options?: { preserveMessage?: boolean }
+  ) => void
 
   // Deep research ThinkingTab actions (LLM steps, agents, tool calls, files)
 
   /** Add a new LLM step (on llm.start) */
-  addDeepResearchLLMStep: (step: Omit<DeepResearchLLMStep, 'id' | 'timestamp' | 'isComplete'>) => string
+  addDeepResearchLLMStep: (
+    step: Omit<DeepResearchLLMStep, 'id' | 'timestamp' | 'isComplete'> & { timestamp?: Date }
+  ) => string
   /** Append content to an LLM step (on llm.chunk) */
   appendToDeepResearchLLMStep: (stepId: string, content: string) => void
   /** Complete an LLM step with thinking and usage (on llm.end) */
@@ -634,21 +672,26 @@ export interface ChatActions {
     usage?: { input_tokens: number; output_tokens: number }
   ) => void
   /** Add a new agent (on workflow.start) */
-  addDeepResearchAgent: (agent: Omit<DeepResearchAgent, 'id' | 'startedAt' | 'status'>) => string
+  addDeepResearchAgent: (
+    agent: Omit<DeepResearchAgent, 'id' | 'startedAt' | 'status'> & { startedAt?: Date }
+  ) => string
   /** Add a new agent with a specific ID (for linking with tool calls) */
-  addDeepResearchAgentWithId: (id: string, agent: Omit<DeepResearchAgent, 'id' | 'startedAt' | 'status'>) => string
+  addDeepResearchAgentWithId: (
+    id: string,
+    agent: Omit<DeepResearchAgent, 'id' | 'startedAt' | 'status'> & { startedAt?: Date }
+  ) => string
   /** Complete an agent (on workflow.end) */
-  completeDeepResearchAgent: (agentId: string, output?: string) => void
+  completeDeepResearchAgent: (agentId: string, output?: string, completedAt?: Date) => void
   /** Add a new tool call (on tool.start) */
   addDeepResearchToolCall: (
-    toolCall: Omit<DeepResearchToolCall, 'id' | 'timestamp' | 'status'>
+    toolCall: Omit<DeepResearchToolCall, 'id' | 'timestamp' | 'status'> & { timestamp?: Date }
   ) => string
   /** Complete a tool call (on tool.end) */
   completeDeepResearchToolCall: (toolCallId: string, output?: string) => void
   /** Get tool calls for a specific agent */
   getAgentToolCalls: (agentId: string) => DeepResearchToolCall[]
   /** Add a file artifact (on artifact.update type: "file") */
-  addDeepResearchFile: (file: Omit<DeepResearchFile, 'id' | 'timestamp'>) => string
+  addDeepResearchFile: (file: Omit<DeepResearchFile, 'id' | 'timestamp'> & { timestamp?: Date }) => string
 
   // Plan actions (for PlanTab)
 

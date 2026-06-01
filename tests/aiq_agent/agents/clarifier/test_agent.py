@@ -219,6 +219,19 @@ class TestClarifierAgentParsing:
         assert result is not None
         assert result.needs_clarification is False
 
+    def test_parse_plan_response_extracts_wrapped_json(self, agent):
+        """Plan parsing should tolerate surrounding prose and code fences."""
+        text = (
+            "Here is the plan:\n"
+            "```json\n"
+            '{"title":"Focused Research Plan","sections":["Scope and Criteria","Current Evidence Base"]}'
+            "\n```"
+        )
+        title, sections = agent._parse_plan_response(text)
+
+        assert title == "Focused Research Plan"
+        assert sections == ["Scope and Criteria", "Current Evidence Base"]
+
     def test_parse_response_invalid_json(self, agent):
         """Test parsing invalid JSON returns None."""
         result = agent._parse_response("not valid json")
@@ -432,6 +445,28 @@ class TestClarifierAgentRun:
         assert result is not None
 
     @pytest.mark.asyncio
+    async def test_run_asks_financial_screen_clarification_once(self, mock_llm_provider, mock_llm):
+        """Missing stock universe/source should trigger one deterministic clarification."""
+        mock_llm.ainvoke = AsyncMock()
+        mock_user_callback = AsyncMock(return_value="1")
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            user_prompt_callback=mock_user_callback,
+        )
+
+        state = ClarifierAgentState(
+            messages=[
+                HumanMessage(content="Which stocks are currently trading at 40–50% below their estimated fair value")
+            ]
+        )
+        result = await agent.run(state)
+
+        assert result is not None
+        assert "Universe and fair-value basis" in result.clarifier_log
+        mock_user_callback.assert_called_once()
+        mock_llm.ainvoke.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_run_logs_query(self, mock_llm_provider, mock_llm, caplog):
         """Test that run logs the query."""
         complete_response = ClarificationResponse(needs_clarification=False, clarification_question=None)
@@ -482,6 +517,47 @@ class TestClarifierAgentPlanParsing:
         assert title == "Research Plan"
         assert sections == ["Overview", "Analysis"]
 
+    def test_parse_plan_response_embedded_json(self, agent):
+        """Plan parser should recover JSON if the model adds surrounding text."""
+        text = 'Here is the plan:\n{"title": "AI Agent Reliability", "sections": ["Failure Modes", "Guardrails"]}'
+        title, sections = agent._parse_plan_response(text)
+
+        assert title == "AI Agent Reliability"
+        assert sections == ["Failure Modes", "Guardrails"]
+
+    def test_parse_plan_response_dict_sections(self, agent):
+        """Plan parser should handle common structured section shapes."""
+        text = (
+            '{"plan_title": "MiniMax Search Quality", '
+            '"outline": [{"heading": "Search Coverage"}, {"heading": "Citation Quality"}]}'
+        )
+        title, sections = agent._parse_plan_response(text)
+
+        assert title == "MiniMax Search Quality"
+        assert sections == ["Search Coverage", "Citation Quality"]
+
+    def test_parse_plan_response_markdown_title_and_sections(self, agent):
+        """Plan parser should recover when a model emits Markdown instead of JSON."""
+        text = """
+        Title: Living Well in the Age of AI
+
+        Sections:
+        1. AI-Era Human Priorities
+        2. Work and Learning Strategy
+        3. Attention, Relationships, and Wellbeing
+        4. Risk Boundaries and Agency
+        """
+
+        title, sections = agent._parse_plan_response(text)
+
+        assert title == "Living Well in the Age of AI"
+        assert sections == [
+            "AI-Era Human Priorities",
+            "Work and Learning Strategy",
+            "Attention, Relationships, and Wellbeing",
+            "Risk Boundaries and Agency",
+        ]
+
     def test_parse_plan_response_invalid_json(self, agent):
         """Test parsing invalid JSON returns None and empty list."""
         title, sections = agent._parse_plan_response("not valid json")
@@ -505,7 +581,7 @@ class TestClarifierAgentPlanParsing:
         text = '{"title": "Research Plan"}'
         title, sections = agent._parse_plan_response(text)
 
-        assert title == "Research Plan"
+        assert title is None
         assert sections == []
 
     def test_parse_plan_response_invalid_sections_type(self, agent):
@@ -631,6 +707,231 @@ class TestClarifierAgentPlanFormatting:
         assert "**Sections:**" in result
 
 
+class TestClarifierAgentPlanScopeGuards:
+    """Tests for deterministic plan scope guardrails."""
+
+    @pytest.fixture
+    def agent(self):
+        """Create an agent for testing scope helpers."""
+        llm = MagicMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        provider = MagicMock(spec=LLMProvider)
+        provider.get = MagicMock(return_value=llm)
+
+        return ClarifierAgent(
+            llm_provider=provider,
+            user_prompt_callback=AsyncMock(),
+        )
+
+    def test_precise_stock_screen_gets_compact_plan(self, agent):
+        """Specific valuation screens should not keep a broad educational TOC."""
+        query = "Which stocks are currently trading at 40–50% below their estimated fair value"
+        broad_sections = [
+            "Introduction and Background on Value Investing",
+            "Methodologies for Estimating Stock Fair Value",
+            "Current Market Conditions and Undervalued Opportunities",
+            "Screening Criteria for 40-50% Discount Stocks",
+            "Sector Analysis and Industry Trends",
+            "Risk Factors and Considerations",
+            "Conclusion and Investment Recommendations",
+        ]
+
+        title, sections = agent._compact_plan_for_query("Identifying Stocks", broad_sections, query)
+
+        assert title == "Stocks Trading 40-50% Below Fair Value"
+        assert sections == [
+            "Screening Assumptions",
+            "Candidate Price/Fair Value Table",
+            "Evidence and Caveats",
+        ]
+
+    def test_precise_stock_screen_missing_assumptions_needs_clarification(self, agent):
+        """Ambiguous fair-value screens should ask for universe/source before planning."""
+        ambiguous = "Which stocks are currently trading at 40–50% below their estimated fair value"
+        specified = "Which U.S. large-cap stocks are trading 40-50% below Morningstar fair value?"
+
+        assert agent._needs_financial_screen_clarification(ambiguous) is True
+        assert agent._needs_financial_screen_clarification(specified) is False
+
+    def test_focus_feedback_selects_numbered_section(self, agent):
+        """Plan feedback like 'focus on number 3' should be parsed deterministically."""
+        sections = ["Intro", "Methods", "Current Opportunities", "Risks"]
+
+        assert agent._extract_section_focus_index("just focus on number 3", sections) == 2
+        assert agent._normalize_plan_feedback("just focus on number 3", sections) == (
+            "Focus only on section 3: Current Opportunities. "
+            "Remove unrelated sections and revise the plan around that narrow focus."
+        )
+
+    def test_ai_life_question_gets_specific_fallback_plan(self, agent):
+        """Broad AI-life strategy prompts should not show generic fallback headings."""
+        query = "What’s the best way to live life in the age of AI"
+
+        assert agent._fallback_plan_title(query) == "Living Well in the Age of AI"
+        assert agent._fallback_plan_sections(query) == [
+            "AI-Era Human Priorities",
+            "Work and Learning Strategy",
+            "Attention, Relationships, and Wellbeing",
+            "Risk Boundaries and Agency",
+            "Practical Life Operating System",
+        ]
+
+    def test_placeholder_sections_are_replaced_before_display(self, agent):
+        """Copied schema/example sections should be repaired before plan approval."""
+        title, sections = agent._sanitize_plan_for_query(
+            "What’s the best way to live life in the age of AI",
+            [
+                "Scope and Criteria",
+                "Current Evidence Base",
+                "Key Findings and Trade-offs",
+                "Recommended Next Steps",
+            ],
+            "What’s the best way to live life in the age of AI",
+        )
+
+        assert title == "What’s the best way to live life in the age of AI"
+        assert sections == [
+            "AI-Era Human Priorities",
+            "Work and Learning Strategy",
+            "Attention, Relationships, and Wellbeing",
+            "Risk Boundaries and Agency",
+            "Practical Life Operating System",
+        ]
+
+    def test_ai_curiosity_engine_build_prompt_gets_rich_user_facing_plan(self, agent):
+        """Product-concept build prompts should not fall back to generic engineering buckets."""
+        query = (
+            "Deep reserach on all the ingredietns required to build:"
+            "” Lifelong curiosity engines that surface and teach niche topics matched to user interests” using AI"
+        )
+
+        assert agent._fallback_plan_title(query) == "Building AI Curiosity Engines"
+        assert agent._fallback_plan_sections(query) == [
+            "Learning Science and Curiosity Foundations",
+            "Dynamic Interest Modeling Over Time",
+            "Long-Tail Discovery and Serendipity Architecture",
+            "Adaptive Teaching, Scaffolding, and Dialogue",
+            "RAG, Knowledge Graphs, and Agentic Workflows",
+            "Niche Content Verification and Hallucination Controls",
+            "Engagement, Retention, and Learning Outcome Metrics",
+        ]
+
+    def test_weak_ai_build_preview_is_repaired_before_display(self, agent):
+        """A typo-heavy echoed title and generic build sections should be replaced."""
+        query = (
+            "Deep reserach on all the ingredietns required to build:"
+            "” Lifelong curiosity engines that surface and teach niche topics matched to user interests” using AI"
+        )
+
+        title, sections = agent._sanitize_plan_for_query(
+            "Deep reserach on all the ingredietns required to build:” Lifelong curiosity engines that s",
+            [
+                "Deep reserach on all ingredietns Requirements",
+                "Architecture and Interfaces",
+                "Failure Paths and Guardrails",
+                "Implementation Plan",
+            ],
+            query,
+        )
+
+        assert title == "Building AI Curiosity Engines"
+        assert sections == [
+            "Learning Science and Curiosity Foundations",
+            "Dynamic Interest Modeling Over Time",
+            "Long-Tail Discovery and Serendipity Architecture",
+            "Adaptive Teaching, Scaffolding, and Dialogue",
+            "RAG, Knowledge Graphs, and Agentic Workflows",
+            "Niche Content Verification and Hallucination Controls",
+            "Engagement, Retention, and Learning Outcome Metrics",
+        ]
+
+    def test_weak_ai_build_preview_is_quality_issue_before_safety_net(self, agent):
+        """Weak build plans should be sent back to the model before deterministic repair."""
+        query = (
+            "Deep reserach on all the ingredietns required to build:"
+            "” Lifelong curiosity engines that surface and teach niche topics matched to user interests” using AI"
+        )
+
+        issue = agent._plan_quality_issue(
+            "Deep reserach on all the ingredietns required to build:” Lifelong curiosity engines that s",
+            [
+                "Deep reserach on all ingredietns Requirements",
+                "Architecture and Interfaces",
+                "Failure Paths and Guardrails",
+                "Implementation Plan",
+            ],
+            query,
+        )
+
+        assert issue is not None
+        assert "generic engineering buckets" in issue
+
+    def test_ranked_ai_use_case_report_compiles_explicit_plan(self, agent):
+        """Explicit report dimensions should become the approval plan contract."""
+        query = (
+            "Conduct a comprehensive deep research report on the top 10 highest-value use cases of AI in 2026. "
+            "For each use case, cover the following dimensions: "
+            "1. What it is – A clear, jargon-free explanation of the use case and how AI is applied "
+            "2. Why it’s high-value – Quantified business impact (ROI, cost savings, revenue uplift, efficiency gains) "
+            "3. Real-world examples – Specific companies or industries deploying this use case successfully "
+            "in 2025–2026 "
+            "4. Maturity level – Is this emerging, scaling, or mainstream in 2026? "
+            "5. Key enabling technologies – Which AI models, platforms, or techniques power it "
+            "6. Barriers to adoption – Top obstacles organisations face "
+            "7. Who benefits most – Which company sizes, roles, or industries get the most value "
+            "Rank the 10 use cases by overall business value and transformative potential in 2026. "
+            "Present findings in a structured report with an executive summary, ranked list with detailed sections, "
+            "and a final insight on where AI value creation is heading in 2027–2028."
+        )
+
+        assert agent._fallback_plan_title(query) == "Top 10 Highest-Value AI Use Cases in 2026"
+        assert agent._fallback_plan_sections(query) == [
+            "Executive Summary and Ranking Criteria",
+            "Ranked Top 10 AI Use Cases",
+            "Business Impact, ROI, and Efficiency Evidence",
+            "2025-2026 Real-World Deployment Examples",
+            "Maturity Levels and Enabling Technologies",
+            "Adoption Barriers and Best-Fit Beneficiaries",
+            "2027-2028 AI Value Creation Outlook",
+        ]
+
+    def test_generic_latest_fallback_plan_is_replaced_for_explicit_ranked_report(self, agent):
+        """The old Landscape/Signals/Risks plan should never reach approval for explicit reports."""
+        query = (
+            "Conduct a comprehensive deep research report on the top 10 highest-value use cases of AI in 2026. "
+            "For each use case cover ROI, real-world examples, maturity, enabling technologies, barriers, "
+            "and who benefits most. Rank the 10 use cases by overall business value."
+        )
+
+        issue = agent._plan_quality_issue(
+            "Conduct a comprehensive deep research report on the top 10 highest-value use cases of AI i",
+            [
+                "Conduct comprehensive deep research report Landscape",
+                "Recent Evidence and Signals",
+                "Capability Gaps",
+                "Adoption Risks and Recommendations",
+            ],
+            query,
+        )
+        assert issue is not None
+        assert "explicit report" in issue or "fallback-like" in issue
+
+        title, sections = agent._sanitize_plan_for_query(
+            "Conduct a comprehensive deep research report on the top 10 highest-value use cases of AI i",
+            [
+                "Conduct comprehensive deep research report Landscape",
+                "Recent Evidence and Signals",
+                "Capability Gaps",
+                "Adoption Risks and Recommendations",
+            ],
+            query,
+        )
+
+        assert title == "Top 10 Highest-Value AI Use Cases in 2026"
+        assert sections[0] == "Executive Summary and Ranking Criteria"
+        assert "Ranked Top 10 AI Use Cases" in sections
+
+
 class TestClarifierAgentPlanApproval:
     """Tests for plan approval workflow."""
 
@@ -662,7 +963,12 @@ class TestClarifierAgentPlanApproval:
         mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content=complete_response.model_dump_json()))
 
         # Planner LLM returns a valid plan
-        plan_response = '{"title": "Test Research Plan", "sections": ["Intro", "Analysis", "Conclusion"]}'
+        plan_response = json.dumps(
+            {
+                "title": "Test Research Plan",
+                "sections": ["AI Capabilities", "Human Priorities", "Practical Choices"],
+            }
+        )
         mock_planner_llm.ainvoke = AsyncMock(return_value=AIMessage(content=plan_response))
 
         # User approves
@@ -682,7 +988,130 @@ class TestClarifierAgentPlanApproval:
         assert result.plan_approved is True
         assert result.plan_rejected is False
         assert result.plan_title == "Test Research Plan"
-        assert result.plan_sections == ["Intro", "Analysis", "Conclusion"]
+        assert result.plan_sections == ["AI Capabilities", "Human Priorities", "Practical Choices"]
+
+    @pytest.mark.asyncio
+    async def test_weak_plan_is_model_repaired_before_approval(self, mock_llm_provider, mock_llm, mock_planner_llm):
+        """Weak approval previews should be repaired by the planner model before display."""
+        complete_response = ClarificationResponse(needs_clarification=False, clarification_question=None)
+        mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content=complete_response.model_dump_json()))
+
+        weak_plan = json.dumps(
+            {
+                "title": "Deep reserach on all the ingredietns required to build: Lifelong curiosity engines that s",
+                "sections": [
+                    "Deep reserach on all ingredietns Requirements",
+                    "Architecture and Interfaces",
+                    "Failure Paths and Guardrails",
+                    "Implementation Plan",
+                ],
+            }
+        )
+        repaired_plan = json.dumps(
+            {
+                "title": "AI Curiosity Engine Build Blueprint",
+                "sections": [
+                    "Cognitive Science of Curiosity",
+                    "Evolving Interest Graphs",
+                    "Serendipitous Long-Tail Discovery",
+                    "Adaptive Teaching Loops",
+                    "RAG and Knowledge Graph Stack",
+                    "Content Verification and Evaluation",
+                ],
+            }
+        )
+        mock_planner_llm.ainvoke = AsyncMock(
+            side_effect=[AIMessage(content=weak_plan), AIMessage(content=repaired_plan)]
+        )
+        mock_user_callback = AsyncMock(return_value="approve")
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            user_prompt_callback=mock_user_callback,
+            enable_plan_approval=True,
+            planner_llm=mock_planner_llm,
+        )
+
+        state = ClarifierAgentState(
+            messages=[
+                HumanMessage(
+                    content=(
+                        "Deep reserach on all the ingredietns required to build:"
+                        "” Lifelong curiosity engines that surface and teach niche topics matched to user interests” "
+                        "using AI"
+                    )
+                )
+            ]
+        )
+        result = await agent.run(state)
+
+        assert result.plan_approved is True
+        assert result.plan_title == "AI Curiosity Engine Build Blueprint"
+        assert result.plan_sections == [
+            "Cognitive Science of Curiosity",
+            "Evolving Interest Graphs",
+            "Serendipitous Long-Tail Discovery",
+            "Adaptive Teaching Loops",
+            "RAG and Knowledge Graph Stack",
+            "Content Verification and Evaluation",
+        ]
+        assert mock_planner_llm.ainvoke.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_plan_preview_preserves_original_query_after_numeric_clarification_reply(
+        self, mock_llm_provider, mock_llm, mock_planner_llm
+    ):
+        """Numeric clarification answers must not become the plan title or scope."""
+        original_query = "Research the highest-impact AI applications trending in 2026"
+        clarify_response = ClarificationResponse(
+            needs_clarification=True,
+            clarification_question=(
+                "Context: AI applications vary widely. Choose 1 business, 4 developer, or 5 overview."
+            ),
+        )
+        complete_response = ClarificationResponse(needs_clarification=False, clarification_question=None)
+        mock_llm.ainvoke = AsyncMock(
+            side_effect=[
+                AIMessage(content=clarify_response.model_dump_json()),
+                AIMessage(content=complete_response.model_dump_json()),
+            ]
+        )
+
+        async def planner_side_effect(messages):
+            rendered_prompt = messages[0].content
+            assert f"ORIGINAL USER REQUEST:\n{original_query}" in rendered_prompt
+            assert "ORIGINAL USER REQUEST:\n1 and 4" not in rendered_prompt
+            return AIMessage(
+                content=json.dumps(
+                    {
+                        "title": "2026 AI Applications for Business and Developers",
+                        "sections": [
+                            "Business Automation Opportunities",
+                            "Developer and API Workflows",
+                            "Cross-Cutting 2026 Trends",
+                            "Adoption Risks and Trade-offs",
+                            "Practical Implementation Roadmap",
+                        ],
+                    }
+                )
+            )
+
+        mock_planner_llm.ainvoke = AsyncMock(side_effect=planner_side_effect)
+        mock_user_callback = AsyncMock(side_effect=["1 and 4", "approve"])
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            user_prompt_callback=mock_user_callback,
+            enable_plan_approval=True,
+            planner_llm=mock_planner_llm,
+        )
+
+        state = ClarifierAgentState(messages=[HumanMessage(content=original_query)])
+        result = await agent.run(state)
+
+        assert result.plan_approved is True
+        assert result.plan_title == "2026 AI Applications for Business and Developers"
+        assert result.plan_title != "1 and 4"
 
     @pytest.mark.asyncio
     async def test_run_with_plan_approval_rejected(self, mock_llm_provider, mock_llm, mock_planner_llm):
@@ -744,6 +1173,53 @@ class TestClarifierAgentPlanApproval:
         assert "Security" in result.plan_sections
 
     @pytest.mark.asyncio
+    async def test_plan_approval_focus_number_feedback_then_approve(
+        self, mock_llm_provider, mock_llm, mock_planner_llm
+    ):
+        """Terse section-focus feedback should not regenerate the same broad plan."""
+        complete_response = ClarificationResponse(needs_clarification=False, clarification_question=None)
+        mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content=complete_response.model_dump_json()))
+
+        broad_plan = json.dumps(
+            {
+                "title": "Identifying Stocks Trading 40-50% Below Estimated Fair Value",
+                "sections": [
+                    "Introduction and Background on Value Investing",
+                    "Methodologies for Estimating Stock Fair Value",
+                    "Current Market Conditions and Undervalued Opportunities",
+                    "Screening Criteria for 40-50% Discount Stocks",
+                    "Sector Analysis and Industry Trends",
+                    "Risk Factors and Considerations",
+                    "Conclusion and Investment Recommendations",
+                ],
+            }
+        )
+        mock_planner_llm.ainvoke = AsyncMock(return_value=AIMessage(content=broad_plan))
+        mock_user_callback = AsyncMock(side_effect=["skip", "just focus on number 3", "approve"])
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            user_prompt_callback=mock_user_callback,
+            enable_plan_approval=True,
+            planner_llm=mock_planner_llm,
+        )
+
+        state = ClarifierAgentState(
+            messages=[
+                HumanMessage(content="Which stocks are currently trading at 40–50% below their estimated fair value")
+            ]
+        )
+        result = await agent.run(state)
+
+        assert result.plan_approved is True
+        assert result.plan_title == "Current 40-50% Fair-Value Discount Candidates"
+        assert result.plan_sections == [
+            "Candidate Price/Fair Value Table",
+            "Source Quality and Caveats",
+        ]
+        assert mock_user_callback.await_count == 3
+
+    @pytest.mark.asyncio
     async def test_run_with_plan_approval_max_iterations(self, mock_llm_provider, mock_llm, mock_planner_llm):
         """Test plan approval auto-approves after max iterations."""
         complete_response = ClarificationResponse(needs_clarification=False, clarification_question=None)
@@ -792,9 +1268,15 @@ class TestClarifierAgentPlanApproval:
 
         assert result is not None
         assert result.plan_approved is True
-        # Should use fallback plan
-        assert result.plan_title == "Research Report"
-        assert "Introduction" in result.plan_sections
+        # Should use a topic-specific fallback plan, not copy-the-example headings.
+        assert result.plan_title == "Research AI"
+        assert result.plan_sections == [
+            "AI Core Question",
+            "Evidence and Competing Views",
+            "Practical Strategy Options",
+            "Trade-offs and Failure Modes",
+            "Decision Framework",
+        ]
 
     @pytest.mark.asyncio
     async def test_run_with_plan_approval_zero_iterations(self, mock_llm_provider, mock_llm, mock_planner_llm):
@@ -814,10 +1296,16 @@ class TestClarifierAgentPlanApproval:
         result = await agent.run(state)
 
         assert result is not None
-        # Should auto-approve with fallback values (fix for the undefined variable bug)
+        # Should auto-approve with topic-specific fallback values.
         assert result.plan_approved is True
-        assert result.plan_title == "Research Report"
-        assert "Introduction" in result.plan_sections
+        assert result.plan_title == "Research AI"
+        assert result.plan_sections == [
+            "AI Core Question",
+            "Evidence and Competing Views",
+            "Practical Strategy Options",
+            "Trade-offs and Failure Modes",
+            "Decision Framework",
+        ]
 
 
 class TestClarifierAgentPlanApprovalInit:

@@ -15,6 +15,7 @@
 
 """Tests for the DeepResearcherAgent."""
 
+import json
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -25,10 +26,31 @@ from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 
+from aiq_agent.agents.deep_researcher.custom_middleware import SequentialSearchMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import TaskBatchLimitMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import ToolResultPruningMiddleware
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 from aiq_agent.common.citation_verification import SourceEntry
+
+
+def _valid_deep_report(title: str = "Deep research report") -> str:
+    body = (
+        "This report compares the current evidence, explains the relevant tradeoffs, "
+        "and keeps the conclusion grounded in the cited source. "
+    ) * 18
+    return (
+        f"# {title}\n\n"
+        "## Executive Summary\n\n"
+        f"{body}\n\n"
+        "## Analysis\n\n"
+        f"{body}\n\n"
+        "## Caveats\n\n"
+        f"{body}\n\n"
+        "## Sources\n\n"
+        "[1] https://example.com\n"
+    )
 
 
 @tool
@@ -69,7 +91,7 @@ class TestDeepResearcherAgent:
         """Create a mock for create_deep_agent (deepagents)."""
         mock_agent = MagicMock()
         mock_agent.with_config = MagicMock(return_value=mock_agent)
-        mock_agent.ainvoke = AsyncMock(return_value={"messages": [AIMessage(content="Deep research report")]})
+        mock_agent.ainvoke = AsyncMock(return_value={"messages": [AIMessage(content=_valid_deep_report())]})
         return mock_agent
 
     def test_init_with_defaults(self, mock_llm_provider, real_tool, mock_create_deep_agent):
@@ -90,16 +112,32 @@ class TestDeepResearcherAgent:
             assert agent.max_loops == 2
             assert agent.verbose is True
             assert agent.callbacks == []
-            assert agent.deepagents_runtime.skill_sources is None
-            assert agent.deepagents_runtime.sandbox is None
+
+    def test_planner_tools_commit_without_external_think_or_delegation(
+        self, mock_llm_provider, real_tool, mock_create_deep_agent
+    ):
+        """Planner uses native model thinking, then commits without external think/delegation loops."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=mock_create_deep_agent,
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+            )
+
+            planner_tool_names = {tool.name for tool in agent.planner_tools}
+            assert "think" not in planner_tool_names
+            assert "write_plan" in planner_tool_names
+            assert real_tool.name in planner_tool_names
+            assert "defer_task" not in planner_tool_names
 
     def test_init_with_custom_settings(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Test DeepResearcherAgent initialization with custom settings."""
         with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-            from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
-            from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-            from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
 
             callbacks = [MagicMock()]
             agent = DeepResearcherAgent(
@@ -108,59 +146,11 @@ class TestDeepResearcherAgent:
                 max_loops=5,
                 verbose=False,
                 callbacks=callbacks,
-                skills=SkillsConfig.enabled_builtin(),
-                sandbox=SandboxConfig(app_name="custom-aiq"),
             )
 
             assert agent.max_loops == 5
             assert agent.verbose is False
             assert agent.callbacks == callbacks
-            assert agent.deepagents_runtime.skill_sources == [BUILTIN_SKILL_SOURCE]
-            assert agent.deepagents_runtime.sandbox is not None
-            assert agent.deepagents_runtime.sandbox.provider == "modal"
-            assert agent.deepagents_runtime.sandbox.app_name == "custom-aiq"
-            assert agent.deepagents_runtime.sandbox.python_packages == ()
-            assert agent.deepagents_runtime.sandbox.block_network is True
-
-    def test_sandbox_config_rejects_unsupported_provider(self):
-        """Unsupported sandbox providers fail early with a clear error."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-
-        with pytest.raises(ValueError, match="Unsupported sandbox provider"):
-            SandboxConfig(provider="not-modal")
-
-    def test_register_uses_runtime_config_models(self):
-        """NAT config uses the same skills and sandbox models as runtime."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
-        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
-
-        config = DeepResearchAgentConfig(
-            orchestrator_llm="llm",
-            skills=SkillsConfig(enabled=True),
-            sandbox=SandboxConfig(app_name="custom-aiq", python_packages=["matplotlib", "pillow"]),
-        )
-
-        assert config.skills.enabled is True
-        assert config.skills.sources == (BUILTIN_SKILL_SOURCE,)
-        assert config.sandbox is not None
-        assert config.sandbox.provider == "modal"
-        assert config.sandbox.app_name == "custom-aiq"
-        assert config.sandbox.python_packages == ("matplotlib", "pillow")
-
-    def test_modal_sandbox_name_is_job_id(self):
-        """Modal sandbox names use the resolved job ID directly."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import _validate_modal_sandbox_name
-
-        assert _validate_modal_sandbox_name("job-123") == "job-123"
-
-    def test_modal_sandbox_name_rejects_invalid_job_id(self):
-        """Invalid custom job IDs fail before creating a Modal sandbox."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import _validate_modal_sandbox_name
-
-        with pytest.raises(ValueError, match="valid Modal sandbox name"):
-            _validate_modal_sandbox_name("bad/job/id")
 
     def test_init_without_tools(self, mock_llm_provider, mock_create_deep_agent):
         """Test DeepResearcherAgent initialization without tools."""
@@ -188,193 +178,6 @@ class TestDeepResearcherAgent:
             assert "planner" in agent._prompts
             assert "researcher" in agent._prompts
             assert "orchestrator" in agent._prompts
-
-    def test_prepare_state_preloads_builtin_skill_files(self, mock_llm_provider, real_tool):
-        """Built-in skills are added to state so StateBackend can discover them."""
-        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
-
-        agent = DeepResearcherAgent(
-            llm_provider=mock_llm_provider,
-            tools=[real_tool],
-            skills=SkillsConfig.enabled_builtin(),
-        )
-        state = DeepResearchAgentState(
-            messages=[],
-            files={"/existing.txt": {"content": "keep", "encoding": "utf-8"}},
-        )
-        mock_skill_files = {
-            "/mock-skill/SKILL.md": {
-                "content": "name: mock-skill\n",
-                "encoding": "utf-8",
-                "created_at": "2026-01-01T00:00:00",
-                "modified_at": "2026-01-01T00:00:00",
-            }
-        }
-
-        with patch(
-            "aiq_agent.agents.deep_researcher.deepagents_runtime._builtin_skill_state_files",
-            return_value=mock_skill_files,
-        ):
-            prepared = agent.deepagents_runtime.prepare_state(state)
-
-        assert prepared.files["/existing.txt"]["content"] == "keep"
-        for path, file_data in mock_skill_files.items():
-            assert prepared.files[path] == file_data
-
-    def test_build_orchestrator_passes_skills_to_top_level_agent(
-        self,
-        mock_llm_provider,
-        real_tool,
-        mock_create_deep_agent,
-    ):
-        """Skills are exposed to the orchestrator, not added as a separate subagent."""
-        with patch(
-            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
-            return_value=mock_create_deep_agent,
-        ) as create:
-            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-            from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
-            from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
-
-            agent = DeepResearcherAgent(
-                llm_provider=mock_llm_provider,
-                tools=[real_tool],
-                skills=SkillsConfig.enabled_builtin(),
-            )
-            state = DeepResearchAgentState(messages=[HumanMessage(content="Compare revenue growth")])
-
-            agent._build_orchestrator_agent(state)
-
-            kwargs = create.call_args.kwargs
-            assert kwargs["skills"] == [BUILTIN_SKILL_SOURCE]
-            assert not callable(kwargs["backend"])
-            assert "Available Skills:" in kwargs["system_prompt"]
-            assert "Use read_file to load the relevant SKILL.md BEFORE writing any code" in kwargs["system_prompt"]
-            assert 'execute("python /workspace/[name].py")' in kwargs["system_prompt"]
-            assert "Tell the planner to account for available skills" in kwargs["system_prompt"]
-            assert "Include any applicable skill-use requirements from the plan" in kwargs["system_prompt"]
-            assert "data-table-analysis" not in kwargs["system_prompt"]
-            subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
-            assert subagents["planner-agent"]["skills"] == [BUILTIN_SKILL_SOURCE]
-            assert subagents["researcher-agent"]["skills"] == [BUILTIN_SKILL_SOURCE]
-            assert "Skill-aware planning" in subagents["planner-agent"]["system_prompt"]
-            assert "Use applicable skills before specialized work" in subagents["researcher-agent"]["system_prompt"]
-            assert "data-table-analysis" not in subagents["planner-agent"]["system_prompt"]
-            assert "data-table-analysis" not in subagents["researcher-agent"]["system_prompt"]
-
-    def test_build_orchestrator_omits_skills_when_disabled(
-        self,
-        mock_llm_provider,
-        real_tool,
-        mock_create_deep_agent,
-    ):
-        """Default deep research runs do not add SkillsMiddleware."""
-        with patch(
-            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
-            return_value=mock_create_deep_agent,
-        ) as create:
-            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-
-            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
-            state = DeepResearchAgentState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
-
-            agent._build_orchestrator_agent(state)
-
-            assert "skills" not in create.call_args.kwargs
-            assert (
-                "When available skills apply during planning, research, or synthesis"
-                not in (create.call_args.kwargs["system_prompt"])
-            )
-
-    def test_modal_backend_is_concrete_cached_and_routes_skills_locally(self, mock_llm_provider, real_tool):
-        """Modal backend creation is lazy, cached, and skill reads do not hit Modal."""
-        from deepagents.backends import StateBackend
-
-        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
-
-        agent = DeepResearcherAgent(
-            llm_provider=mock_llm_provider,
-            tools=[real_tool],
-            skills=SkillsConfig.enabled_builtin(),
-            sandbox=SandboxConfig(),
-            job_id="job-123",
-        )
-        fake_modal_backend = MagicMock()
-
-        with (
-            patch(
-                "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
-                return_value=fake_modal_backend,
-            ) as create_backend,
-        ):
-            backend_one = agent.deepagents_runtime.backend
-            backend_two = agent.deepagents_runtime.backend
-
-        assert backend_one is backend_two
-        assert backend_one.default is fake_modal_backend
-        create_backend.assert_called_once_with(
-            agent.deepagents_runtime.sandbox,
-            "job-123",
-        )
-        assert isinstance(backend_one.routes[BUILTIN_SKILL_SOURCE], StateBackend)
-        fake_modal_backend.ls.assert_not_called()
-        fake_modal_backend.read.assert_not_called()
-
-    def test_modal_backend_creates_sandbox_lazily(self):
-        """Modal sandbox lifetime starts on first sandbox operation, not agent construction."""
-        from deepagents.backends.protocol import ExecuteResponse
-
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import _create_sandbox_backend
-
-        fake_modal_backend = MagicMock()
-        fake_modal_backend.execute.return_value = ExecuteResponse(output="ok", exit_code=0)
-
-        with patch(
-            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_modal_backend_now",
-            return_value=fake_modal_backend,
-        ) as create_modal:
-            backend = _create_sandbox_backend(SandboxConfig(), "job-123")
-
-            create_modal.assert_not_called()
-            result = backend.execute("echo ok", timeout=5)
-
-        assert result.output == "ok"
-        create_modal.assert_called_once()
-        fake_modal_backend.execute.assert_called_once_with("echo ok", timeout=5)
-
-    def test_modal_backend_recreates_and_retries_once_on_not_found(self):
-        """A disappeared Modal container is recreated once for the same job-scoped name."""
-        import modal
-        from deepagents.backends.protocol import ExecuteResponse
-
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import _create_sandbox_backend
-
-        first_modal_backend = MagicMock()
-        first_modal_backend.execute.side_effect = modal.exception.NotFoundError("gone")
-        second_modal_backend = MagicMock()
-        second_modal_backend.execute.return_value = ExecuteResponse(output="ok", exit_code=0)
-        config = SandboxConfig()
-
-        with patch(
-            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_modal_backend_now",
-            side_effect=[first_modal_backend, second_modal_backend],
-        ) as create_modal:
-            backend = _create_sandbox_backend(config, "job-123")
-            result = backend.execute("echo ok", timeout=5)
-
-        assert result.output == "ok"
-        assert create_modal.call_args_list[0].args == (config, "job-123")
-        assert create_modal.call_args_list[0].kwargs == {}
-        assert create_modal.call_args_list[1].args == (config, "job-123")
-        assert create_modal.call_args_list[1].kwargs == {"force_new": True}
-        first_modal_backend.execute.assert_called_once_with("echo ok", timeout=5)
-        second_modal_backend.execute.assert_called_once_with("echo ok", timeout=5)
 
     def test_load_prompts_fallback(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Test _load_prompts uses inline defaults when files not found."""
@@ -415,12 +218,343 @@ class TestDeepResearcherAgent:
             unknown_default = agent._get_inline_default("unknown")
             assert "unknown" in unknown_default.lower()
 
+    def test_extract_approved_plan(self, mock_llm_provider, real_tool, mock_create_deep_agent):
+        """Approved plan context should be parsed into title and sections."""
+        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+            )
+
+            parsed = agent._extract_approved_plan(
+                "**Approved Research Plan**\n\n"
+                "Title: Current 40-50% Fair-Value Discount Candidates\n\n"
+                "Sections:\n"
+                "- Candidate Price/Fair Value Table\n"
+                "- Source Quality and Caveats\n"
+            )
+
+            assert parsed == (
+                "Current 40-50% Fair-Value Discount Candidates",
+                ["Candidate Price/Fair Value Table", "Source Quality and Caveats"],
+            )
+
+    def test_inject_approved_plan_preloads_plan_file(self, mock_llm_provider, real_tool, mock_create_deep_agent):
+        """Approved plans should preload /shared/plan.json so planner-agent can be skipped."""
+        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+            )
+            state = DeepResearchAgentState(
+                messages=[
+                    HumanMessage(
+                        content="Which stocks are currently trading at 40–50% below their estimated fair value"
+                    )
+                ],
+                clarifier_result=(
+                    "**Approved Research Plan**\n\n"
+                    "Title: Current 40-50% Fair-Value Discount Candidates\n\n"
+                    "Sections:\n"
+                    "- Candidate Price/Fair Value Table\n"
+                    "- Source Quality and Caveats\n"
+                ),
+            )
+
+            updated = agent._inject_approved_plan_if_available(state)
+
+            assert "/plan.json" in updated.files
+            content = "\n".join(updated.files["/plan.json"]["content"])
+            assert "Current 40-50% Fair-Value Discount Candidates" in content
+            assert updated.files["/plan.json"]["created_at"]
+            assert updated.files["/plan.json"]["modified_at"]
+            assert "approved_plan_used_directly" in content
+            assert "Generic background not requested" in content
+
+            plan = json.loads(content)
+            assert plan["output_style"]["mode"] == "focused_screen"
+            assert plan["budget_profile"]["mode"] == "focused_screen"
+            assert plan["budget_profile"]["reserve_search_calls"] >= 0
+            assert len(plan["queries"]) == 1
+            assert "stock_quote_tool" in " ".join(plan["constraints"])
+            assert "compact final report" in " ".join(plan["constraints"]).lower()
+
+    def test_generic_approved_plan_does_not_preload_plan_file(
+        self,
+        mock_llm_provider,
+        real_tool,
+        mock_create_deep_agent,
+    ):
+        """Placeholder approved plans should fall back to planner-agent."""
+        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+            )
+            state = DeepResearchAgentState(
+                messages=[HumanMessage(content="How should teams design AI-augmented workflows in 2026?")],
+                clarifier_result=(
+                    "**Approved Research Plan**\n\n"
+                    "Title: Research Report\n\n"
+                    "Sections:\n"
+                    "- Introduction\n"
+                    "- Background\n"
+                    "- Analysis\n"
+                    "- Findings\n"
+                    "- Conclusion\n"
+                ),
+            )
+
+            updated = agent._inject_approved_plan_if_available(state)
+
+            assert "/plan.json" not in updated.files
+            assert "/shared/plan.json" not in updated.files
+            assert "generic placeholder" in (updated.clarifier_result or "")
+
+    def test_fallback_like_approved_plan_for_rich_query_preloads_deterministic_plan(
+        self,
+        mock_llm_provider,
+        real_tool,
+        mock_create_deep_agent,
+    ):
+        """Rich prompts should not fall back into planner-agent just because the UI preview was generic."""
+        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+            )
+            query = (
+                "Conduct a comprehensive deep research report on the top 10 highest-value use cases of AI in 2026. "
+                "For each use case cover ROI, real-world examples, maturity, enabling technologies, barriers, "
+                "and who benefits most. Rank the 10 use cases by overall business value."
+            )
+            state = DeepResearchAgentState(
+                messages=[HumanMessage(content=query)],
+                clarifier_result=(
+                    "**Approved Research Plan**\n\n"
+                    "Title: Conduct a comprehensive deep research report on the top 10 highest-value use "
+                    "cases of AI i\n\n"
+                    "Sections:\n"
+                    "- Conduct comprehensive deep research report Landscape\n"
+                    "- Recent Evidence and Signals\n"
+                    "- Capability Gaps\n"
+                    "- Adoption Risks and Recommendations\n"
+                ),
+            )
+
+            updated = agent._inject_approved_plan_if_available(state)
+
+            assert "/plan.json" in updated.files
+            assert "/shared/plan.json" in updated.files
+            content = "\n".join(updated.files["/shared/plan.json"]["content"])
+            plan = json.loads(content)
+            assert plan["report_title"] == "Top 10 Highest-Value AI Use Cases in 2026"
+            assert plan["report_toc"][0]["title"] == "Executive Summary and Ranking Criteria"
+            assert plan["queries"]
+            assert "generic placeholder" not in (updated.clarifier_result or "")
+
+    def test_structured_lesson_prompt_preloads_topic_first_plan(
+        self,
+        mock_llm_provider,
+        real_tool,
+        mock_create_deep_agent,
+    ):
+        """Lesson prompts with a broad topic and narrow motion should get a topic-first plan."""
+        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+            )
+            state = DeepResearchAgentState(
+                messages=[
+                    HumanMessage(
+                        content=(
+                            "Content research dossier filename hint: doctors-patients-content-focused-research.md\n\n"
+                            "Generate a structured content research dossier, not a lesson plan and not a "
+                            "debate case file.\n"
+                            "Report type: content_research_dossier.\n"
+                            "Exact lesson topic: Doctors & Patients.\n"
+                            "Final debate motion: This house would allow doctors to refuse to perform treatments "
+                            "that are against their own ethical principles.\n"
+                            "Audience: G5-6 PSD II Grade 5-6 primary debate students.\n\n"
+                            "The Markdown must include these sections:\n"
+                            "1. Research scope and final motion anchor.\n"
+                            "2. Age and audience assumptions.\n"
+                            "3. Topic essentials: definitions, key terms, and background concepts.\n"
+                            "4. Factual findings with citations: only claims that are well-supported.\n"
+                            "5. Key examples and case studies: concrete examples with what each teaches.\n"
+                            "6. Motion relevance notes: raw material that helps explain the final motion.\n"
+                        )
+                    )
+                ],
+            )
+
+            updated = agent._inject_approved_plan_if_available(state)
+
+            assert "/plan.json" in updated.files
+            content = "\n".join(updated.files["/plan.json"]["content"])
+            plan = json.loads(content)
+
+            assert plan["task_analysis"]["structured_lesson_scope_used_directly"] is True
+            assert plan["output_style"]["topic_anchor"] == "Doctors & Patients"
+            assert "allow doctors to refuse" in plan["output_style"]["motion_anchor"]
+            assert "do not center the final debate motion" in plan["queries"][0]["query"]
+            assert "bounded motion relevance" in plan["queries"][-1]["query"]
+            assert "at least half the report body cover the broad topic" in json.dumps(plan["constraints"]).lower()
+            assert "Approved Research Plan" in (updated.clarifier_result or "")
+
+            state_with_existing_plan_context = state.model_copy(
+                update={
+                    "clarifier_result": (
+                        "**Approved Research Plan**\n\n"
+                        "Title: Motion-only brief\n\n"
+                        "Sections:\n"
+                        "- Conscientious objection only\n"
+                    )
+                }
+            )
+            updated_with_existing_plan_context = agent._inject_approved_plan_if_available(
+                state_with_existing_plan_context
+            )
+            content_with_existing_plan_context = "\n".join(
+                updated_with_existing_plan_context.files["/plan.json"]["content"]
+            )
+            plan_with_existing_plan_context = json.loads(content_with_existing_plan_context)
+
+            assert plan_with_existing_plan_context["output_style"]["topic_anchor"] == "Doctors & Patients"
+            assert "Conscientious objection only" not in content_with_existing_plan_context
+
+    def test_broad_topic_markdown_lesson_prompt_preloads_topic_first_plan(
+        self,
+        mock_llm_provider,
+        real_tool,
+        mock_create_deep_agent,
+    ):
+        """Oracle lesson prompts use Broad topic / markdown-bold labels, not Exact lesson topic."""
+        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+            )
+            state = DeepResearchAgentState(
+                messages=[
+                    HumanMessage(
+                        content=(
+                            "**Broad topic**: Education and Tech\n"
+                            "**Final debate motion**: This house would mandate teachers to use AI in teaching "
+                            "their students\n"
+                            "**Student tier**: PSD II (Grade 5-6 debate students)\n\n"
+                            "The final report must have EXACTLY these 14 sections, in this order:\n"
+                            "1. Topic Landscape (8-12 sub-areas; mark the motion's sub-area with [MOTION])\n"
+                            "2. Core Concept\n"
+                            "3. How It Works\n"
+                            "4. Stakeholders and Power\n"
+                            "5. Landmark Cases\n"
+                            "6. Bridge to the Motion\n"
+                            "7. Motion-Specific Context\n"
+                            "8. Arguments FOR the motion\n"
+                            "9. Arguments AGAINST the motion\n"
+                            "10. Tensions and Limits\n"
+                            "11. Practice Motions\n"
+                            "12. Hook Question\n"
+                            "13. Teacher Notes\n"
+                            "14. Sources\n"
+                        )
+                    )
+                ],
+            )
+
+            updated = agent._inject_approved_plan_if_available(state)
+
+            assert "/shared/plan.json" in updated.files
+            plan = json.loads("\n".join(updated.files["/shared/plan.json"]["content"]))
+            assert plan["task_analysis"]["structured_lesson_scope_used_directly"] is True
+            assert plan["output_style"]["topic_anchor"] == "Education and Tech"
+            assert "mandate teachers to use AI" in plan["output_style"]["motion_anchor"]
+            assert len(plan["report_toc"]) == 14
+            assert plan["report_toc"][0]["title"].startswith("Topic Landscape")
+            assert "Approved Research Plan" in (updated.clarifier_result or "")
+
+    def test_normalize_files_state_adds_missing_metadata(
+        self,
+        mock_llm_provider,
+        real_tool,
+        mock_create_deep_agent,
+    ):
+        """Legacy/preloaded virtual files should not crash glob/grep metadata reads."""
+        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+            )
+
+            normalized = agent._normalize_files_state({"/shared/plan.json": {"content": ["{}"]}})
+
+            assert normalized["/shared/plan.json"]["content"] == ["{}"]
+            assert normalized["/shared/plan.json"]["created_at"]
+            assert normalized["/shared/plan.json"]["modified_at"]
+
+    def test_research_depth_controls_tool_limits(self, mock_llm_provider, real_tool, mock_create_deep_agent):
+        """Research-depth tiers should scale deep research tool budgets."""
+        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+            )
+            shallow = DeepResearchAgentState(
+                messages=[HumanMessage(content="Compare models")],
+                research_depth="shallow",
+            )
+            deep = DeepResearchAgentState(messages=[HumanMessage(content="Compare models")], research_depth="deep")
+
+            assert agent._tool_limits_for_state(shallow)["advanced_web_search_tool"] == 20
+            assert agent._tool_limits_for_state(shallow)["planner:advanced_web_search_tool"] == 1
+            assert agent._tool_limits_for_state(deep)["advanced_web_search_tool"] == 140
+            assert agent._tool_limits_for_state(deep)["planner:advanced_web_search_tool"] == 3
+            assert agent._parallel_tool_limits_for_state(shallow)["task"] == 1
+            assert agent._parallel_tool_limits_for_state(deep)["task"] == 3
+
+    def test_researcher_context_pruning_is_tighter_than_orchestrator(self, mock_llm_provider, real_tool):
+        """Subagents should keep compact context; final synthesis can use more."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+
+        planner_pruning = agent._tool_result_pruning_middleware_for_scope("planner")
+        researcher_pruning = agent._tool_result_pruning_middleware_for_scope("researcher")
+        orchestrator_pruning = agent._tool_result_pruning_middleware_for_scope("orchestrator")
+
+        assert isinstance(researcher_pruning, ToolResultPruningMiddleware)
+        assert planner_pruning.recent_max_chars < orchestrator_pruning.recent_max_chars
+        assert researcher_pruning.recent_max_chars < orchestrator_pruning.recent_max_chars
+        assert researcher_pruning.keep_last_n < orchestrator_pruning.keep_last_n
+        assert researcher_pruning.max_tool_call_arg_chars < orchestrator_pruning.max_tool_call_arg_chars
+
     @pytest.mark.asyncio
     async def test_provider_roles_used_on_init(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Test LLM roles (planner, researcher, orchestrator) are requested when run() is invoked."""
         with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
+            mock_create_deep_agent.ainvoke.return_value = {
+                "messages": [AIMessage(content=_valid_deep_report("Quick query research report"))]
+            }
             agent = DeepResearcherAgent(
                 llm_provider=mock_llm_provider,
                 tools=[real_tool],
@@ -439,6 +573,9 @@ class TestDeepResearcherAgent:
         with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
+            mock_create_deep_agent.ainvoke.return_value = {
+                "messages": [AIMessage(content=_valid_deep_report("CUDA vs OpenCL comparison report"))]
+            }
             agent = DeepResearcherAgent(
                 llm_provider=mock_llm_provider,
                 tools=[real_tool],
@@ -477,6 +614,9 @@ class TestDeepResearcherAgent:
         with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
+            mock_create_deep_agent.ainvoke.return_value = {
+                "messages": [AIMessage(content=_valid_deep_report("Test query research report"))]
+            }
             mock_callback = MagicMock()
             agent = DeepResearcherAgent(
                 llm_provider=mock_llm_provider,
@@ -531,19 +671,18 @@ class TestDeepResearcherAgent:
             state = DeepResearchAgentState(messages=[HumanMessage(content="Test")])
             agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
 
-            result = await agent.run(state)
-
-            # Should handle empty messages
-            assert result is not None
+            with pytest.raises(RuntimeError, match="empty final report"):
+                await agent.run(state)
 
     @pytest.mark.asyncio
     async def test_run_preserves_valid_message_content(self, mock_llm_provider, real_tool):
         """Test run() preserves valid message content unchanged."""
+        final_report = _valid_deep_report("Original query final analysis")
         result_messages = [
             HumanMessage(content="Original query"),
             AIMessage(content="I'll help with that."),
             ToolMessage(content="Search results here", tool_call_id="123"),
-            AIMessage(content="Here's my final analysis."),
+            AIMessage(content=final_report),
         ]
 
         mock_agent = MagicMock()
@@ -563,11 +702,11 @@ class TestDeepResearcherAgent:
 
             result = await agent.run(state)
 
-            # All valid content should be preserved without synthetic citations.
+            # All valid content should be preserved
             assert result.messages[0].content == "Original query"
             assert result.messages[1].content == "I'll help with that."
             assert result.messages[2].content == "Search results here"
-            assert result.messages[3].content == "Here's my final analysis."
+            assert result.messages[3].content == final_report
 
 
 class TestRunRetryStatePreservation:
@@ -815,79 +954,491 @@ class TestIsReportComplete:
             assert is_complete is True
             assert "complete" in reason.lower()
 
-
-class TestDeepResearcherCitationVerification:
-    """Tests for deep researcher citation post-processing."""
-
-    @pytest.fixture
-    def mock_llm(self):
-        llm = MagicMock()
-        llm.ainvoke = AsyncMock()
-        llm.bind_tools = MagicMock(return_value=llm)
-        return llm
-
-    @pytest.fixture
-    def mock_llm_provider(self, mock_llm):
-        provider = LLMProvider()
-        provider.set_default(mock_llm)
-        provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
-        provider.configure(LLMRole.PLANNER, mock_llm)
-        provider.configure(LLMRole.RESEARCHER, mock_llm)
-        return provider
-
-    @pytest.fixture
-    def real_tool(self):
-        return web_search_tool
-
-    @pytest.mark.asyncio
-    async def test_run_does_not_fabricate_citation_when_verify_finds_none(self, mock_llm_provider, real_tool):
-        """If verification finds no valid citations, the report is not patched with a source."""
-        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-
-        # Report passes _is_report_complete: long enough, has section headers, has Sources header,
-        # and includes one URL that matches the registry so the cheap completeness check accepts it.
-        report = (
-            "A" * 1600
-            + "\n## Introduction\n\nCUDA findings here.\n"
-            + "## Body\n\nMore details.\n"
-            + "## Sources\n[1] https://docs.nvidia.com/cuda/"
-        )
-        deep_result = {"messages": [AIMessage(content=report)]}
-
-        mock_agent = MagicMock()
-        mock_agent.with_config = MagicMock(return_value=mock_agent)
-        mock_agent.ainvoke = AsyncMock(return_value=deep_result)
-
+    def test_research_notes_fallback_builds_report(self, mock_llm_provider, real_tool):
+        """Research notes should be usable when the final synthesis message is too short."""
         with patch(
             "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
-            return_value=mock_agent,
+            return_value=MagicMock(),
         ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
             agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
-
-            # Pre-populate registry with the matching URL plus an unrelated tool source.
-            agent.source_registry_middleware.registry.add(
-                SourceEntry(
-                    citation_key="weather_observation_tool",
-                    source_type="tool_result",
-                    tool_name="weather_observation_tool",
-                )
+            notes = (
+                "**Query Topic**\n\n"
+                "**Research Notes**\n"
+                "| Ticker | Price | Fair Value | Discount |\n"
+                "| --- | --- | --- | --- |\n"
+                "| ABC | $10 | $18 | 44% |\n\n"
+                "Detailed evidence. " + "A" * 800 + "\n\n**Sources**\n[1] Example: https://example.com"
             )
-            agent.source_registry_middleware.registry.add(
-                SourceEntry(url="https://docs.nvidia.com/cuda/", title="CUDA Docs", tool_name="web_search")
+            result = {
+                "messages": [AIMessage(content="Model call failed after retries.")],
+                "files": {
+                    "/shared/stock_screen.txt": {"content": notes.splitlines()},
+                    "/shared/plan.json": {"content": ["{}"]},
+                },
+            }
+
+            report = agent._build_report_from_research_notes(result)
+
+            assert report.startswith("# Research Findings")
+            assert "stock_screen.txt" in report
+            assert "ABC" in report
+            assert "Model call failed" not in report
+
+    def test_model_failure_text_is_not_complete_report(self, mock_llm_provider, real_tool):
+        """Provider connection errors must not be accepted as successful reports."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            result = {
+                "messages": [
+                    AIMessage(content="Model call failed after 2 attempts with APIConnectionError: Connection error.")
+                ]
+            }
+
+            is_complete, reason = agent._is_report_complete(result)
+
+            assert is_complete is False
+            assert reason == "model_call_failed"
+
+    def test_provider_thinking_payload_is_not_complete_report(self, mock_llm_provider, real_tool):
+        """MiniMax reasoning-only provider blocks must trigger repair instead of success."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            thinking_payload = (
+                "[{'thinking': 'The user wants a comprehensive report and I should write one now.', "
+                "'type': 'thinking', 'index': 0}]"
             )
+            result = {"messages": [AIMessage(content=thinking_payload)]}
 
-            # Force the verifier to report "no valid citations" while leaving the report unchanged,
-            # so we can assert post-processing does not synthesize a citation.
-            with patch(
-                "aiq_agent.agents.deep_researcher.agent.verify_citations",
-                return_value=MagicMock(
-                    verified_report=report,
-                    removed_citations=[],
-                    valid_citations=[],
-                ),
-            ):
-                state = DeepResearchAgentState(messages=[HumanMessage(content="What is CUDA?")])
-                result = await agent.run(state)
+            is_complete, reason = agent._is_report_complete(result)
+            report = agent._extract_report_content_from_result(result)
 
-        final_text = result.messages[-1].content
-        assert final_text.rstrip() == report
+            assert is_complete is False
+            assert "too_short" in reason
+            assert report == ""
+
+    def test_report_file_wins_over_model_failure_message(self, mock_llm_provider, real_tool):
+        """If report.md exists, a later terminal model error should not hide it."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            report_content = "A" * 1600 + "\n## Findings\n\n## Sources\n[1] Example: https://example.com"
+            result = {
+                "messages": [
+                    AIMessage(content="Model call failed after 2 attempts with APIConnectionError: Connection error.")
+                ],
+                "files": {"/report.md": {"content": report_content.splitlines()}},
+            }
+
+            report = agent._extract_report_content_from_result(result)
+
+            assert report == report_content
+
+    def test_claim_fragments_merge_into_canonical_claim_table(self, mock_llm_provider, real_tool):
+        """Per-researcher claim fragments should be merged deterministically."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool], job_id="job-claims")
+            result = {
+                "messages": [AIMessage(content="")],
+                "files": {
+                    "/shared/claims/claims_market.json": {
+                        "content": json.dumps(
+                            {
+                                "atomic_claims": [
+                                    {
+                                        "claim_id": "C1",
+                                        "claim_text": "The market has a verified demand signal.",
+                                        "claim_type": "trend",
+                                        "expected_answer_shape": "free_text",
+                                        "preferred_source_classes": ["authoritative_third_party"],
+                                        "status": "verified",
+                                        "resolved_value": "Verified demand signal",
+                                        "evidence": [
+                                            {
+                                                "source_url": "https://example.com/report",
+                                                "source_class": "authoritative_third_party",
+                                                "extract": "The market has a verified demand signal.",
+                                                "extract_confidence": "high",
+                                            }
+                                        ],
+                                    }
+                                ]
+                            }
+                        ).splitlines()
+                    }
+                },
+            }
+
+            merged = agent._merge_claim_fragments_into_result(result, job_id="job-claims")
+
+            assert merged is True
+            assert "/shared/claim_table.json" in result["files"]
+            assert "shared/claim_table.json" in result["files"]
+            assert agent._claim_table_quality_reason(result) is None
+
+    def test_claim_table_quality_counts_atomic_claims(self, mock_llm_provider, real_tool):
+        """Atomic claim tables should not be treated as empty just because entries is empty."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            result = {
+                "files": {
+                    "/shared/claim_table.json": {
+                        "content": json.dumps(
+                            {
+                                "atomic_claims": [
+                                    {
+                                        "claim_id": "C1",
+                                        "claim_text": "The report has a verified evidence-backed claim.",
+                                        "claim_type": "trend",
+                                        "expected_answer_shape": "free_text",
+                                        "preferred_source_classes": ["any_credible"],
+                                        "status": "verified",
+                                        "resolved_value": "Evidence-backed claim",
+                                        "evidence": [
+                                            {
+                                                "source_url": "https://example.com/source",
+                                                "source_class": "authoritative_third_party",
+                                                "extract": "The report has a verified evidence-backed claim.",
+                                                "extract_confidence": "high",
+                                            }
+                                        ],
+                                    }
+                                ]
+                            }
+                        ).splitlines()
+                    }
+                }
+            }
+
+            assert agent._claim_table_quality_reason(result) is None
+
+    def test_structured_artifact_merge_builds_evidence_packet(self, mock_llm_provider, real_tool):
+        """Merged claim/extract artifacts should produce the M3 evidence packet."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool], job_id="job-evidence")
+            result = {
+                "messages": [AIMessage(content="")],
+                "files": {
+                    "/shared/claims/claims_market.json": {
+                        "content": json.dumps(
+                            {
+                                "atomic_claims": [
+                                    {
+                                        "claim_id": "C1",
+                                        "claim_text": "The source supports this claim.",
+                                        "claim_type": "trend",
+                                        "expected_answer_shape": "free_text",
+                                        "preferred_source_classes": ["authoritative_third_party"],
+                                        "status": "verified",
+                                        "resolved_value": "Supported claim",
+                                        "evidence": [
+                                            {
+                                                "source_url": "https://example.com/report",
+                                                "source_class": "authoritative_third_party",
+                                                "extract": "The source supports this claim.",
+                                                "extract_confidence": "high",
+                                            }
+                                        ],
+                                    }
+                                ]
+                            }
+                        ).splitlines()
+                    },
+                    "/shared/extracts/market.json": {
+                        "content": json.dumps(
+                            {
+                                "extracts": [
+                                    {
+                                        "claim_ids": ["C1"],
+                                        "url": "https://example.com/report",
+                                        "title": "Example Report",
+                                        "source_class": "authoritative_third_party",
+                                        "extract": "Another source-close extract.",
+                                    }
+                                ]
+                            }
+                        ).splitlines()
+                    },
+                },
+            }
+
+            agent._merge_structured_research_artifacts_into_result(result)
+
+            assert "/shared/claim_table.json" in result["files"]
+            assert "/shared/evidence_packet.json" in result["files"]
+            packet = json.loads("\n".join(result["files"]["/shared/evidence_packet.json"]["content"]))
+            assert packet["job_id"] == "job-evidence"
+            assert packet["source_count"] == 1
+            assert packet["sources"][0]["claim_ids"] == ["C1"]
+
+    def test_source_quality_warning_does_not_make_report_incomplete(self, mock_llm_provider, real_tool):
+        """M3 path should deliver real reports and let post-run gates carry soft warnings."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            agent.source_registry_middleware._get_registry().add(
+                SourceEntry(url="https://example.com/source-1", source_class="content_marketing")
+            )
+            content = _valid_deep_report("Weak but usable report").replace(
+                "[1] https://example.com",
+                "[1] https://example.com/source-1",
+            )
+            result = {
+                "messages": [AIMessage(content=content)],
+                "files": {"/report.md": {"content": content.splitlines()}},
+            }
+
+            assert agent._is_report_complete(result) == (True, "complete_via_heuristic")
+
+    def test_fact_ledger_fragments_merge_into_canonical_ledger(self, mock_llm_provider, real_tool):
+        """Per-researcher fact-ledger fragments should be merged deterministically."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            result = {
+                "files": {
+                    "/shared/fact_ledger_grok.json": {
+                        "content": json.dumps(
+                            {
+                                "entries": [
+                                    {
+                                        "entity": "Grok Imagine",
+                                        "fact": "Official docs describe prompt behavior.",
+                                        "source_url": "https://docs.x.ai/grok",
+                                        "source_extract": "Official docs describe prompt behavior.",
+                                        "source_class": "first_party",
+                                        "confidence": "high",
+                                        "status": "verified",
+                                    }
+                                ]
+                            }
+                        ).splitlines()
+                    }
+                }
+            }
+
+            merged = agent._merge_fact_ledger_fragments_into_result(result)
+
+            assert merged is True
+            assert "/shared/fact_ledger.json" in result["files"]
+            content = "\n".join(result["files"]["/shared/fact_ledger.json"]["content"])
+            assert "Grok Imagine" in content
+            assert "https://docs.x.ai/grok" in content
+
+    @pytest.mark.asyncio
+    async def test_artifact_compiler_builds_report_when_finalizer_is_thinking_only(
+        self, mock_llm_provider, mock_llm, real_tool
+    ):
+        """Persisted artifacts should produce a usable report when MiniMax emits only thinking."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            mock_llm.ainvoke.side_effect = RuntimeError("compiler model unavailable")
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            evidence = (
+                "# Consolidated Findings\n\n"
+                "The sabbatical planning market has premium coaching analogs and clear customer pain. "
+                "A strong offer should combine planning software, financial runway tools, and expert templates. "
+                "Evidence source: https://example.com/sabbatical-planning\n\n"
+                "## Market\n\n" + "Detailed evidence. " * 140
+            )
+            result = {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "[{'thinking': 'Now I need to write the final report.', 'type': 'thinking', 'index': 0}]"
+                        )
+                    )
+                ],
+                "files": {
+                    "/shared/consolidated_findings.md": {"content": evidence.splitlines()},
+                    "/shared/plan.json": {"content": ["{}"]},
+                },
+            }
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Research takeabreak.life monetization")])
+
+            report = await agent._compile_report_from_artifacts(state, result)
+
+            assert report.startswith("#")
+            assert "## Sources" in report
+            assert "https://example.com/sabbatical-planning" in report
+            assert "Recovered Research Report" not in report
+            assert agent.source_registry_middleware.registry.has_url("https://example.com/sabbatical-planning")
+
+    @pytest.mark.asyncio
+    async def test_artifact_compiler_reads_route_stripped_shared_resume_files(
+        self, mock_llm_provider, mock_llm, real_tool
+    ):
+        """Resume files preloaded for the /shared route are stored without a /shared prefix."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            mock_llm.ainvoke.side_effect = RuntimeError("compiler model unavailable")
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            evidence = (
+                "# Foreign Policy Research Notes\n\n"
+                "The research covers sovereignty, non-intervention, targeted killing, and human-rights abuses. "
+                "Evidence source: https://example.com/foreign-policy\n\n"
+                "## Findings\n\n" + "Detailed evidence about sovereignty and targeted killing. " * 140
+            )
+            state = DeepResearchAgentState(
+                messages=[HumanMessage(content="Foreign Policy & Sovereignty lesson research")],
+                files={
+                    "/researcher_task1.md": {"content": evidence.splitlines()},
+                    "/plan.json": {"content": ["{}"]},
+                },
+            )
+            result = {
+                "messages": [AIMessage(content=[{"type": "thinking", "thinking": "writing now"}])],
+                "files": {},
+            }
+
+            report = await agent._compile_report_from_artifacts(state, result)
+
+            assert "foreign-policy" in report
+            assert "Foreign Policy Research Notes" in report
+            assert "## researcher task1.md" in report
+            assert "plan.json" not in report
+
+
+class TestSequentialSearchMiddleware:
+    """Tests for search-call trimming middleware."""
+
+    @pytest.mark.asyncio
+    async def test_allows_two_parallel_search_calls(self):
+        middleware = SequentialSearchMiddleware({"advanced_web_search_tool", "web_search_tool"})
+        request = MagicMock()
+        message = AIMessage(
+            content=[
+                {"type": "thinking", "thinking": "searching"},
+                {"type": "tool_use", "id": "1", "name": "advanced_web_search_tool", "input": {"question": "a"}},
+                {"type": "tool_use", "id": "2", "name": "advanced_web_search_tool", "input": {"question": "b"}},
+                {"type": "tool_use", "id": "3", "name": "think", "input": {"thought": "x"}},
+            ],
+            tool_calls=[
+                {"name": "advanced_web_search_tool", "args": {"question": "a"}, "id": "1"},
+                {"name": "advanced_web_search_tool", "args": {"question": "b"}, "id": "2"},
+                {"name": "think", "args": {"thought": "x"}, "id": "3"},
+            ],
+        )
+
+        async def handler(_request):
+            return MagicMock(result=[message], structured_response=None)
+
+        response = await middleware.awrap_model_call(request, handler)
+
+        assert len(response.result[0].tool_calls) == 3
+        assert response.result[0].tool_calls[0]["id"] == "1"
+        assert response.result[0].tool_calls[1]["id"] == "2"
+        assert response.result[0].tool_calls[2]["name"] == "think"
+        content_blocks = response.result[0].content
+        assert isinstance(content_blocks, list)
+        assert [block.get("id") for block in content_blocks if block.get("type") == "tool_use"] == ["1", "2", "3"]
+
+    @pytest.mark.asyncio
+    async def test_trims_beyond_two_parallel_search_calls(self):
+        middleware = SequentialSearchMiddleware({"advanced_web_search_tool", "web_search_tool"})
+        request = MagicMock()
+        message = AIMessage(
+            content=[
+                {"type": "thinking", "thinking": "searching"},
+                {"type": "tool_use", "id": "1", "name": "advanced_web_search_tool", "input": {"question": "a"}},
+                {"type": "tool_use", "id": "2", "name": "web_search_tool", "input": {"query": "b"}},
+                {"type": "tool_use", "id": "3", "name": "advanced_web_search_tool", "input": {"question": "c"}},
+                {"type": "tool_use", "id": "4", "name": "think", "input": {"thought": "x"}},
+            ],
+            tool_calls=[
+                {"name": "advanced_web_search_tool", "args": {"question": "a"}, "id": "1"},
+                {"name": "web_search_tool", "args": {"query": "b"}, "id": "2"},
+                {"name": "advanced_web_search_tool", "args": {"question": "c"}, "id": "3"},
+                {"name": "think", "args": {"thought": "x"}, "id": "4"},
+            ],
+        )
+
+        async def handler(_request):
+            return MagicMock(result=[message], structured_response=None)
+
+        response = await middleware.awrap_model_call(request, handler)
+
+        assert [tc["id"] for tc in response.result[0].tool_calls] == ["1", "2", "4"]
+        content_blocks = response.result[0].content
+        assert isinstance(content_blocks, list)
+        assert [block.get("id") for block in content_blocks if block.get("type") == "tool_use"] == ["1", "2", "4"]
+
+
+class TestTaskBatchLimitMiddleware:
+    """Tests for researcher task burst protection."""
+
+    @pytest.mark.asyncio
+    async def test_defers_extra_parallel_task_calls(self):
+        middleware = TaskBatchLimitMiddleware(default_limit=1)
+        request = MagicMock()
+        message = AIMessage(
+            content=[
+                {"type": "thinking", "thinking": "launching researchers"},
+                {"type": "tool_use", "id": "1", "name": "task", "input": {"description": "section a"}},
+                {"type": "tool_use", "id": "2", "name": "task", "input": {"description": "section b"}},
+            ],
+            tool_calls=[
+                {"name": "task", "args": {"description": "section a"}, "id": "1"},
+                {"name": "task", "args": {"description": "section b"}, "id": "2"},
+            ],
+        )
+
+        async def handler(_request):
+            return MagicMock(result=[message], structured_response=None)
+
+        response = await middleware.awrap_model_call(request, handler)
+
+        assert response.result[0].tool_calls[0]["name"] == "task"
+        assert response.result[0].tool_calls[1]["name"] == "defer_task"
+        assert response.result[0].tool_calls[1]["args"]["description"] == "section b"
+        content_blocks = response.result[0].content
+        assert isinstance(content_blocks, list)
+        tool_blocks = [block for block in content_blocks if block.get("type") == "tool_use"]
+        assert tool_blocks[1]["name"] == "defer_task"
+        assert tool_blocks[1]["input"]["description"] == "section b"

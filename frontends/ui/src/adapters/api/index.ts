@@ -74,6 +74,15 @@ export type {
   DataSourcesResponse,
 } from './data-sources-client'
 
+// Conversation Snapshot Client
+export {
+  deleteAllConversationSnapshots,
+  deleteConversationSnapshot,
+  listConversationSnapshots,
+  syncConversationSnapshots,
+} from './conversations-client'
+export type { ConversationSnapshotsResponse } from './conversations-client'
+
 // Documents Schemas
 export {
   DocumentFileStatusSchema,
@@ -94,9 +103,22 @@ export type {
 } from './documents-schemas'
 
 // Deep Research Client (SSE Streaming for async jobs)
-export { createDeepResearchClient, getJobStatus, getJobState, getJobReport, cancelJob } from './deep-research-client'
+export {
+  createDeepResearchClient,
+  getJobStatus,
+  getJobState,
+  getJobReport,
+  listJobs,
+  cancelJob,
+  resumeJob,
+  coerceSSEText,
+} from './deep-research-client'
 export type {
   DeepResearchJobStatus,
+  DeepResearchJobStatusResponse,
+  DeepResearchJobReportResponse,
+  JobHistoryItem,
+  JobHistoryResponse,
   DeepResearchEventType,
   ArtifactType,
   DeepResearchSSEEvent,
@@ -117,3 +139,11 @@ export type {
   DeepResearchClient,
   JobStateResponse,
 } from './deep-research-client'
+
+// API Keys Client
+export { listAPIKeys, createAPIKey, revokeAPIKey } from './api-keys-client'
+export type { APIKeyMetadata, APIKeyCreateResponse, APIKeyListResponse } from './api-keys-client'
+
+// Auth Client
+export { changePassword } from './auth-client'
+export type { ChangePasswordRequest } from './auth-client'

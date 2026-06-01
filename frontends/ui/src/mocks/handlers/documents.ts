@@ -172,7 +172,7 @@ const updateJobProgress = (jobId: string): IngestionJobStatus | null => {
 // Handlers
 // ============================================================================
 
-const baseUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
+const baseUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:9000'
 
 export const documentHandlers = [
   // --------------------------------------------------------------------------

@@ -12,7 +12,7 @@
 import { NextResponse } from 'next/server'
 
 const getBackendUrl = (): string => {
-  const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
+  const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:9000'
   return url.replace(/\/$/, '')
 }
 

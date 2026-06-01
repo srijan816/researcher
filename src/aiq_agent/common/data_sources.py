@@ -23,7 +23,8 @@ from langchain_core.messages import BaseMessage
 from .data_source_registry import get_source
 from .data_source_registry import get_source_id_for_tool
 
-# Default to web_search when no data sources specified
+# Default to web_search when no data sources are specified or an old client sends
+# an empty selection. Research agents require at least one source-backed tool.
 DEFAULT_DATA_SOURCES: list[str] = ["web_search"]
 
 logger = logging.getLogger(__name__)
@@ -37,21 +38,21 @@ def parse_data_sources(raw: Any) -> list[str] | None:
 
     Returns:
         - None if input is None (not specified, use all tools)
-        - Empty list [] if input was explicitly empty (no tools)
+        - DEFAULT_DATA_SOURCES if input was explicitly empty
         - List of data source IDs if specified
     """
     if raw is None:
         return None
     if isinstance(raw, list):
         if len(raw) == 0:
-            return []
+            return DEFAULT_DATA_SOURCES.copy()
         parsed = [str(value).strip() for value in raw]
-        return [value for value in parsed if value] or []
+        return [value for value in parsed if value] or DEFAULT_DATA_SOURCES.copy()
     if isinstance(raw, str):
         if not raw.strip():
-            return []
+            return DEFAULT_DATA_SOURCES.copy()
         parsed = [value.strip() for value in raw.split(",")]
-        return [value for value in parsed if value] or []
+        return [value for value in parsed if value] or DEFAULT_DATA_SOURCES.copy()
     return None
 
 
@@ -63,7 +64,7 @@ def filter_tools_by_sources(tools: list[Any], data_sources: list[str] | None) ->
 
     Args:
         tools: List of LangChain tools.
-        data_sources: List of selected data source IDs, None for all, or [] for none.
+        data_sources: List of selected data source IDs, None for all, or [] for defaults.
 
     Returns:
         Filtered list of tools matching the selected data sources.
@@ -71,7 +72,7 @@ def filter_tools_by_sources(tools: list[Any], data_sources: list[str] | None) ->
     if data_sources is None:
         return tools
     if len(data_sources) == 0:
-        return []
+        data_sources = DEFAULT_DATA_SOURCES
 
     selected = {s.lower() for s in data_sources}
     filtered = []

@@ -90,8 +90,6 @@ async def exa_web_search(
         A `FunctionInfo` wrapping either the live Exa search callable or the
         missing-key stub.
     """
-    from langchain_exa import ExaSearchResults
-
     if not os.environ.get("EXA_API_KEY") and tool_config.api_key:
         os.environ["EXA_API_KEY"] = tool_config.api_key.get_secret_value()
 
@@ -118,6 +116,27 @@ async def exa_web_search(
         yield FunctionInfo.from_fn(
             _exa_web_search_stub,
             description=_exa_web_search_stub.__doc__,
+        )
+        return
+
+    try:
+        from langchain_exa import ExaSearchResults
+    except ModuleNotFoundError:
+        logger.warning(
+            "langchain_exa is not installed. The Exa web search tool will be registered "
+            "but will return an error when called. Install langchain-exa to enable it."
+        )
+
+        async def _exa_web_search_missing_dependency_stub(question: str) -> str:
+            """Web search tool (unavailable - missing langchain-exa dependency)."""
+            return (
+                "Error: Exa web search is unavailable because the langchain-exa package is not installed.\n"
+                "Use SearXNG search tools or install langchain-exa to enable Exa."
+            )
+
+        yield FunctionInfo.from_fn(
+            _exa_web_search_missing_dependency_stub,
+            description=_exa_web_search_missing_dependency_stub.__doc__,
         )
         return
 

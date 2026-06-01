@@ -41,7 +41,12 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from aiq_agent.common.citation_verification import extract_sources_from_tool_result
 from aiq_agent.common.citation_verification import get_session_registry
+from aiq_agent.common.report_quality import strip_degenerate_repetition
+from aiq_agent.common.scrape_artifacts import artifact_event_payload
+from aiq_agent.common.scrape_artifacts import persist_scrape_artifacts
+from aiq_agent.common.source_classification import classify_source
 
 if TYPE_CHECKING:
     from .event_store import EventStore
@@ -75,6 +80,7 @@ class ArtifactType(StrEnum):
     OUTPUT = "output"
     CITATION_SOURCE = "citation_source"
     CITATION_USE = "citation_use"
+    SCRAPE_ARTIFACT = "scrape_artifact"
     TODO = "todo"
 
 
@@ -208,6 +214,7 @@ class AgentEventCallback(BaseCallbackHandler):
     URL_PATTERN = re.compile(r'https?://[^\s<>"\')\]}>]+', re.IGNORECASE)
     SEARCH_TOOL_PATTERNS = {"search", "tavily", "web_search", "google", "bing"}
     TOOL_CALL_PATTERN = re.compile(r'\b[a-z][a-z0-9_]*\s*\(\s*(?:["\'{]|[a-z_]+\s*=)', re.IGNORECASE)
+    SEARCH_RESULT_SNAPSHOT_LIMIT = 24000
 
     AGENT_PATTERNS = {"agent"}
     AGENT_EXCLUDE_PATTERNS = {"middleware", "handler", "callback"}
@@ -302,6 +309,83 @@ class AgentEventCallback(BaseCallbackHandler):
         if self._event_store:
             self._event_store.store(event.to_sse_dict())
 
+    def _coerce_stream_text(self, value: Any) -> str:
+        """Convert provider-specific stream blocks into plain, render-safe text.
+
+        MiniMax M3 can stream Anthropic-style content blocks instead of raw
+        strings. Keep visible text/thinking blocks, and drop protocol-only
+        blocks such as tool_use/input_json_delta/signature markers because
+        those are already represented through tool events.
+        """
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, int | float | bool):
+            return str(value)
+        if isinstance(value, list):
+            return "".join(part for item in value if (part := self._coerce_stream_text(item)))
+        if isinstance(value, dict):
+            block_type = value.get("type")
+            if block_type in {"tool_use", "input_json_delta"}:
+                return ""
+            if block_type == "thinking" and value.get("signature") and not value.get("thinking"):
+                return ""
+            for key in ("text", "content", "thinking", "reasoning_content", "reasoning", "delta"):
+                if key in value:
+                    text = self._coerce_stream_text(value.get(key))
+                    if text:
+                        return text
+            return ""
+        return str(value)
+
+    def _coerce_output_text(self, value: Any) -> str:
+        """Convert model output into user-visible text, excluding reasoning/tool blocks."""
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return "" if self._looks_like_provider_payload_text(value) else value
+        if isinstance(value, int | float | bool):
+            return str(value)
+        if isinstance(value, list):
+            return "".join(part for item in value if (part := self._coerce_output_text(item)))
+        if isinstance(value, dict):
+            block_type = value.get("type")
+            if block_type in {"thinking", "tool_use", "input_json_delta"}:
+                return ""
+            for key in ("text", "content", "output_text"):
+                if key in value:
+                    text = self._coerce_output_text(value.get(key))
+                    if text:
+                        return text
+            return ""
+        return str(value)
+
+    @staticmethod
+    def _looks_like_provider_payload_text(content: str) -> bool:
+        """Detect stringified provider protocol blocks that are not report text."""
+        stripped = content.lstrip()
+        if (
+            stripped.startswith("[{'thinking'")
+            or stripped.startswith('[{"thinking"')
+            or stripped.startswith("{'thinking'")
+            or stripped.startswith('{"thinking"')
+            or stripped.startswith("[{'signature'")
+            or stripped.startswith('[{"signature"')
+        ):
+            return True
+        lowered = content.lower()
+        return any(
+            marker in lowered
+            for marker in (
+                "'type': 'thinking'",
+                '"type": "thinking"',
+                "'type': 'tool_use'",
+                '"type": "tool_use"',
+                "input_json_delta",
+            )
+        )
+
     def _emit_artifact(
         self,
         artifact_type: ArtifactType,
@@ -359,10 +443,19 @@ class AgentEventCallback(BaseCallbackHandler):
         auto-emitted version).
         """
         self._emit_artifact(
+            ArtifactType.FILE,
+            content,
+            name="/report.md",
+            file_path="/report.md",
+            filename="/report.md",
+            output_category="final_report",
+        )
+        self._emit_artifact(
             ArtifactType.OUTPUT,
             content,
             output_category="final_report",
         )
+        self._emit_cited_urls(content)
 
     def _is_search_tool(self, tool_name: str) -> bool:
         """Check if tool is a search-related tool that returns URLs."""
@@ -415,13 +508,43 @@ class AgentEventCallback(BaseCallbackHandler):
         """Extract unique URLs from text content."""
         if not text:
             return []
-        urls = self.URL_PATTERN.findall(str(text))
+        import html
+
+        urls = self.URL_PATTERN.findall(str(text).replace("\\n", "\n"))
         cleaned = []
         for url in urls:
+            url = html.unescape(url).split("\\n", maxsplit=1)[0].splitlines()[0]
             url = url.rstrip(".,;:!?)'\"]}>)")
             if len(url) > 10 and "." in url:
                 cleaned.append(url)
         return list(dict.fromkeys(cleaned))
+
+    def _extract_source_entries(self, tool_name: str, text: str) -> list[dict[str, str | None]]:
+        """Extract source records from a tool result using the citation parser.
+
+        The generic URL regex is intentionally too broad for scraped web pages:
+        extracted article bodies often contain navigation links, ad pixels,
+        social redirects, and related-post URLs. The citation verifier already
+        has source-specific parsers that understand XML-like web-search result
+        blocks, so artifact accounting should use the same source of truth.
+        """
+        entries = extract_sources_from_tool_result(tool_name, text)
+        records: list[dict[str, str | None]] = []
+        seen: set[str] = set()
+        for entry in entries:
+            source_id = entry.url or entry.citation_key
+            if not source_id or source_id in seen:
+                continue
+            seen.add(source_id)
+            records.append(
+                {
+                    "url": entry.url,
+                    "citation_key": entry.citation_key,
+                    "title": entry.title,
+                    "source_class": entry.source_class,
+                }
+            )
+        return records
 
     def _get_output_category(self, agent_info: tuple[str, str] | None = None) -> str:
         """
@@ -471,6 +594,7 @@ class AgentEventCallback(BaseCallbackHandler):
                     url,
                     name=url,
                     url=url,
+                    source_class=classify_source(url),
                 )
 
     def _emit_tool_artifact(self, tool_name: str, tool_input: Any, run_id: str = "") -> None:
@@ -634,20 +758,55 @@ class AgentEventCallback(BaseCallbackHandler):
         )
 
         if self._is_search_tool(tool_name) and output:
-            urls = self._extract_urls(str(output))
-            for url in urls:
-                normalized = self._normalize_url(url)
+            output_text = str(output)
+            sources = self._extract_source_entries(tool_name, output_text)
+            for source in sources:
+                source_id = source.get("url") or source.get("citation_key")
+                if not source_id:
+                    continue
+                normalized = self._normalize_url(source_id) if source.get("url") else source_id
                 if normalized not in self._discovered_urls:
                     self._discovered_urls.add(normalized)
                     self._emit_artifact(
                         ArtifactType.CITATION_SOURCE,
-                        url,
-                        name=url,
-                        url=url,
+                        source_id,
+                        name=source_id,
+                        url=source.get("url"),
+                        citation_key=source.get("citation_key"),
+                        title=source.get("title"),
+                        source_class=source.get("source_class"),
                         tool=tool_name,
                         agent_id=agent_info[1] if agent_info else None,
                         workflow=agent_info[0] if agent_info else None,
                     )
+
+            artifacts = persist_scrape_artifacts(
+                job_id=self._job_id,
+                tool_name=tool_name,
+                tool_output=output_text,
+                researcher=agent_info[0] if agent_info else None,
+            )
+            for artifact in artifacts:
+                self._emit_artifact(
+                    ArtifactType.SCRAPE_ARTIFACT,
+                    artifact.artifact_path,
+                    name=artifact.url,
+                    **artifact_event_payload(artifact),
+                )
+
+            if len(output_text.strip()) >= self.OUTPUT_MIN_LENGTH:
+                snapshot = output_text.strip()
+                if len(snapshot) > self.SEARCH_RESULT_SNAPSHOT_LIMIT:
+                    snapshot = snapshot[: self.SEARCH_RESULT_SNAPSHOT_LIMIT] + "\n\n[... search result truncated ...]"
+                self._emit_artifact(
+                    ArtifactType.OUTPUT,
+                    snapshot,
+                    name=tool_name,
+                    output_category="search_result",
+                    tool=tool_name,
+                    workflow_source=agent_info[0] if agent_info else None,
+                    agent_id=agent_info[1] if agent_info else None,
+                )
 
         self._run_id_to_parent.pop(run_id, None)
 
@@ -677,12 +836,16 @@ class AgentEventCallback(BaseCallbackHandler):
         )
 
     def on_llm_new_token(self, token: str, **kwargs) -> None:
-        if token:
+        token_text = strip_degenerate_repetition(self._coerce_stream_text(token))
+        if token_text:
+            run_id = str(kwargs.get("run_id", ""))
+            metadata = self._build_metadata_for_run(run_id) or None
             self._emit(
                 IntermediateStepEvent(
                     category=EventCategory.LLM,
                     state=EventState.CHUNK,
-                    data=EventData(chunk=token),
+                    data=EventData(chunk=token_text),
+                    metadata=metadata,
                 )
             )
 
@@ -694,6 +857,7 @@ class AgentEventCallback(BaseCallbackHandler):
         model_name = self._run_id_to_name.pop(run_id, "unknown")
 
         content, thinking, usage, has_tool_calls = self._extract_llm_response(response)
+        thinking = self._coerce_stream_text(thinking).strip() or None
 
         agent_info = self._find_agent_for_run(run_id)
         metadata = self._build_metadata_for_run(run_id) or {}
@@ -842,7 +1006,7 @@ class AgentEventCallback(BaseCallbackHandler):
 
             if msg:
                 if hasattr(msg, "content"):
-                    content = str(msg.content) if msg.content else None
+                    content = self._coerce_output_text(msg.content).strip() or None
 
                 if hasattr(msg, "tool_calls") and msg.tool_calls:
                     has_tool_calls = True

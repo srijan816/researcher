@@ -29,17 +29,23 @@ import { cookies } from 'next/headers'
 import { isAuthRequired } from '@/adapters/auth/config'
 
 const getBackendUrl = (): string => {
-  const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
+  const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:9000'
   return url.replace(/\/$/, '')
 }
 
 /**
  * Build the backend URL for deep research API
  */
-const buildBackendUrl = (path: string[]): string => {
+const buildBackendUrl = (path: string[], req?: Request): string => {
   const backendBase = getBackendUrl()
   const pathString = path.join('/')
-  return `${backendBase}/v1/jobs/async/${pathString}`
+  let query = ''
+  if (req) {
+    const url = new URL(req.url)
+    url.searchParams.delete('token')
+    query = url.searchParams.toString() ? `?${url.searchParams.toString()}` : ''
+  }
+  return `${backendBase}/v1/jobs/async/${pathString}${query}`
 }
 
 /**
@@ -67,6 +73,10 @@ const getAuthHeaders = async (req: Request, pathSegments: string[]): Promise<Rec
   const idToken = cookieIdToken || queryToken
   const authToken = req.headers.get('Authorization') || (idToken ? `Bearer ${idToken}` : null)
 
+  if (!authToken && !idToken) {
+    throw new AuthRequiredError()
+  }
+
   if (queryToken && !cookieIdToken) {
     console.warn('[Deep Research API] SSE stream using ?token= query fallback (idToken cookie missing)')
   }
@@ -78,6 +88,18 @@ const getAuthHeaders = async (req: Request, pathSegments: string[]): Promise<Rec
   }
 }
 
+class AuthRequiredError extends Error {
+  constructor() {
+    super('Authentication required')
+  }
+}
+
+const authRequiredResponse = (): NextResponse =>
+  new NextResponse(
+    JSON.stringify({ error: { code: 'AUTH_REQUIRED', message: 'Authentication required' } }),
+    { status: 401, headers: { 'Content-Type': 'application/json' } }
+  )
+
 /**
  * Handle GET requests (status, stream, state, report)
  */
@@ -87,7 +109,7 @@ export async function GET(
 ): Promise<Response> {
   try {
     const { path } = await params
-    const backendUrl = buildBackendUrl(path)
+    const backendUrl = buildBackendUrl(path, req)
     const isStreamRequest = path.includes('stream')
 
     console.log('[Deep Research API] GET:', backendUrl, isStreamRequest ? '(SSE)' : '')
@@ -158,6 +180,7 @@ export async function GET(
     const data = await response.json()
     return NextResponse.json(data)
   } catch (error) {
+    if (error instanceof AuthRequiredError) return authRequiredResponse()
     console.error('[Deep Research API] GET error:', error)
 
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
@@ -186,7 +209,7 @@ export async function POST(
 ): Promise<Response> {
   try {
     const { path } = await params
-    const backendUrl = buildBackendUrl(path)
+    const backendUrl = buildBackendUrl(path, req)
 
     console.log('[Deep Research API] POST:', backendUrl)
 
@@ -237,6 +260,7 @@ export async function POST(
     const data = await response.json()
     return NextResponse.json(data, { status: response.status })
   } catch (error) {
+    if (error instanceof AuthRequiredError) return authRequiredResponse()
     console.error('[Deep Research API] POST error:', error)
 
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'

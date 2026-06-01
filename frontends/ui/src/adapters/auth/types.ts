@@ -24,6 +24,10 @@ declare module 'next-auth' {
     idTokenExpiresAt?: number
     /** User ID from the OAuth provider */
     userId?: string
+    /** User role for local deployments */
+    role?: string
+    /** Whether local user still has their default password */
+    mustChangePassword?: boolean
     /** Error state for token refresh failures */
     error?: string
   }
@@ -54,6 +58,10 @@ declare module 'next-auth/jwt' {
     expiresAt?: number
     /** User ID from the OAuth provider */
     userId?: string
+    /** User role for local deployments */
+    role?: string
+    /** Whether local user still has their default password */
+    mustChangePassword?: boolean
     /** Error state for token refresh failures */
     error?: string
   }
@@ -76,6 +84,10 @@ export interface AuthState {
     name?: string | null
     image?: string | null
   } | null
+  /** User role for local deployments */
+  role?: string
+  /** Whether local user still has their default password */
+  mustChangePassword?: boolean
   /** The access token for API calls */
   accessToken?: string
   /** The ID token for backend auth */

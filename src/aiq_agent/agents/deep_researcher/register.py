@@ -202,7 +202,13 @@ async def deep_research_workflow(config: DeepResearchWorkflowConfig, builder: Bu
         """Run deep research on a query string."""
         state = DeepResearchAgentState(messages=[HumanMessage(content=query)])
         result = await deep_research_agent_fn.ainvoke(state)
-        response_content = result.messages[-1].content
+        messages = result.get("messages", []) if isinstance(result, dict) else getattr(result, "messages", [])
+        response_content = ""
+        if messages:
+            last_msg = messages[-1]
+            response_content = getattr(last_msg, "content", "")
+            if not response_content and isinstance(last_msg, dict):
+                response_content = str(last_msg.get("content", ""))
         return _create_chat_response(response_content, response_id="research_response", model=workflow_id)
 
     yield FunctionInfo.from_fn(_run, description="Deep research workflow for evaluation (accepts string query).")

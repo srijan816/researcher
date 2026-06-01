@@ -17,17 +17,31 @@ const layoutState = {
 }
 
 const chatState = {
+  currentUserId: 'default-user',
+  conversations: [],
   currentConversation: null as { id: string; enabledDataSourceIds?: string[] } | null,
+  setCurrentUser: vi.fn(),
+  syncResearchHistory: vi.fn(),
+  mergeServerConversations: vi.fn(),
   reconnectToActiveJob: vi.fn(),
   cleanupOrphanedStartingBanners: vi.fn(),
   isDeepResearchStreaming: false,
 }
 
 vi.mock('next-auth/react', () => ({
+  useSession: () => ({ data: null, status: 'unauthenticated' }),
+  signIn: vi.fn(),
+  signOut: vi.fn(),
   SessionProvider: ({ children, ...props }: { children: ReactNode }) => {
     sessionProviderProps.push(props as Record<string, unknown>)
     return <>{children}</>
   },
+}))
+
+vi.mock('@/adapters/api', () => ({
+  listConversationSnapshots: vi.fn().mockResolvedValue({ conversations: [] }),
+  listJobs: vi.fn().mockResolvedValue({ jobs: [] }),
+  syncConversationSnapshots: vi.fn().mockResolvedValue({ conversations: [] }),
 }))
 
 vi.mock('@/adapters/ui', () => ({

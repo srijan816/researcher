@@ -19,12 +19,13 @@ interface ApiConfig {
   timeout: number
   documentsBaseUrl: string
   collectionsUrl: string
+  forceDeepResearch: boolean
 }
 
 const isServer = typeof window === 'undefined'
 
 const getBaseUrl = (): string => {
-  const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
+  const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:9000'
   return url.replace(/\/$/, '')
 }
 
@@ -55,6 +56,7 @@ export const apiConfig: ApiConfig = {
   timeout: 30000,
   documentsBaseUrl: `${getBaseUrl()}/v1`,
   collectionsUrl: `${getBaseUrl()}/v1/collections`,
+  forceDeepResearch: process.env.NEXT_PUBLIC_FORCE_DEEP_RESEARCH === 'true',
 }
 
 export const checkBackendHealth = async (): Promise<boolean> => {

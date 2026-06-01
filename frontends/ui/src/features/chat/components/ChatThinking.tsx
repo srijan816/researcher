@@ -18,6 +18,7 @@ import { Flex, Text, Collapsible, AnimatedChevron, Spinner } from '@/adapters/ui
 import { CheckCircle, Warning, Clock } from '@/adapters/ui/icons'
 import { formatTime } from '@/shared/utils/format-time'
 import type { ThinkingStep } from '../types'
+import { extractFunctionInput, extractFunctionOutput } from '../lib/intermediate-step-parser'
 
 export interface ChatThinkingProps {
   /** Array of thinking steps to display */
@@ -145,20 +146,45 @@ export const ChatThinking: FC<ChatThinkingProps> = ({
               : isFunctionStep
                 ? 'pl-4 border-l-2 border-base ml-1'
                 : 'pl-8 border-l-2 border-base ml-1'
+
+            const isTool = step.category === 'tools' || step.functionName.includes('search') || step.displayName.includes('Tool')
+            const inputQuery = isTool ? extractFunctionInput(step.rawPayload) : null
+            const outputText = isTool ? extractFunctionOutput(step.rawPayload) : null
+
             return (
               <Flex
                 key={step.id}
-                align="center"
-                justify="between"
+                direction="col"
                 className={`w-full py-1.5 ${indentClass}`}
                 role="listitem"
               >
-                <Text kind="body/regular/sm" className="text-primary min-w-0 truncate">
-                  {step.displayName}
-                </Text>
-                <Text kind="body/regular/xs" className="text-secondary shrink-0 pl-4">
-                  {formatTime(step.timestamp)}
-                </Text>
+                <Flex align="center" justify="between" className="w-full">
+                  <Text kind="body/regular/sm" className="text-primary min-w-0 truncate">
+                    {step.displayName}
+                  </Text>
+                  <Text kind="body/regular/xs" className="text-secondary shrink-0 pl-4">
+                    {formatTime(step.timestamp)}
+                  </Text>
+                </Flex>
+
+                {/* Search Query Inline */}
+                {inputQuery && (
+                  <Text kind="body/regular/xs" className="text-secondary mt-1 font-mono bg-surface-base px-2 py-1 rounded truncate border border-base">
+                    🔍 {inputQuery}
+                  </Text>
+                )}
+
+                {/* Expandable Output */}
+                {outputText && (
+                  <details className="mt-1 group">
+                    <summary className="text-xs text-brand cursor-pointer list-none flex items-center gap-1 select-none">
+                      <span className="text-[10px] group-open:rotate-90 transition-transform">▶</span> View Results
+                    </summary>
+                    <pre className="mt-2 p-2 bg-surface-raised rounded text-xs text-primary font-mono whitespace-pre-wrap max-h-48 overflow-y-auto border border-base">
+                      {outputText}
+                    </pre>
+                  </details>
+                )}
               </Flex>
             )
           })}

@@ -85,6 +85,22 @@ CREATE TABLE IF NOT EXISTS summaries (
 
 CREATE INDEX IF NOT EXISTS idx_summaries_collection ON summaries(collection);
 
+-- UI conversation/session snapshots used by the AI-Q frontend.
+-- Deep research artifacts remain in job_info, job_events, and checkpoint tables.
+CREATE TABLE IF NOT EXISTS ui_conversations (
+    owner_auth_type VARCHAR NOT NULL,
+    owner_subject VARCHAR NOT NULL,
+    conversation_id VARCHAR NOT NULL,
+    title VARCHAR,
+    payload TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    PRIMARY KEY (owner_auth_type, owner_subject, conversation_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ui_conversations_owner_updated
+ON ui_conversations(owner_auth_type, owner_subject, updated_at);
+
 -- =============================================================================
 -- Create LangGraph checkpoint tables in aiq_checkpoints database
 -- These must exist before backends connect. Previously left to the app,

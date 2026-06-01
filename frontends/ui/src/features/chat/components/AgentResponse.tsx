@@ -11,10 +11,10 @@
 
 'use client'
 
-import { type FC, useCallback } from 'react'
+import { type FC, useCallback, useState } from 'react'
 import { Flex, Text, Button } from '@/adapters/ui'
 import { useShallow } from 'zustand/react/shallow'
-import { ChevronRight, LoadingSpinner } from '@/adapters/ui/icons'
+import { ChevronRight, Copy, Document, LoadingSpinner } from '@/adapters/ui/icons'
 import { MarkdownRenderer } from '@/shared/components/MarkdownRenderer'
 import { formatTime } from '@/shared/utils/format-time'
 import { useLayoutStore } from '@/features/layout/store'
@@ -36,6 +36,24 @@ export interface AgentResponseProps {
   isDeepResearchActive?: boolean
   /** Job status for determining button behavior */
   deepResearchJobStatus?: 'submitted' | 'running' | 'success' | 'failure' | 'interrupted'
+  /** Persisted final report for rendering an inline artifact in the chat area */
+  reportContent?: string
+}
+
+const copyText = async (value: string): Promise<void> => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
 }
 
 /**
@@ -49,7 +67,9 @@ export const AgentResponse: FC<AgentResponseProps> = ({
   jobId,
   isDeepResearchActive = false,
   deepResearchJobStatus,
+  reportContent: inlineReportContent,
 }) => {
+  const [isReportCopied, setIsReportCopied] = useState(false)
   const openRightPanel = useLayoutStore((s) => s.openRightPanel)
   const setResearchPanelTab = useLayoutStore((s) => s.setResearchPanelTab)
 
@@ -72,6 +92,16 @@ export const AgentResponse: FC<AgentResponseProps> = ({
 
   // Check if a different job is currently streaming (in progress)
   const isAnotherJobStreaming = isDeepResearchStreaming && deepResearchJobId && deepResearchJobId !== jobId
+  const reportArtifact = typeof inlineReportContent === 'string' ? inlineReportContent.trim() : ''
+  const hasInlineReport = reportArtifact.length > 0
+  const reportWordCount = hasInlineReport ? reportArtifact.split(/\s+/).filter(Boolean).length : 0
+
+  const handleCopyInlineReport = useCallback(async () => {
+    if (!hasInlineReport) return
+    await copyText(reportArtifact)
+    setIsReportCopied(true)
+    window.setTimeout(() => setIsReportCopied(false), 1400)
+  }, [hasInlineReport, reportArtifact])
 
   const handleViewReport = useCallback(async () => {
     // For active jobs, ensure stream is connected and open the panel
@@ -121,16 +151,46 @@ export const AgentResponse: FC<AgentResponseProps> = ({
   // Guard against null, undefined, empty, or literal "null" string content
   // This includes deep research tracking messages which have empty content
   // (the 'starting' banner is now a separate message handled by DeepResearchBanner)
-  if (!content || !content.trim() || content === 'null') {
+  if ((!content || !content.trim() || content === 'null') && !hasInlineReport && !shouldShowButton) {
     return null
   }
+
+  const reportArtifactNode = hasInlineReport ? (
+    <Flex direction="col" gap="2" className="border-base mt-3 rounded-md border bg-surface-raised p-3">
+      <Flex align="center" justify="between" gap="2" className="min-w-0">
+        <Flex align="center" gap="2" className="min-w-0">
+          <Document className="h-4 w-4 shrink-0 text-accent-primary" aria-hidden="true" />
+          <Text kind="label/semibold/sm" className="truncate text-primary">
+            Final report artifact
+          </Text>
+          <Text kind="body/regular/xs" className="shrink-0 text-subtle">
+            {reportWordCount.toLocaleString()} words
+          </Text>
+        </Flex>
+        <Button
+          type="button"
+          kind="tertiary"
+          size="tiny"
+          onClick={handleCopyInlineReport}
+          aria-label={isReportCopied ? 'Report copied' : 'Copy report'}
+          title={isReportCopied ? 'Copied' : 'Copy report'}
+        >
+          <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+        </Button>
+      </Flex>
+      <div className="max-h-[32rem] overflow-y-auto rounded border border-base bg-surface-base p-3">
+        <MarkdownRenderer content={reportArtifact} className="max-w-none" />
+      </div>
+    </Flex>
+  ) : null
 
   // Inline variant - no box styling (for use inside containers like thinking process)
   if (variant === 'inline') {
     return (
       <Flex direction="col" gap="2" className="w-full break-words overflow-hidden">
         {/* Response Content rendered as markdown */}
-        <MarkdownRenderer content={content} />
+        {content && content.trim() && content !== 'null' && <MarkdownRenderer content={content} />}
+        {reportArtifactNode}
 
         {/* Optional action button */}
         {shouldShowButton && (
@@ -180,7 +240,8 @@ export const AgentResponse: FC<AgentResponseProps> = ({
           className="bg-surface-sunken-opaque border-base rounded-br-xl rounded-tl-xl rounded-tr-xl border p-4 break-words overflow-hidden"
         >
           {/* Response Content rendered as markdown */}
-          <MarkdownRenderer content={content} />
+          {content && content.trim() && content !== 'null' && <MarkdownRenderer content={content} />}
+          {reportArtifactNode}
 
           {/* Optional action button stays inside the bubble */}
           {shouldShowButton && (

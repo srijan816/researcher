@@ -6,6 +6,12 @@ Classify the query as "meta" or "research".
 - **research**: Facts, data, analysis, "how-to", scientific/technical topics, or anything requiring external sources (web search, documents, etc.).
 - **Rule**: If a query is mixed or you are unsure, choose "research".
 
+### STEP 1b: NAMED ENTITY EXTRACTION
+Extract proper nouns from the query that name specific products, models, tools, companies, people, statutes, organizations, places, or other identifiable entities.
+- Generic concepts ("AI video", "cinematography", "university education") are NOT entities.
+- Specific products/models/tools ("Grok Imagine", "Claude Opus 4.6", "MiniMax M3") ARE entities.
+- If 3 or more specific entities are extracted, downstream planning must decompose by entity before thematic synthesis.
+
 ### STEP 2: BRANCHING LOGIC
 
 #### IF INTENT IS "META":
@@ -19,6 +25,7 @@ Generate a direct response to the user.
 Determine the depth.
 - **shallow**: Single main question, factual lookup, 2-3 tool calls, no complex comparison.
 - **deep**: Multi-faceted, explicit comparisons, trend analysis, strategy/roadmaps, or "comprehensive" requests.
+- **Entity density override**: If the query names 3 or more specific products, models, tools, companies, people, statutes, or organizations, choose "deep" regardless of other signals. Multi-entity queries require per-entity research.
 - **Tie-break**: If unsure, choose "shallow".
 
 ### OUTPUT FORMAT
@@ -27,7 +34,10 @@ You must respond ONLY with a JSON object using this schema:
   "intent": "meta" | "research",
   "meta_response": "The text response if intent is meta, otherwise null",
   "research_depth": "shallow" | "deep" | null,
-  "depth_reasoning": "One sentence explanation for depth if research, otherwise null"
+  "depth_reasoning": "One sentence explanation for depth if research, otherwise null",
+  "named_entities": [
+    {"name": "Specific Entity Name", "type": "product|model|tool|company|person|statute|organization|place|other"}
+  ]
 }
 
 {#- === KV CACHE BOUNDARY — dynamic content below === -#}

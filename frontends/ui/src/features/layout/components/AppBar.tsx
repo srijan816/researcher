@@ -16,7 +16,7 @@
 'use client'
 
 import { type FC, memo, useCallback, useState } from 'react'
-import { Flex, Text, Button, Logo, Avatar, Popover, Divider } from '@/adapters/ui'
+import { Flex, Text, Button, Avatar, Popover, Divider } from '@/adapters/ui'
 import { Menu, Globe, Settings, Book, Lock, Logout, ChevronRight, Info } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
 
@@ -35,8 +35,6 @@ interface AppBarProps {
   }
   /** Callback when a new session is requested */
   onNewSession?: () => void
-  /** Disable creating a new session while shallow research/HITL is active */
-  isNewSessionDisabled?: boolean
   /** Callback when sign in is clicked */
   onSignIn?: () => void
   /** Callback when sign out is clicked */
@@ -53,46 +51,60 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
   authRequired = false,
   user,
   onNewSession,
-  isNewSessionDisabled = false,
   onSignIn,
   onSignOut,
 }) {
   const toggleSessionsPanel = useLayoutStore((s) => s.toggleSessionsPanel)
+  const isSessionsPanelOpen = useLayoutStore((s) => s.isSessionsPanelOpen)
+  const setSessionsPanelOpen = useLayoutStore((s) => s.setSessionsPanelOpen)
+  const rightPanel = useLayoutStore((s) => s.rightPanel)
+  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
+  const closeRightPanel = useLayoutStore((s) => s.closeRightPanel)
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
 
   const handleMenuClick = useCallback(() => {
     if (!isAuthenticated) return
+    if (!isSessionsPanelOpen) {
+      closeRightPanel()
+    }
     toggleSessionsPanel()
-  }, [toggleSessionsPanel, isAuthenticated])
+  }, [closeRightPanel, isAuthenticated, isSessionsPanelOpen, toggleSessionsPanel])
 
   const handleAddSourcesClick = useCallback(() => {
     if (!isAuthenticated) return
     const { rightPanel, closeRightPanel, openRightPanel } = useLayoutStore.getState()
+    setSessionsPanelOpen(false)
     if (rightPanel === 'data-sources') {
       closeRightPanel()
     } else {
       openRightPanel('data-sources')
     }
-  }, [isAuthenticated])
+  }, [isAuthenticated, setSessionsPanelOpen])
 
   const handleSettingsClick = useCallback(() => {
     if (!isAuthenticated) return
     const { rightPanel, closeRightPanel, openRightPanel } = useLayoutStore.getState()
+    setSessionsPanelOpen(false)
     if (rightPanel === 'settings') {
       closeRightPanel()
     } else {
       openRightPanel('settings')
     }
-  }, [isAuthenticated])
+  }, [isAuthenticated, setSessionsPanelOpen])
 
   const handleDocsClick = useCallback(() => {
-    window.open('https://github.com/NVIDIA-AI-Blueprints/aiq', '_blank')
-  }, [])
+    setSessionsPanelOpen(false)
+    if (rightPanel === 'docs') {
+      closeRightPanel()
+    } else {
+      openRightPanel('docs')
+    }
+  }, [rightPanel, openRightPanel, closeRightPanel, setSessionsPanelOpen])
 
   const handleNewSessionClick = useCallback(() => {
-    if (!isAuthenticated || isNewSessionDisabled) return
+    if (!isAuthenticated) return
     onNewSession?.()
-  }, [isAuthenticated, isNewSessionDisabled, onNewSession])
+  }, [isAuthenticated, onNewSession])
 
   const handleSignOut = useCallback(() => {
     setIsUserMenuOpen(false)
@@ -100,27 +112,26 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
   }, [onSignOut])
 
   return (
-    <header className="border-b border-base">
-      <Flex align="center" justify="between" className="h-[var(--header-height)] gap-4 px-4">
+    <header className="deep-appbar shrink-0 border-b border-base bg-surface-base">
+      <Flex align="center" justify="between" className="h-[var(--header-height)] min-w-0 gap-1 px-2 sm:gap-4 sm:px-4">
         {/* Left section: New session button + Sessions toggle */}
         <Flex align="center" gap="2" className="min-w-0 flex-1">
           <Button
             kind="tertiary"
             size="small"
             onClick={handleNewSessionClick}
-            disabled={!isAuthenticated || isNewSessionDisabled}
+            disabled={!isAuthenticated}
             aria-label="Create new session"
-            title={
-              isNewSessionDisabled
-                ? 'Cannot create new session while shallow research is active'
-                : 'Create new session'
-            }
+            title="Create new session"
+            className="shrink-0"
           >
             <Flex align="center" gap="density-lg">
-              <Logo kind="logo-only" size="small" />
+              <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#20808d] text-sm font-semibold text-white">
+                D
+              </span>
 
-              <Text kind="label/semibold/lg" className="text-primary whitespace-nowrap">
-                AI-Q
+              <Text kind="label/semibold/lg" className="hidden whitespace-nowrap text-primary sm:block">
+                Deep Research
               </Text>
             </Flex>
           </Button>
@@ -132,10 +143,12 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
             disabled={!isAuthenticated}
             aria-label="Toggle sessions sidebar"
             title="Toggle sessions sidebar"
+            className="shrink-0"
           >
             <Flex align="center" gap="1">
               <Menu className="h-4 w-4" />
-              <Text kind="label/regular/md">Sessions</Text>
+              <Text kind="label/regular/md" className="inline sm:hidden">History</Text>
+              <Text kind="label/regular/md" className="hidden sm:inline">Sessions</Text>
             </Flex>
           </Button>
 
@@ -152,7 +165,7 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
         </Flex>
 
         {/* Right section: Actions + User */}
-        <Flex align="center" gap="2" className="shrink-0">
+        <Flex align="center" gap="1" className="shrink-0 sm:gap-2">
           <Button
             kind="tertiary"
             size="small"
@@ -163,7 +176,7 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
           >
             <Flex align="center" gap="1">
               <Globe className="h-4 w-4" />
-              <Text kind="label/regular/md">Data Sources</Text>
+              <Text kind="label/regular/md" className="hidden sm:inline">Data Sources</Text>
             </Flex>
           </Button>
 
@@ -177,7 +190,7 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
           >
             <Flex align="center" gap="1">
               <Settings className="h-4 w-4" />
-              <Text kind="label/regular/md">Settings</Text>
+              <Text kind="label/regular/md" className="hidden sm:inline">Settings</Text>
             </Flex>
           </Button>
 
@@ -190,8 +203,8 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
           >
             <Flex align="center" gap="1">
               <Book className="h-4 w-4" />
-              <Text kind="label/regular/md">Docs</Text>
-              <ChevronRight className="h-3 w-3 -rotate-45" />
+              <Text kind="label/regular/md" className="hidden sm:inline">Docs</Text>
+              <ChevronRight className="hidden h-3 w-3 -rotate-45 sm:block" />
             </Flex>
           </Button>
 
@@ -209,7 +222,7 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
                 size="small"
                 aria-label="Default User - Authentication Not Configured"
                 title="Default User set. Authentication Not Configured."
-                className="ml-2"
+                className="sm:ml-2"
               >
                 <Avatar size="small" fallback="D" />
               </Button>
@@ -227,7 +240,7 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
                 size="small"
                 aria-label={`User menu for ${user?.name || user?.email || 'User'}`}
                 title="User menu"
-                className="ml-2"
+                className="sm:ml-2"
               >
                 <Avatar
                   size="small"
@@ -241,9 +254,9 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
               kind="primary"
               size="small"
               onClick={onSignIn}
-              aria-label="Sign in with NVIDIA SSO"
-              title="Sign in with NVIDIA SSO"
-              className="ml-2 bg-[#76b900] hover:bg-[#5a8f00]"
+              aria-label="Sign in"
+              title="Sign in"
+              className="sm:ml-2 bg-[#20808d] hover:bg-[#155e69]"
             >
               <Flex align="center" gap="1">
                 <Lock className="h-4 w-4" />

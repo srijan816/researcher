@@ -244,6 +244,85 @@ class TestChatResearcherAgent:
         assert result is not None
 
     @pytest.mark.asyncio
+    async def test_selected_shallow_mode_routes_to_shallow_research(
+        self,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        """Explicit shallow mode should not be promoted by classifier output."""
+        calls = {"shallow": 0, "deep": 0}
+
+        async def classifier_says_deep(state):
+            return {
+                "user_intent": IntentResult(intent="research", raw=None),
+                "depth_decision": DepthDecision(decision="deep", raw_reasoning="Complex"),
+            }
+
+        async def shallow(state_input):
+            calls["shallow"] += 1
+            result = MagicMock()
+            result.messages = list(state_input.messages) + [AIMessage(content="Shallow answer")]
+            return result
+
+        async def deep(state):
+            calls["deep"] += 1
+            return await mock_deep_research(state)
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=classifier_says_deep,
+            shallow_research_fn=shallow,
+            deep_research_fn=deep,
+            clarifier_fn=mock_clarifier,
+            enable_escalation=False,
+        )
+
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="What is CUDA?")],
+            research_depth="shallow",
+        )
+        result = await agent.run(state, thread_id="test-thread")
+
+        assert result is not None
+        assert calls == {"shallow": 1, "deep": 0}
+
+    @pytest.mark.asyncio
+    async def test_selected_deeper_mode_routes_to_deep_research(
+        self,
+        mock_intent_classifier,
+        mock_shallow_research,
+        mock_clarifier,
+    ):
+        """Explicit deeper/deep modes should enter the deep workflow."""
+        calls = {"shallow": 0, "deep": 0}
+
+        async def shallow(state_input):
+            calls["shallow"] += 1
+            return await mock_shallow_research(state_input)
+
+        async def deep(state):
+            calls["deep"] += 1
+            result = MagicMock()
+            result.messages = list(state.messages) + [AIMessage(content="Deep answer")]
+            return result
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=mock_intent_classifier,
+            shallow_research_fn=shallow,
+            deep_research_fn=deep,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+        )
+
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Best way to live in the age of AI")],
+            research_depth="deeper",
+        )
+        result = await agent.run(state, thread_id="test-thread")
+
+        assert result is not None
+        assert calls == {"shallow": 0, "deep": 1}
+
+    @pytest.mark.asyncio
     async def test_run_with_empty_messages(
         self,
         mock_intent_classifier,

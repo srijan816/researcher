@@ -27,6 +27,10 @@ MANIFEST
 venv/
 ENV/
 env/
+node_modules/
+.next/
+frontends/ui/.next/
+*.tsbuildinfo
 
 # IDE
 .vscode/
@@ -65,11 +69,20 @@ htmlcov/
 *.db
 *.sqlite
 *.db-*
+data/kokoro-models/
+data/scrape_artifacts/
+latest_checkpoint.blob
+recovered_report_*.md
 
 # Temporary files
 tmp/
 temp/
+.tmp/
 *.tmp
+
+# Local runtime/service state
+.deep-research-runtime/
+research.genalphai.com.conf
 
 
 # ============================================================================

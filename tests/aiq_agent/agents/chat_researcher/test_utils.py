@@ -23,6 +23,8 @@ from langchain_core.messages import SystemMessage
 
 from aiq_agent.agents.chat_researcher.utils import _extract_query_and_sources
 from aiq_agent.agents.chat_researcher.utils import _extract_query_from_text
+from aiq_agent.agents.chat_researcher.utils import _extract_query_sources_and_force_deep
+from aiq_agent.agents.chat_researcher.utils import _extract_query_sources_force_depth
 from aiq_agent.agents.chat_researcher.utils import _extract_text_from_message
 from aiq_agent.agents.chat_researcher.utils import trim_message_history
 
@@ -196,3 +198,42 @@ class TestExtractQueryAndSources:
         query, sources = _extract_query_and_sources("Plain query string")
         assert query == "Plain query string"
         assert sources is None
+
+    def test_extract_force_deep_flag_from_json_text(self):
+        """Test extracting the force-deep flag from the UI payload."""
+        payload = {
+            "content": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": '{"query": "NVDA analysis", "data_sources": ["web"], "force_deep_research": true}',
+                    }
+                ],
+            }
+        }
+
+        query, sources, force_deep = _extract_query_sources_and_force_deep(payload)
+
+        assert query == "NVDA analysis"
+        assert sources == ["web"]
+        assert force_deep is True
+
+    def test_extract_research_depth_from_json_text(self):
+        """Test extracting the research-depth tier from the UI payload."""
+        payload = {
+            "content": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": '{"query": "AI model pricing", "research_depth": "deep"}',
+                    }
+                ],
+            }
+        }
+
+        query, sources, force_deep, research_depth = _extract_query_sources_force_depth(payload)
+
+        assert query == "AI model pricing"
+        assert sources is None
+        assert force_deep is False
+        assert research_depth == "deep"

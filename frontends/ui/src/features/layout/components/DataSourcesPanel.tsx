@@ -81,7 +81,7 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
       name: source.name,
       description: source.description ?? '',
       category: source.category ?? 'enterprise',
-      defaultEnabled: true,
+      defaultEnabled: source.default_enabled ?? source.id === 'web_search',
       requiresAuth: source.requires_auth ?? false,
     }))
   }, [availableDataSources])
@@ -152,7 +152,7 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
 
   return (
     <SidePanel
-      className="bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[406px] rounded-l-2xl"
+      className="bg-surface-base top-[var(--header-height)] h-[calc(100dvh-var(--header-height))] w-screen max-w-none rounded-none sm:max-w-[406px] sm:rounded-l-2xl"
       open={isOpen}
       onOpenChange={handleOpenChange}
       side="right"

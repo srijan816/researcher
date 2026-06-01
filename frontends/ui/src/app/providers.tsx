@@ -16,10 +16,11 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { SessionProvider } from 'next-auth/react'
 import { ThemeProvider } from '@/adapters/ui'
+import { listConversationSnapshots, listJobs, syncConversationSnapshots } from '@/adapters/api'
+import { useAuth } from '@/adapters/auth'
 import { AppConfigProvider, type AppConfig } from '@/shared/context'
 import { useLayoutStore } from '@/features/layout'
 import { useChatStore } from '@/features/chat/store'
-import type { ThemeMode } from '@/features/layout'
 
 interface ProvidersProps {
   children: ReactNode
@@ -32,7 +33,7 @@ interface ProvidersProps {
  * This ensures theme changes happen without remounting the component tree.
  * Defers application until after hydration to prevent SSR mismatches.
  */
-const useThemeEffect = (theme: ThemeMode): void => {
+const useThemeEffect = (): void => {
   const [mounted, setMounted] = useState(false)
 
   // Mark as mounted after first render (client-side only)
@@ -48,25 +49,8 @@ const useThemeEffect = (theme: ThemeMode): void => {
 
     // Remove existing theme classes
     root.classList.remove('nv-light', 'nv-dark')
-
-    if (theme === 'system') {
-      // Check system preference
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-      root.classList.add(prefersDark ? 'nv-dark' : 'nv-light')
-
-      // Listen for system theme changes
-      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-      const handleChange = (e: MediaQueryListEvent): void => {
-        root.classList.remove('nv-light', 'nv-dark')
-        root.classList.add(e.matches ? 'nv-dark' : 'nv-light')
-      }
-      mediaQuery.addEventListener('change', handleChange)
-      return () => mediaQuery.removeEventListener('change', handleChange)
-    } else {
-      // Apply explicit theme
-      root.classList.add(theme === 'dark' ? 'nv-dark' : 'nv-light')
-    }
-  }, [theme, mounted])
+    root.classList.add('nv-dark')
+  }, [mounted])
 }
 
 /**
@@ -105,10 +89,12 @@ const useDataSourceSessionRestore = (): void => {
     if (!conversation) return
 
     const savedIds = conversation.enabledDataSourceIds
-    if (savedIds) {
+    if (savedIds && savedIds.length > 0) {
       const availableIds = new Set(availableDataSources.map((s) => s.id))
       const validIds = savedIds.filter((id) => availableIds.has(id))
-      setEnabledDataSources(validIds)
+      if (validIds.length > 0) {
+        setEnabledDataSources(validIds)
+      }
     }
 
     restoredRef.current = true
@@ -121,10 +107,8 @@ const useDataSourceSessionRestore = (): void => {
  * Uses defer prop to prevent hydration mismatches.
  */
 const ThemeWrapper = ({ children }: { children: ReactNode }): ReactNode => {
-  const theme = useLayoutStore((state) => state.theme)
-
-  // Apply theme classes directly to document
-  useThemeEffect(theme)
+  // Apply the fixed dark theme directly to document
+  useThemeEffect()
 
   // Initialize data sources
   useDataSourcesInit()
@@ -133,7 +117,7 @@ const ThemeWrapper = ({ children }: { children: ReactNode }): ReactNode => {
   useDataSourceSessionRestore()
 
   return (
-    <ThemeProvider theme={theme} global defer>
+    <ThemeProvider theme="dark" global defer>
       {children}
     </ThemeProvider>
   )
@@ -147,14 +131,102 @@ const ThemeWrapper = ({ children }: { children: ReactNode }): ReactNode => {
  */
 const DeepResearchRestorer = ({ children }: { children: ReactNode }): ReactNode => {
   const [mounted, setMounted] = useState(false)
+  const { user, isAuthenticated, isLoading: isAuthLoading, authRequired, idToken } = useAuth()
+  const setCurrentUser = useChatStore((state) => state.setCurrentUser)
+  const syncResearchHistory = useChatStore((state) => state.syncResearchHistory)
+  const mergeServerConversations = useChatStore((state) => state.mergeServerConversations)
   const reconnectToActiveJob = useChatStore((state) => state.reconnectToActiveJob)
   const cleanupOrphanedStartingBanners = useChatStore((state) => state.cleanupOrphanedStartingBanners)
   const currentConversationId = useChatStore((state) => state.currentConversation?.id)
   const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)
+  const conversations = useChatStore((state) => state.conversations)
 
   useEffect(() => {
     setMounted(true)
   }, [])
+
+  useEffect(() => {
+    if (!mounted || isAuthLoading || (authRequired && !isAuthenticated)) return
+
+    const userId = user?.id ?? 'default-user'
+    let cancelled = false
+    let inFlight = false
+
+    const syncLimit = 50
+    const syncIntervalMs = 45_000
+
+    const isPageVisible = (): boolean =>
+      typeof document === 'undefined' ? true : document.visibilityState !== 'hidden'
+
+    const sync = async () => {
+      if (cancelled || inFlight || !isPageVisible()) return
+      inFlight = true
+      try {
+        if (useChatStore.getState().currentUserId !== userId) {
+          setCurrentUser(userId)
+        }
+        const [conversationResponse, response] = await Promise.all([
+          listConversationSnapshots(),
+          listJobs(idToken || undefined, syncLimit),
+        ])
+        if (!cancelled) {
+          mergeServerConversations(conversationResponse.conversations)
+          syncResearchHistory(response.jobs)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('Failed to sync research history:', error)
+        }
+      } finally {
+        inFlight = false
+      }
+    }
+
+    sync()
+    const intervalId = setInterval(() => {
+      void sync()
+    }, syncIntervalMs)
+    const visibilityHandler = () => {
+      if (document.visibilityState === 'visible') {
+        void sync()
+      }
+    }
+    document.addEventListener('visibilitychange', visibilityHandler)
+
+    return () => {
+      cancelled = true
+      clearInterval(intervalId)
+      document.removeEventListener('visibilitychange', visibilityHandler)
+    }
+  }, [
+    mounted,
+    isAuthLoading,
+    authRequired,
+    isAuthenticated,
+    user?.id,
+    idToken,
+    setCurrentUser,
+    syncResearchHistory,
+    mergeServerConversations,
+  ])
+
+  useEffect(() => {
+    if (!mounted || isAuthLoading || (authRequired && !isAuthenticated)) return
+    if (!useChatStore.getState().currentUserId) return
+
+    const timeoutId = window.setTimeout(() => {
+      const state = useChatStore.getState()
+      const userConversations = state.currentUserId
+        ? state.conversations.filter((conversation) => conversation.userId === state.currentUserId)
+        : []
+      if (userConversations.length === 0) return
+      syncConversationSnapshots(userConversations).catch((error) => {
+        console.warn('Failed to persist conversation snapshots:', error)
+      })
+    }, 1200)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [mounted, isAuthLoading, authRequired, isAuthenticated, conversations])
 
   useEffect(() => {
     if (!mounted || !currentConversationId || isDeepResearchStreaming) return

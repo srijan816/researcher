@@ -35,6 +35,12 @@ import { isUnavailableDeepResearchJobError } from '../lib/deep-research-errors'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
 
+const parseEventDate = (timestamp?: string): Date => {
+  if (!timestamp) return new Date()
+  const parsed = new Date(timestamp)
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed
+}
+
 export interface LoadJobDataOptions {
   /**
    * Whether to stream the full job to get all artifacts (citations, todos, tool calls, etc.)
@@ -123,6 +129,26 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
     setError(null)
   }, [])
 
+  const patchReportIntoConversationMessage = useCallback(
+    (jobId: string, reportContent: string): void => {
+      const state = useChatStore.getState()
+      const conversation = state.currentConversation
+      if (!conversation) return
+
+      const trackingMessage = [...conversation.messages]
+        .reverse()
+        .find((message) => message.messageType === 'agent_response' && message.deepResearchJobId === jobId)
+
+      if (!trackingMessage?.id) return
+
+      patchConversationMessage(conversation.id, trackingMessage.id, {
+        reportContent,
+        showViewReport: true,
+      })
+    },
+    [patchConversationMessage]
+  )
+
   const syncMissingJobToFailureState = useCallback(
     (jobId: string): void => {
       const state = useChatStore.getState()
@@ -167,6 +193,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
 
       if (response.has_report && response.report) {
         setReportContent(response.report)
+        patchReportIntoConversationMessage(jobId, response.report)
         return true
       }
 
@@ -201,6 +228,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
           outputs?.forEach((output: { type: string; content: string }) => {
             if (output.type === 'report' || output.type === 'output') {
               setReportContent(output.content)
+              patchReportIntoConversationMessage(jobId, output.content)
             }
           })
         }
@@ -208,7 +236,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         console.warn('Failed to load job state:', stateError)
       }
     },
-    [idToken, addDeepResearchToolCall, completeDeepResearchToolCall, setReportContent]
+    [idToken, addDeepResearchToolCall, completeDeepResearchToolCall, patchReportIntoConversationMessage, setReportContent]
   )
 
   /**
@@ -224,9 +252,10 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
 
       if (reportResult.status === 'fulfilled' && reportResult.value.has_report && reportResult.value.report) {
         setReportContent(reportResult.value.report)
+        patchReportIntoConversationMessage(jobId, reportResult.value.report)
       }
     },
-    [idToken, loadJobState, setReportContent]
+    [idToken, loadJobState, patchReportIntoConversationMessage, setReportContent]
   )
 
   /**
@@ -245,12 +274,12 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
 
         // Accumulation buffer — everything stays here until the stream ends
         const buffer = {
-          agents: new Map<string, { name: string; input?: string; output?: string }>(),
-          llmSteps: new Map<string, { name: string; workflow?: string; content: string; thinking?: string; usage?: { input_tokens: number; output_tokens: number } }>(),
-          toolCalls: new Map<string, { name: string; input?: Record<string, unknown>; output?: string; workflow?: string; agentId?: string }>(),
+          agents: new Map<string, { name: string; input?: string; output?: string; startedAt?: string; completedAt?: string }>(),
+          llmSteps: new Map<string, { name: string; workflow?: string; content: string; thinking?: string; usage?: { input_tokens: number; output_tokens: number }; timestamp?: string }>(),
+          toolCalls: new Map<string, { name: string; input?: Record<string, unknown>; output?: string; workflow?: string; agentId?: string; timestamp?: string }>(),
           todos: null as TodoItem[] | null,
-          citations: [] as Array<{ url: string; content: string; isCited: boolean }>,
-          files: new Map<string, string>(),  // filename -> latest content (deduped)
+          citations: [] as Array<{ url: string; content: string; isCited: boolean; timestamp?: string }>,
+          files: new Map<string, { content: string; timestamp?: string }>(),  // filename -> latest content (deduped)
           reportContent: null as string | null,
         }
 
@@ -258,17 +287,15 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
          * Convert buffer to store-compatible arrays and write everything
          * in a single useChatStore.setState() call.
          */
-        const commitToStore = (): void => {
-          const now = new Date()
-
+        const commitToStore = (): boolean => {
           const agents = Array.from(buffer.agents.entries()).map(([id, a]) => ({
             id,
             name: a.name,
             input: a.input,
             output: a.output,
             status: 'complete' as const,
-            startedAt: now,
-            completedAt: now,
+            startedAt: parseEventDate(a.startedAt),
+            completedAt: parseEventDate(a.completedAt ?? a.startedAt),
           }))
 
           const llmSteps = Array.from(buffer.llmSteps.entries()).map(([id, s]) => ({
@@ -279,7 +306,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             thinking: s.thinking,
             usage: s.usage,
             isComplete: true,
-            timestamp: now,
+            timestamp: parseEventDate(s.timestamp),
           }))
 
           const toolCalls = Array.from(buffer.toolCalls.entries()).map(([id, t]) => ({
@@ -290,7 +317,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             workflow: t.workflow,
             agentId: t.agentId,
             status: 'complete' as const,
-            timestamp: now,
+            timestamp: parseEventDate(t.timestamp),
           }))
 
           const citations = buffer.citations.map((c, idx) => ({
@@ -298,14 +325,14 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             url: c.url,
             content: c.content,
             isCited: c.isCited,
-            timestamp: now,
+            timestamp: parseEventDate(c.timestamp),
           }))
 
-          const files = Array.from(buffer.files.entries()).map(([filename, content], idx) => ({
+          const files = Array.from(buffer.files.entries()).map(([filename, file], idx) => ({
             id: `file-${idx}`,
             filename,
-            content,
-            timestamp: now,
+            content: file.content,
+            timestamp: parseEventDate(file.timestamp),
           }))
 
           const todos = buffer.todos
@@ -326,6 +353,8 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             ...(files.length > 0 && { deepResearchFiles: files }),
             currentStatus: buffer.reportContent !== null ? 'complete' : state.currentStatus,
           }))
+
+          return Boolean(buffer.reportContent?.trim())
         }
 
         if (clientRef.current) {
@@ -345,9 +374,9 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               if (status === 'success' || status === 'failure' || status === 'interrupted') {
                 clientRef.current?.disconnect()
                 clientRef.current = null
-                commitToStore()
+                const hasReport = commitToStore()
 
-                if (status === 'failure' && statusError) {
+                if (status === 'failure' && statusError && !hasReport) {
                   reject(new Error(statusError))
                 } else {
                   resolve()
@@ -355,28 +384,30 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               }
             },
 
-            onWorkflowStart: (name, input, _eventId, agentId) => {
+            onWorkflowStart: (name, input, _eventId, agentId, timestamp) => {
               if (!agentId) return
               if (!buffer.agents.has(agentId)) {
                 buffer.agents.set(agentId, {
                   name,
                   input: input ? (typeof input === 'string' ? input : JSON.stringify(input)) : undefined,
+                  startedAt: timestamp,
                 })
               }
             },
 
-            onWorkflowEnd: (_name, output, _eventId, agentId) => {
+            onWorkflowEnd: (_name, output, _eventId, agentId, timestamp) => {
               if (!agentId) return
               const agent = buffer.agents.get(agentId)
               if (agent) {
                 agent.output = output ? (typeof output === 'string' ? output : JSON.stringify(output)) : undefined
+                agent.completedAt = timestamp
               }
             },
 
-            onLLMStart: (name, workflow) => {
+            onLLMStart: (name, workflow, timestamp) => {
               const uniqueId = `llm-${idCounter++}`
               activeLLMStack.push(uniqueId)
-              buffer.llmSteps.set(uniqueId, { name, workflow, content: '' })
+              buffer.llmSteps.set(uniqueId, { name, workflow, content: '', timestamp })
             },
 
             onLLMChunk: (chunk) => {
@@ -400,10 +431,10 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               }
             },
 
-            onToolStart: (name, input, workflow, _eventId, agentId) => {
+            onToolStart: (name, input, workflow, _eventId, agentId, timestamp) => {
               if (name === 'task') return
               const uniqueId = `tool-${idCounter++}`
-              buffer.toolCalls.set(uniqueId, { name, input, workflow, agentId })
+              buffer.toolCalls.set(uniqueId, { name, input, workflow, agentId, timestamp })
               let stack = activeToolStacks.get(name)
               if (!stack) {
                 stack = []
@@ -429,12 +460,15 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               buffer.todos = todos
             },
 
-            onCitationUpdate: (url, content, isCited) => {
-              buffer.citations.push({ url, content, isCited: isCited ?? false })
+            onCitationUpdate: (url, content, isCited, timestamp) => {
+              buffer.citations.push({ url, content, isCited: isCited ?? false, timestamp })
             },
 
-            onFileUpdate: (filename, content) => {
-              buffer.files.set(filename, content)
+            onFileUpdate: (filename, content, timestamp) => {
+              buffer.files.set(filename, { content, timestamp })
+              if (filename.endsWith('report.md')) {
+                buffer.reportContent = content
+              }
             },
 
             onOutputUpdate: (content, outputCategory) => {
@@ -452,8 +486,12 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
 
             onError: (err) => {
               console.error('Stream error while loading job data:', err)
-              commitToStore()
-              reject(err)
+              const hasReport = commitToStore()
+              if (hasReport) {
+                resolve()
+              } else {
+                reject(err)
+              }
             },
 
             onDisconnect: () => {

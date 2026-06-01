@@ -44,9 +44,11 @@ export function useSessionUrl({ isAuthenticated }: UseSessionUrlOptions): UseSes
   })))
   const selectConversation = useChatStore((s) => s.selectConversation)
   const getUserConversations = useChatStore((s) => s.getUserConversations)
+  const startNewSessionDraft = useChatStore((s) => s.startNewSessionDraft)
 
   // Track if we've done the initial URL sync to avoid duplicate effects
   const initialSyncDone = useRef(false)
+  const suppressUrlSync = useRef(false)
 
   // Read session from URL on mount and select it
   // Wait for both isAuthenticated AND currentUserId to be set (user ID is synced by chat hooks)
@@ -55,6 +57,8 @@ export function useSessionUrl({ isAuthenticated }: UseSessionUrlOptions): UseSes
 
     const sessionId = searchParams.get('session')
     if (!sessionId) {
+      suppressUrlSync.current = true
+      startNewSessionDraft()
       initialSyncDone.current = true
       return
     }
@@ -83,6 +87,7 @@ export function useSessionUrl({ isAuthenticated }: UseSessionUrlOptions): UseSes
     router,
     selectConversation,
     getUserConversations,
+    startNewSessionDraft,
   ])
 
   // Update URL when current conversation changes (but not on initial load)
@@ -91,6 +96,10 @@ export function useSessionUrl({ isAuthenticated }: UseSessionUrlOptions): UseSes
 
     const urlSessionId = searchParams.get('session')
     const currentSessionId = currentConversation?.id
+
+    if (suppressUrlSync.current) {
+      return
+    }
 
     // Only update if they're different
     if (currentSessionId && currentSessionId !== urlSessionId) {
@@ -109,6 +118,7 @@ export function useSessionUrl({ isAuthenticated }: UseSessionUrlOptions): UseSes
   // Manual URL update function
   const updateSessionUrl = useCallback(
     (sessionId: string | null) => {
+      suppressUrlSync.current = false
       const currentParams = searchParams?.toString() ?? ''
       const newParams = new URLSearchParams(currentParams)
 

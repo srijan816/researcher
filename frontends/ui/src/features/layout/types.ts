@@ -12,8 +12,11 @@ import type { DataSourceFromAPI } from '@/adapters/api'
 /** Theme mode options */
 export type ThemeMode = 'light' | 'dark' | 'system'
 
+/** Research source/depth tiers */
+export type ResearchDepth = 'shallow' | 'deeper' | 'deep'
+
 /** Panels that can be opened on the right side */
-export type RightPanelType = 'research' | 'data-sources' | 'settings' | null
+export type RightPanelType = 'research' | 'data-sources' | 'settings' | 'docs' | null
 
 /** Tabs within the Research panel */
 export type ResearchPanelTab = 'plan' | 'tasks' | 'thinking' | 'citations' | 'report'
@@ -33,6 +36,8 @@ export interface LayoutState {
   dataSourcesPanelTab: DataSourcesPanelTab
   /** IDs of enabled data sources (array for zustand serialization) */
   enabledDataSourceIds: string[]
+  /** Selected research source/depth tier */
+  researchDepth: ResearchDepth
   /** Current theme mode */
   theme: ThemeMode
   /** Dynamic data sources from API (null = not loaded yet) */
@@ -71,6 +76,8 @@ export interface LayoutActions {
   toggleDataSource: (id: string) => void
   /** Set all enabled data sources */
   setEnabledDataSources: (ids: string[]) => void
+  /** Set the research source/depth tier */
+  setResearchDepth: (depth: ResearchDepth) => void
   /** Set the theme mode */
   setTheme: (theme: ThemeMode) => void
   /** Fetch data sources from API. Only web_search is enabled by default */

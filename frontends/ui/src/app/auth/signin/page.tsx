@@ -10,13 +10,12 @@
 
 'use client'
 
-import { type ReactNode, Suspense, useEffect } from 'react'
+import { type ReactNode, Suspense, useEffect, useState } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { signIn } from 'next-auth/react'
-import { Flex, Text, Button, Card, Stack, Logo, Spinner } from '@/adapters/ui'
+import { Flex, Text, Button, Card, Stack, Spinner } from '@/adapters/ui'
 import { LoadingSpinner } from '@/adapters/ui/icons'
 import { useAppConfig } from '@/shared/context'
-import { StarfieldAnimation } from '@/shared/components/StarfieldAnimation'
 
 const DISCLAIMER_TEXT =
   'Disclaimer: AI models generate responses and outputs based on complex algorithms and machine learning techniques, and these responses or outputs may be inaccurate, harmful, biased, or indecent. By testing this model, you assume the risk of any harm caused by any response or output of the model. We may capture interaction analytics to improve the application experience. We will not retain your content, documents or output for analysis for training, but may retain it to enable session history. For more information visit the Docs page.'
@@ -29,6 +28,11 @@ const SignInContent = (): ReactNode => {
   const { authRequired, authProviderId } = useAppConfig()
   const searchParams = useSearchParams()
   const error = searchParams?.get('error') ?? null
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [rememberMe, setRememberMe] = useState(true)
+  const [localError, setLocalError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   // Redirect to home if auth is disabled - this page is not needed
   useEffect(() => {
@@ -46,8 +50,27 @@ const SignInContent = (): ReactNode => {
     )
   }
 
-  const handleSignIn = (): void => {
-    signIn(authProviderId, { callbackUrl: '/' })
+  const handleSignIn = async (): Promise<void> => {
+    if (authProviderId !== 'local-users') {
+      await signIn(authProviderId, { callbackUrl: '/' })
+      return
+    }
+
+    setIsSubmitting(true)
+    setLocalError(null)
+    const result = await signIn(authProviderId, {
+      username,
+      password,
+      remember_me: rememberMe ? 'true' : 'false',
+      redirect: false,
+      callbackUrl: '/',
+    })
+    setIsSubmitting(false)
+    if (result?.ok) {
+      router.replace('/')
+      return
+    }
+    setLocalError('Invalid username or password.')
   }
 
   // Map NextAuth error codes to user-friendly messages
@@ -64,19 +87,22 @@ const SignInContent = (): ReactNode => {
       OAuthAccountNotLinked: 'This account is linked to a different sign-in method.',
       SessionRequired: 'Please sign in to access this page.',
       Default: 'An authentication error occurred. Please try again.',
+      CredentialsSignin: 'Invalid username or password.',
     }
 
     return errorMessages[errorCode] || errorMessages.Default
   }
 
-  const errorMessage = getErrorMessage(error)
+  const errorMessage = localError || getErrorMessage(error)
 
   return (
     <Stack gap="6" align="center">
-      <Logo kind="horizontal" className="h-8" />
+      <span className="flex h-10 w-10 items-center justify-center rounded-md bg-[#20808d] text-lg font-semibold text-white">
+        D
+      </span>
 
       <Flex direction="col" gap="2" align="center">
-        <Text kind="title/lg">Sign in to AI-Q</Text>
+        <Text kind="title/lg">Sign in to Deep Research</Text>
         <Text kind="body/regular/md" className="text-secondary text-center">
           Sign in to continue
         </Text>
@@ -95,9 +121,61 @@ const SignInContent = (): ReactNode => {
         </Flex>
       )}
 
-      <Button kind="primary" size="large" onClick={handleSignIn} className="w-full">
-        Sign in
-      </Button>
+      {authProviderId === 'local-users' && (
+        <form
+          className="flex w-full flex-col gap-3"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void handleSignIn()
+          }}
+        >
+          <label className="flex flex-col gap-1">
+            <Text kind="label/regular/sm" className="text-subtle">Username</Text>
+            <input
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              autoComplete="username"
+              className="border-base bg-surface-raised text-primary h-11 rounded-md border px-3 text-base outline-none focus:border-accent"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <Text kind="label/regular/sm" className="text-subtle">Password</Text>
+            <input
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              type="password"
+              autoComplete="current-password"
+              className="border-base bg-surface-raised text-primary h-11 rounded-md border px-3 text-base outline-none focus:border-accent"
+            />
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              checked={rememberMe}
+              onChange={(event) => setRememberMe(event.target.checked)}
+              type="checkbox"
+              className="border-base text-accent h-4 w-4 rounded"
+            />
+            <Text kind="label/regular/sm" className="text-subtle">
+              Remember me on this device
+            </Text>
+          </label>
+          <Button
+            kind="primary"
+            size="large"
+            type="submit"
+            disabled={isSubmitting || !username.trim() || !password}
+            className="w-full"
+          >
+            Sign in
+          </Button>
+        </form>
+      )}
+
+      {authProviderId !== 'local-users' && (
+        <Button kind="primary" size="large" onClick={() => void handleSignIn()} className="w-full">
+          Sign in
+        </Button>
+      )}
 
       <Text kind="body/regular/sm" className="text-subtle text-center">
         By signing in, you agree to the terms of service and privacy policy.
@@ -117,13 +195,6 @@ const SignInPage = (): ReactNode => {
       justify="center"
       className="bg-surface-sunken relative min-h-screen p-8"
     >
-      {/* Starfield background */}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-30">
-        <div className="h-[600px] w-[600px]">
-          <StarfieldAnimation particleCount={250} maxRadius={250} rotationSpeed={0.001} />
-        </div>
-      </div>
-
       {/* Card content */}
       <Card className="relative z-10 w-full max-w-md p-6">
         <Suspense

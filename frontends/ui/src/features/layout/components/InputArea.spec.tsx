@@ -9,6 +9,7 @@ import { InputArea } from './InputArea'
 // Mock the chat hooks
 const mockSendMessage = vi.fn()
 const mockRespondToInteraction = vi.fn()
+const mockCancelDeepResearchJob = vi.fn()
 
 let mockIsDeepResearchStreaming = false
 let mockDeepResearchStatus: string | null = null
@@ -36,39 +37,55 @@ vi.mock('@/features/chat', () => ({
       ensureSession: vi.fn(() => 'session-1'),
       setRespondToInteractionFn: vi.fn(),
       deepResearchStatus: mockDeepResearchStatus,
+      deepResearchJobId: 'job-123',
       isDeepResearchStreaming: mockIsDeepResearchStreaming,
       deepResearchOwnerConversationId: mockDeepResearchOwnerConversationId,
     }
     return selector(state)
   }),
   useIsCurrentSessionBusy: vi.fn(() => false),
+  useCancelDeepResearchJob: vi.fn(() => ({
+    cancelDeepResearchJob: mockCancelDeepResearchJob,
+    isCancelling: false,
+  })),
 }))
 
 // Mock the layout store
 const mockOpenRightPanel = vi.fn()
 const mockSetDataSourcePanelTab = vi.fn()
-
-const mockCloseRightPanel = vi.fn()
-const mockSetDataSourcesPanelTab = vi.fn()
-
-const mockLayoutState = () => ({
-  openRightPanel: mockOpenRightPanel,
-  closeRightPanel: mockCloseRightPanel,
-  setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
-  setDataSourcePanelTab: mockSetDataSourcePanelTab,
-  enabledDataSourceIds: ['source-1', 'source-2'],
-  knowledgeLayerAvailable: true,
-  availableDataSources: [{ id: 'source-1' }, { id: 'source-2' }],
-  rightPanel: null as string | null,
-})
+const mockSetResearchDepth = vi.fn()
 
 vi.mock('../store', () => ({
   useLayoutStore: Object.assign(
-    vi.fn((selector?: (s: any) => any) => {
-      const state = mockLayoutState()
-      return selector ? selector(state) : state
+    vi.fn((selector?: (state: unknown) => unknown) => {
+      const state = {
+        rightPanel: null,
+        openRightPanel: mockOpenRightPanel,
+        closeRightPanel: vi.fn(),
+        setDataSourcesPanelTab: mockSetDataSourcePanelTab,
+        setDataSourcePanelTab: mockSetDataSourcePanelTab,
+        enabledDataSourceIds: ['source-1', 'source-2'],
+        knowledgeLayerAvailable: true,
+        availableDataSources: [{ id: 'source-1' }, { id: 'source-2' }],
+        researchDepth: 'deeper',
+        setResearchDepth: mockSetResearchDepth,
+      }
+      return typeof selector === 'function' ? selector(state) : state
     }),
-    { getState: () => mockLayoutState() }
+    {
+      getState: vi.fn(() => ({
+        rightPanel: null,
+        openRightPanel: mockOpenRightPanel,
+        closeRightPanel: vi.fn(),
+        setDataSourcesPanelTab: mockSetDataSourcePanelTab,
+        setDataSourcePanelTab: mockSetDataSourcePanelTab,
+        enabledDataSourceIds: ['source-1', 'source-2'],
+        knowledgeLayerAvailable: true,
+        availableDataSources: [{ id: 'source-1' }, { id: 'source-2' }],
+        researchDepth: 'deeper',
+        setResearchDepth: mockSetResearchDepth,
+      })),
+    }
   ),
 }))
 
@@ -144,6 +161,24 @@ describe('InputArea', () => {
 
     expect(screen.queryByText('Auto')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /query type/i })).not.toBeInTheDocument()
+  })
+
+  test('renders visible research mode controls', () => {
+    render(<InputArea isAuthenticated={true} />)
+
+    expect(screen.getByRole('group', { name: /research mode/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^research mode: shallow$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^research mode: deeper$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^research mode: deep$/i })).toBeInTheDocument()
+  })
+
+  test('updates selected research mode when a mode button is clicked', async () => {
+    const user = userEvent.setup()
+    render(<InputArea isAuthenticated={true} />)
+
+    await user.click(screen.getByRole('button', { name: /^research mode: shallow$/i }))
+
+    expect(mockSetResearchDepth).toHaveBeenCalledWith('shallow')
   })
 
   test('renders text area with default placeholder', () => {
@@ -262,9 +297,9 @@ describe('InputArea', () => {
     // Input disabled with "Please wait..." placeholder (isBusy is true)
     expect(screen.getByPlaceholderText('Please wait...')).toBeInTheDocument()
     expect(screen.getByRole('textbox')).toBeDisabled()
-    // Send button shows "Research in progress" tooltip via isResearchSessionInProgress
+    // Active research shows a visible cancel control.
     expect(
-      screen.getByRole('button', { name: /research in progress - please wait/i })
+      screen.getByRole('button', { name: /cancel current research/i })
     ).toBeInTheDocument()
   })
 
@@ -418,7 +453,7 @@ describe('InputArea', () => {
     ).toBeInTheDocument()
   })
 
-  test('shows research in progress send button when deep research is active and streaming', () => {
+  test('shows cancel button when deep research is active and streaming', () => {
     vi.mocked(useIsCurrentSessionBusy).mockReturnValue(true)
     mockIsDeepResearchStreaming = true
     mockDeepResearchStatus = 'running'
@@ -428,10 +463,24 @@ describe('InputArea', () => {
 
     // Input disabled with "Please wait..." placeholder (isBusy is true)
     expect(screen.getByPlaceholderText('Please wait...')).toBeInTheDocument()
-    // Send button shows research in progress tooltip
+    // Send is replaced with an active cancellation control.
     expect(
-      screen.getByRole('button', { name: /research in progress - please wait/i })
+      screen.getByRole('button', { name: /cancel current research/i })
     ).toBeInTheDocument()
+  })
+
+  test('cancels active deep research from the input bar', async () => {
+    const user = userEvent.setup()
+    vi.mocked(useIsCurrentSessionBusy).mockReturnValue(true)
+    mockIsDeepResearchStreaming = true
+    mockDeepResearchStatus = 'running'
+    mockDeepResearchOwnerConversationId = 'session-1'
+
+    render(<InputArea isAuthenticated={true} connectionMode="websocket" />)
+
+    await user.click(screen.getByRole('button', { name: /cancel current research/i }))
+
+    expect(mockCancelDeepResearchJob).toHaveBeenCalledWith('job-123')
   })
 
   test('does not allow sending when session is busy', () => {

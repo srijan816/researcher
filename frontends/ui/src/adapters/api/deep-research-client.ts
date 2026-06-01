@@ -20,6 +20,74 @@ import { apiConfig } from './config'
 /** Job status values */
 export type DeepResearchJobStatus = 'submitted' | 'running' | 'success' | 'failure' | 'interrupted'
 
+/** Backend-backed research history item. */
+export interface JobHistoryItem {
+  job_id: string
+  status: DeepResearchJobStatus
+  agent_type?: string | null
+  input?: string | null
+  title?: string | null
+  error?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  has_report: boolean
+  report_ready?: boolean
+  terminal?: boolean
+  poll_after_seconds?: number | null
+  message?: string | null
+  status_url?: string | null
+  report_url?: string | null
+  state_url?: string | null
+  stream_url?: string | null
+}
+
+/** Backend-backed research history response. */
+export interface JobHistoryResponse {
+  jobs: JobHistoryItem[]
+}
+
+/** Backend job status response. */
+export interface DeepResearchJobStatusResponse {
+  job_id: string
+  status: DeepResearchJobStatus
+  agent_type?: string | null
+  error: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  has_report?: boolean
+  report_ready?: boolean
+  terminal?: boolean
+  poll_after_seconds?: number | null
+  message?: string | null
+  status_url?: string | null
+  report_url?: string | null
+  state_url?: string | null
+  stream_url?: string | null
+}
+
+/** Backend final-report response. */
+export interface DeepResearchJobReportResponse {
+  job_id: string
+  has_report: boolean
+  report_ready?: boolean
+  terminal?: boolean
+  poll_after_seconds?: number | null
+  message?: string | null
+  status?: DeepResearchJobStatus
+  error?: string | null
+  content_type?: string
+  report: string | null
+  report_markdown?: string | null
+  status_url?: string | null
+  report_url?: string | null
+  state_url?: string | null
+  stream_url?: string | null
+  sources_found?: number | null
+  sources_cited?: number | null
+  found_urls?: string[] | null
+  cited_urls?: string[] | null
+}
+
 /** SSE event types from the deep research stream */
 export type DeepResearchEventType =
   | 'stream.start'
@@ -192,24 +260,25 @@ export interface DeepResearchCallbacks {
   /** Called on job status updates */
   onJobStatus?: (status: DeepResearchJobStatus, error?: string) => void
   /** Called on workflow events */
-  onWorkflowStart?: (name: string, input?: string, eventId?: string, agentId?: string) => void
-  onWorkflowEnd?: (name: string, output?: string, eventId?: string, agentId?: string) => void
+  onWorkflowStart?: (name: string, input?: string, eventId?: string, agentId?: string, timestamp?: string) => void
+  onWorkflowEnd?: (name: string, output?: string, eventId?: string, agentId?: string, timestamp?: string) => void
   /** Called on LLM events */
-  onLLMStart?: (name: string, workflow?: string) => void
+  onLLMStart?: (name: string, workflow?: string, timestamp?: string) => void
   onLLMChunk?: (chunk: string) => void
   onLLMEnd?: (
     output: string,
     thinking?: string,
-    usage?: { input_tokens: number; output_tokens: number }
+    usage?: { input_tokens: number; output_tokens: number },
+    timestamp?: string
   ) => void
   /** Called on tool events */
-  onToolStart?: (name: string, input?: Record<string, unknown>, workflow?: string, eventId?: string, agentId?: string) => void
-  onToolEnd?: (name: string, output?: string, eventId?: string, agentId?: string) => void
+  onToolStart?: (name: string, input?: Record<string, unknown>, workflow?: string, eventId?: string, agentId?: string, timestamp?: string) => void
+  onToolEnd?: (name: string, output?: string, eventId?: string, agentId?: string, timestamp?: string) => void
   /** Called on artifact updates */
-  onTodoUpdate?: (todos: TodoItem[], workflow?: string) => void
-  onCitationUpdate?: (url: string, content: string, isCited?: boolean) => void
-  onFileUpdate?: (filename: string, content: string) => void
-  onOutputUpdate?: (content: string, outputCategory?: string, workflow?: string) => void
+  onTodoUpdate?: (todos: TodoItem[], workflow?: string, timestamp?: string) => void
+  onCitationUpdate?: (url: string, content: string, isCited?: boolean, timestamp?: string) => void
+  onFileUpdate?: (filename: string, content: string, timestamp?: string) => void
+  onOutputUpdate?: (content: string, outputCategory?: string, workflow?: string, timestamp?: string) => void
   /** Called on job heartbeat (confirms job is alive during long operations) */
   onHeartbeat?: (uptimeSeconds: number) => void
   /** Called when job completes successfully */
@@ -223,6 +292,60 @@ export interface DeepResearchCallbacks {
 // ============================================================
 // Utilities
 // ============================================================
+
+const TEXTISH_FIELDS = [
+  'text',
+  'content',
+  'thinking',
+  'reasoning_content',
+  'reasoning',
+  'delta',
+]
+
+/**
+ * Convert provider-specific streaming payloads into render-safe text.
+ *
+ * MiniMax M3's Anthropic-compatible stream can deliver content blocks such as:
+ *   [{ type: "thinking", thinking: "...", index: 0 }]
+ *   [{ type: "thinking", signature: "...", index: 0 }]
+ *   [{ type: "tool_use", name: "read_file", input: {}, index: 1 }]
+ *
+ * React can only render primitives. This adapter keeps useful text/reasoning
+ * blocks and drops protocol-only blocks that are already represented by tool
+ * start/end events elsewhere in the UI.
+ */
+export const coerceSSEText = (value: unknown): string => {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+
+  if (Array.isArray(value)) {
+    return value.map(coerceSSEText).filter(Boolean).join('')
+  }
+
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    const blockType = typeof record.type === 'string' ? record.type : undefined
+
+    if (blockType === 'tool_use' || blockType === 'input_json_delta') return ''
+    if (blockType === 'thinking' && typeof record.signature === 'string' && !record.thinking) return ''
+
+    for (const field of TEXTISH_FIELDS) {
+      if (field in record) {
+        const text = coerceSSEText(record[field])
+        if (text) return text
+      }
+    }
+
+    try {
+      return JSON.stringify(record)
+    } catch {
+      return String(value)
+    }
+  }
+
+  return String(value)
+}
 
 /**
  * Normalize tool input from the backend SSE stream.
@@ -404,52 +527,51 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
         } else if (statusData.status === 'failure' || statusData.status === 'interrupted') {
           isTerminated = true
           eventSource?.close()
-          // Only call onError for actual failures, not user-initiated cancellations
-          const isUserCancelled = statusData.status === 'interrupted' && statusData.error?.toLowerCase().includes('cancelled by user')
-          if (!isUserCancelled && statusData.error) {
-            callbacks.onError?.(new Error(statusData.error || `Job ${statusData.status}`))
-          }
+          // Terminal job failures are already handled by onJobStatus. Reserve
+          // onError for transport/parser failures so the UI does not report a
+          // clean job.status event as an SSE exception.
         }
         break
       }
 
       case 'workflow.start': {
         // workflow events have nested structure: { id, name, timestamp, data: { input }, metadata: { agent_id } }
-        const workflowData = rawData as { id?: string; name: string; data?: { input?: string }; metadata?: { agent_id?: string } }
-        callbacks.onWorkflowStart?.(workflowData.name, workflowData.data?.input, workflowData.id, workflowData.metadata?.agent_id)
+        const workflowData = rawData as { id?: string; name: string; timestamp?: string; data?: { input?: unknown }; metadata?: { agent_id?: string } }
+        callbacks.onWorkflowStart?.(workflowData.name, coerceSSEText(workflowData.data?.input), workflowData.id, workflowData.metadata?.agent_id, workflowData.timestamp)
         break
       }
 
       case 'workflow.end': {
-        const workflowData = rawData as { id?: string; name: string; data?: { output?: string }; metadata?: { agent_id?: string } }
-        callbacks.onWorkflowEnd?.(workflowData.name, workflowData.data?.output, workflowData.id, workflowData.metadata?.agent_id)
+        const workflowData = rawData as { id?: string; name: string; timestamp?: string; data?: { output?: unknown }; metadata?: { agent_id?: string } }
+        callbacks.onWorkflowEnd?.(workflowData.name, coerceSSEText(workflowData.data?.output), workflowData.id, workflowData.metadata?.agent_id, workflowData.timestamp)
         break
       }
 
       case 'llm.start': {
-        const llmData = rawData as { name: string; metadata?: { workflow?: string } }
-        callbacks.onLLMStart?.(llmData.name, llmData.metadata?.workflow)
+        const llmData = rawData as { name: string; timestamp?: string; metadata?: { workflow?: string } }
+        callbacks.onLLMStart?.(llmData.name, llmData.metadata?.workflow, llmData.timestamp)
         break
       }
 
       case 'llm.chunk': {
-        const chunkData = rawData as { chunk?: string; data?: { chunk?: string } }
-        const chunk = chunkData.chunk || chunkData.data?.chunk || ''
-        callbacks.onLLMChunk?.(chunk)
+        const chunkData = rawData as { chunk?: unknown; data?: { chunk?: unknown } }
+        const chunk = coerceSSEText(chunkData.chunk ?? chunkData.data?.chunk)
+        if (chunk) callbacks.onLLMChunk?.(chunk)
         break
       }
 
       case 'llm.end': {
         // llm.end has nested structure: { id, name, timestamp, metadata: { thinking, usage }, data: { output } }
         const endData = rawData as {
-          data?: { output?: string }
+          timestamp?: string
+          data?: { output?: unknown }
           metadata?: {
-            thinking?: string
+            thinking?: unknown
             usage?: { input_tokens?: number; output_tokens?: number; prompt_tokens?: number; completion_tokens?: number }
           }
         }
-        const output = endData.data?.output || ''
-        const thinking = endData.metadata?.thinking
+        const output = coerceSSEText(endData.data?.output)
+        const thinking = coerceSSEText(endData.metadata?.thinking)
         // Handle both naming conventions for usage (input_tokens/output_tokens or prompt_tokens/completion_tokens)
         const rawUsage = endData.metadata?.usage
         const usage = rawUsage
@@ -458,7 +580,7 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
               output_tokens: rawUsage.output_tokens ?? rawUsage.completion_tokens ?? 0,
             }
           : undefined
-        callbacks.onLLMEnd?.(output, thinking, usage)
+        callbacks.onLLMEnd?.(output, thinking || undefined, usage, endData.timestamp)
         break
       }
 
@@ -468,26 +590,28 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
         const toolData = rawData as {
           id?: string
           name: string
+          timestamp?: string
           data?: { input?: unknown }
           metadata?: { workflow?: string; agent_id?: string }
         }
         const normalizedInput = normalizeToolInput(toolData.data?.input)
-        callbacks.onToolStart?.(toolData.name, normalizedInput, toolData.metadata?.workflow, toolData.id, toolData.metadata?.agent_id)
+        callbacks.onToolStart?.(toolData.name, normalizedInput, toolData.metadata?.workflow, toolData.id, toolData.metadata?.agent_id, toolData.timestamp)
         break
       }
 
       case 'tool.end': {
-        const toolData = rawData as { id?: string; name: string; data?: { output?: string }; metadata?: { agent_id?: string } }
-        callbacks.onToolEnd?.(toolData.name, toolData.data?.output, toolData.id, toolData.metadata?.agent_id)
+        const toolData = rawData as { id?: string; name: string; timestamp?: string; data?: { output?: unknown }; metadata?: { agent_id?: string } }
+        callbacks.onToolEnd?.(toolData.name, coerceSSEText(toolData.data?.output), toolData.id, toolData.metadata?.agent_id, toolData.timestamp)
         break
       }
 
       case 'artifact.update': {
         // artifact.update has nested structure: { id, timestamp, data: { type, content, url?, output_category? }, metadata?: { workflow } }
         const artifactWrapper = rawData as {
-          data?: { type: ArtifactType; content: string | TodoItem[]; url?: string; output_category?: string }
+          timestamp?: string
+          data?: { type: ArtifactType; content: unknown; url?: string; output_category?: string }
           type?: ArtifactType
-          content?: string | TodoItem[]
+          content?: unknown
           url?: string
           output_category?: string
           metadata?: { workflow?: string }
@@ -495,29 +619,30 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
         // Handle both nested (data.type) and flat (type) structures
         const artifactData = artifactWrapper.data || artifactWrapper
         const artifactWorkflow = artifactWrapper.metadata?.workflow
+        const artifactTimestamp = artifactWrapper.timestamp
 
         switch (artifactData.type) {
           case 'todo':
-            callbacks.onTodoUpdate?.(artifactData.content as TodoItem[], artifactWorkflow)
+            callbacks.onTodoUpdate?.(artifactData.content as TodoItem[], artifactWorkflow, artifactTimestamp)
             break
           case 'citation_source':
             // citation_source = "Referenced" sources (discovered during search)
-            callbacks.onCitationUpdate?.(artifactData.url || '', artifactData.content as string, false)
+            callbacks.onCitationUpdate?.(artifactData.url || '', coerceSSEText(artifactData.content), false, artifactTimestamp)
             break
           case 'citation_use':
             // citation_use = "Cited" sources (actually used in the report)
-            callbacks.onCitationUpdate?.(artifactData.url || '', artifactData.content as string, true)
+            callbacks.onCitationUpdate?.(artifactData.url || '', coerceSSEText(artifactData.content), true, artifactTimestamp)
             break
           case 'file': {
             // file artifacts are written during research — extract filename from path
             const raw = artifactData as Record<string, unknown>
             const filePath = (raw.file_path || raw.path || artifactData.url || 'unknown') as string
             const fileName = filePath.split('/').pop() || filePath
-            callbacks.onFileUpdate?.(fileName, artifactData.content as string)
+            callbacks.onFileUpdate?.(fileName, coerceSSEText(artifactData.content), artifactTimestamp)
             break
           }
           case 'output':
-            callbacks.onOutputUpdate?.(artifactData.content as string, artifactData.output_category, artifactWorkflow)
+            callbacks.onOutputUpdate?.(coerceSSEText(artifactData.content), artifactData.output_category, artifactWorkflow, artifactTimestamp)
             break
           default:
             if (process.env.NODE_ENV === 'development') {
@@ -677,7 +802,7 @@ const getDeepResearchBaseUrl = (): string => {
 export const getJobStatus = async (
   jobId: string,
   authToken?: string
-): Promise<{ job_id: string; status: DeepResearchJobStatus; error: string | null }> => {
+): Promise<DeepResearchJobStatusResponse> => {
   const url = `${getDeepResearchBaseUrl()}/job/${jobId}`
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
@@ -696,11 +821,34 @@ export const getJobStatus = async (
   return response.json()
 }
 
+/** List persisted async research jobs visible to the caller. */
+export const listJobs = async (
+  authToken?: string,
+  limit = 100
+): Promise<JobHistoryResponse> => {
+  const url = `${getDeepResearchBaseUrl()}/jobs?limit=${encodeURIComponent(String(limit))}`
+  const headers: HeadersInit = {
+    'Content-Type': 'application/json',
+  }
+
+  if (authToken) {
+    headers['Authorization'] = `Bearer ${authToken}`
+  }
+
+  const response = await fetch(url, { headers })
+
+  if (!response.ok) {
+    throw new Error(`Failed to list jobs: ${response.status}`)
+  }
+
+  return response.json()
+}
+
 /** Get job report */
 export const getJobReport = async (
   jobId: string,
   authToken?: string
-): Promise<{ job_id: string; has_report: boolean; report: string | null }> => {
+): Promise<DeepResearchJobReportResponse> => {
   const url = `${getDeepResearchBaseUrl()}/job/${jobId}/report`
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
@@ -723,7 +871,7 @@ export const getJobReport = async (
 export const cancelJob = async (
   jobId: string,
   authToken?: string
-): Promise<{ cancelled: boolean }> => {
+): Promise<{ cancelled?: boolean; job_id?: string; status?: DeepResearchJobStatus; task_cancelled?: boolean }> => {
   const url = `${getDeepResearchBaseUrl()}/job/${jobId}/cancel`
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
@@ -740,6 +888,32 @@ export const cancelJob = async (
 
   if (!response.ok) {
     throw new Error(`Failed to cancel job: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+/** Resume a failed/interrupted job using persisted research artifacts. */
+export const resumeJob = async (
+  jobId: string,
+  authToken?: string
+): Promise<DeepResearchJobStatusResponse> => {
+  const url = `${getDeepResearchBaseUrl()}/job/${jobId}/resume`
+  const headers: HeadersInit = {
+    'Content-Type': 'application/json',
+  }
+
+  if (authToken) {
+    headers['Authorization'] = `Bearer ${authToken}`
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+  })
+
+  if (!response.ok) {
+    throw new Error(`Failed to resume job: ${response.status}`)
   }
 
   return response.json()

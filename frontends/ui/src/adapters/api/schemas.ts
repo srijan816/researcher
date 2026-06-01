@@ -122,6 +122,8 @@ export const NATUserMessageSchema = z.object({
   timestamp: z.string().optional(),
   /** Optional list of enabled data source IDs to include in the query */
   enabled_data_sources: z.array(z.string()).optional(),
+  /** Optional source/depth tier for deep research */
+  research_depth: z.enum(['shallow', 'deeper', 'deep']).optional(),
 })
 
 /** NAT User Interaction Response - sent when user responds to a prompt */

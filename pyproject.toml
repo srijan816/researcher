@@ -45,6 +45,7 @@ dependencies = [
     "aiofiles>=23.0.0",
     "python-multipart>=0.0.27,<0.1",
     "knowledge-layer[all]",
+    "kokoro-onnx>=0.5.0,<0.6",
     # CVE version floors for transitive dependencies
     "cryptography>=46.0.6,<47",
     "pillow>=12.2.0,<13",
@@ -90,6 +91,7 @@ aiq_deep_researcher = "aiq_agent.agents.deep_researcher.register"
 aiq_fastapi_extensions = "aiq_agent.fastapi_extensions.register"
 aiq_clarifier = "aiq_agent.agents.clarifier.register"
 aiq_data_source_registry = "aiq_agent.common.data_source_registry"
+aiq_anthropic_llm = "aiq_agent.common.anthropic_llm"
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "sources/**/tests"]
@@ -187,9 +189,14 @@ dev = [
     "mypy>=1.5.0",
     "dask[distributed]>=2024.1.0",
     # Workspace packages for testing
+    "ddgs-web-search",
+    "debate-transcript-search",
+    "notebooklm-source-harvest",
+    "searxng-jina-web-search",
     "google-scholar-paper-search",
     "tavily-web-search",
     "exa-web-search",
+    "stooq-stock-quote",
     "knowledge-layer[all]",
     "aiq-api",
     "aiq-research-cli",
@@ -231,8 +238,13 @@ members = [
 [tool.uv.sources]
 aiq-agent = { workspace = true }
 google-scholar-paper-search = { workspace = true }
+ddgs-web-search = { workspace = true }
+debate-transcript-search = { workspace = true }
+notebooklm-source-harvest = { workspace = true }
+searxng-jina-web-search = { workspace = true }
 tavily-web-search = { workspace = true }
 exa-web-search = { workspace = true }
+stooq-stock-quote = { workspace = true }
 knowledge-layer = { workspace = true }
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }

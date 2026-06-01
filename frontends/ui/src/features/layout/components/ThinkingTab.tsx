@@ -24,6 +24,7 @@
 
 import { type FC, useState, useCallback, useMemo } from 'react'
 import { Flex, SegmentedControl } from '@/adapters/ui'
+import { coerceSSEText } from '@/adapters/api'
 import { useChatStore } from '@/features/chat'
 import { ThoughtTracesTab } from './ThoughtTracesTab'
 import { AgentsTab } from './AgentsTab'
@@ -42,8 +43,8 @@ type ThinkingSubTab = 'thoughts' | 'agents' | 'tools' | 'files'
 const mapLLMStepToThoughtInfo = (step: DeepResearchLLMStep): ThoughtInfo => ({
   id: step.id,
   modelName: step.name,
-  content: step.content,
-  thinking: step.thinking,
+  content: coerceSSEText(step.content),
+  thinking: coerceSSEText((step as DeepResearchLLMStep & { thinking?: unknown }).thinking) || undefined,
   workflow: step.workflow,
   isStreaming: !step.isComplete,
   timestamp: step.timestamp,

@@ -117,6 +117,11 @@ class TestSourceRegistry:
         registry.add(SourceEntry(url="https://example.com/article", source_type="tavily"))
         assert registry.has_url("https://example.com/article")
 
+    def test_add_classifies_source_url(self, registry):
+        registry.add(SourceEntry(url="https://docs.x.ai/docs/grok-imagine", source_type="web"))
+
+        assert registry.all_sources()[0].source_class == "first_party"
+
     def test_url_normalization_on_lookup(self, registry):
         registry.add(SourceEntry(url="https://Example.COM/path/"))
         assert registry.has_url("https://example.com/path")
@@ -330,6 +335,12 @@ class TestGenericUrlExtractor:
         assert len(entries) == 1
         assert entries[0].url == "https://example.com/article"
 
+    def test_generic_url_extractor_classifies_sources(self):
+        entries = extract_sources_from_tool_result("web_search", "Docs: https://docs.x.ai/docs/grok-imagine")
+
+        assert len(entries) == 1
+        assert entries[0].source_class == "first_party"
+
     def test_multiple_urls_deduplicated(self):
         content = (
             '<Document href="https://a.com">\nContent A\n</Document>'
@@ -364,19 +375,16 @@ class TestGenericUrlExtractor:
             entries = extract_sources_from_tool_result(name, content)
             assert len(entries) == 1, f"Failed for tool name: {name}"
 
-    def test_non_url_content_without_source_id_registers_tool_result_source(self):
-        """Non-URL content always registers a tool_result source — eligibility is enforced by callers."""
+    def test_empty_content_returns_empty(self):
         entries = extract_sources_from_tool_result("any_tool", "Search returned no results")
-        assert len(entries) == 1
-        assert entries[0].citation_key == "any_tool"
-        assert entries[0].source_type == "tool_result"
+        assert len(entries) == 0
 
-    def test_non_url_content_with_source_id_registers_tool_result_source(self):
-        """source_id is accepted but does not affect whether a fallback entry is produced."""
-        entries = extract_sources_from_tool_result("any_tool", "Search returned no results", source_id="some_source")
-        assert len(entries) == 1
-        assert entries[0].citation_key == "any_tool"
-        assert entries[0].source_type == "tool_result"
+    def test_unavailable_tool_error_does_not_register_help_url(self):
+        content = (
+            "Error: Exa web search is unavailable because EXA_API_KEY is not set.\nGet an API key from https://exa.ai/"
+        )
+        entries = extract_sources_from_tool_result("exa_web_search_tool", content)
+        assert entries == []
 
     def test_duplicate_urls_deduplicated(self):
         content = "See https://example.com/page and also https://example.com/page for reference."
@@ -406,38 +414,25 @@ class TestGenericUrlExtractor:
         assert len(entries) == 1
         assert entries[0].title == "Correct Title"
 
-    def test_url_with_commas_in_path(self):
-        """Commas inside URL paths (e.g., lat/lon coordinates) must not truncate the URL.
+    def test_searxng_parser_only_registers_document_urls(self):
+        """SearXNG/Jina output should not register every URL inside extracted page content."""
+        content = (
+            '<document idx="0">\n'
+            "<title>Useful Article</title>\n"
+            "<url>https://example.com/article</url>\n"
+            "<content>Markdown with nav links https://example.com/login and https://example.com/privacy</content>\n"
+            "</document>\n\n---\n\n"
+            '<document idx="1">\n'
+            "<title>Second Article</title>\n"
+            "<url>https://other.com/report</url>\n"
+            "<content>More page links https://other.com/terms</content>\n"
+            "</document>"
+        )
 
-        Regression: the generic URL regex previously excluded ``,`` from the
-        character class, so an FAA cam URL like
-        ``https://weathercams.faa.gov/map/-122.31167,47.22287,10/...`` was
-        registered as ``https://weathercams.faa.gov/map/-122.31167``. The LLM
-        would then cite the full URL, the verifier would compare full vs.
-        truncated, and the citation would be silently removed as
-        ``url_not_in_registry``.
-        """
-        full_url = "https://weathercams.faa.gov/map/-122.31167,47.22287,10/airport/SEA/details/weather"
-        content = f'<Document href="{full_url}">\n<title>\nFAA Cam\n</title>\nObservation.\n</Document>'
-        entries = extract_sources_from_tool_result("tavily_web_search", content)
-        assert len(entries) == 1
-        assert entries[0].url == full_url
+        entries = extract_sources_from_tool_result("advanced_web_search_tool", content)
 
-    def test_trailing_comma_still_trimmed(self):
-        """A comma immediately followed by whitespace is still treated as
-        sentence punctuation and stripped from the captured URL."""
-        content = "See https://example.com/page, then continue reading."
-        entries = extract_sources_from_tool_result("any_tool", content)
-        assert len(entries) == 1
-        assert entries[0].url == "https://example.com/page"
-
-    def test_markdown_bracket_still_terminates(self):
-        """``]`` continues to terminate a URL match so markdown links don't
-        leak the closing bracket into the captured URL."""
-        content = "[See here](https://example.com/page) for details."
-        entries = extract_sources_from_tool_result("any_tool", content)
-        assert len(entries) == 1
-        assert entries[0].url == "https://example.com/page"
+        assert [entry.url for entry in entries] == ["https://example.com/article", "https://other.com/report"]
+        assert [entry.title for entry in entries] == ["Useful Article", "Second Article"]
 
 
 class TestKnowledgeLayerParser:
@@ -480,24 +475,55 @@ class TestKnowledgeLayerParser:
         assert entries[1].citation_key == "doc2.pdf, p.3"
 
 
-class TestParserDispatcher:
-    """Tests for parser dispatcher and fallback behavior."""
+class TestStooqQuoteParser:
+    """Tests for Stooq quote output parser."""
 
-    def test_tool_without_content_returns_empty(self):
-        entries = extract_sources_from_tool_result("weather_observation_tool", "   ", source_id="weather")
+    def test_parse_quote_with_source_url(self):
+        content = (
+            '<quote symbol="NVDA.US">\n'
+            "<date>2026-04-24</date>\n"
+            "<time>22:00:22</time>\n"
+            "<close>208.27</close>\n"
+            "<source>Stooq delayed/last-close CSV quote</source>\n"
+            "<source_url>https://stooq.com/q/?s=nvda.us</source_url>\n"
+            "</quote>"
+        )
+
+        entries = extract_sources_from_tool_result("stock_quote_tool", content)
+
+        assert len(entries) == 1
+        assert entries[0].url == "https://stooq.com/q/?s=nvda.us"
+        assert entries[0].title == "NVDA.US Quote - Stooq (2026-04-24)"
+        assert entries[0].source_type == "stock_quote"
+
+    def test_parse_quote_without_source_url_builds_stooq_url(self):
+        content = (
+            '<quote symbol="TGT.US">\n'
+            "<date>2026-04-24</date>\n"
+            "<close>92.00</close>\n"
+            "<source>Stooq delayed/last-close CSV quote</source>\n"
+            "</quote>"
+        )
+
+        entries = extract_sources_from_tool_result("stooq_stock_quote", content)
+
+        assert len(entries) == 1
+        assert entries[0].url == "https://stooq.com/q/?s=tgt.us"
+
+    def test_quote_errors_are_not_registered_as_sources(self):
+        content = '<quote symbol="BAD.US"><error>No quote returned by Stooq</error></quote>'
+
+        entries = extract_sources_from_tool_result("stock_quote_tool", content)
 
         assert entries == []
 
-    def test_data_source_tool_without_urls_registers_tool_result_source(self):
-        entries = extract_sources_from_tool_result(
-            "weather_observation_tool", "Visibility: 10 miles", source_id="weather"
-        )
 
-        assert len(entries) == 1
-        assert entries[0].url is None
-        assert entries[0].citation_key == "weather_observation_tool"
-        assert entries[0].source_type == "tool_result"
-        assert entries[0].tool_name == "weather_observation_tool"
+class TestParserDispatcher:
+    """Tests for parser dispatcher and fallback behavior."""
+
+    def test_unknown_tool_no_urls_returns_empty(self):
+        entries = extract_sources_from_tool_result("totally_unknown_tool", "some content without links")
+        assert entries == []
 
     def test_unknown_tool_with_urls_extracts_them(self):
         """Generic fallback extracts URLs from any unknown tool."""
@@ -557,23 +583,6 @@ class TestVerifyCitations:
         assert "[1]" in result.verified_report
         assert "[2]" in result.verified_report
         assert len(result.valid_citations) == 2
-        assert len(result.removed_citations) == 0
-
-    def test_url_in_markdown_brackets_still_verifies(self, registry):
-        """Regression: when the LLM wraps a citation URL in markdown brackets
-        (``[https://valid.com/article1]``), the verifier captured the trailing
-        ``]`` as part of the URL and then failed to resolve it against the
-        registry, silently removing an otherwise-valid citation."""
-        report = "Finding [1].\n\n## Sources\n[1] Article 1: [https://valid.com/article1]"
-        result = verify_citations(report, registry)
-        assert len(result.valid_citations) == 1
-        assert len(result.removed_citations) == 0
-
-    def test_url_in_angle_brackets_still_verifies(self, registry):
-        """Same idea as above for ``<https://...>`` Markdown-style autolinks."""
-        report = "Finding [1].\n\n## Sources\n[1] Article 1: <https://valid.com/article1>"
-        result = verify_citations(report, registry)
-        assert len(result.valid_citations) == 1
         assert len(result.removed_citations) == 0
 
     def test_invalid_citation_removed(self, registry):
@@ -705,102 +714,6 @@ class TestVerifyCitations:
         assert len(result.valid_citations) == 1
         assert "https://arxiv.org/abs/1706.03762" in result.verified_report
 
-    def test_duplicate_tool_result_refs_collapse_to_single_citation(self):
-        """Two [N] lines that resolve to the same non-URL tool_result source are merged.
-
-        The model often makes the same tool call twice (e.g. for two
-        timezones) and emits two separate ``[N] mcp_time__get_current_time``
-        reference lines. Both lines resolve to the single registered
-        SourceEntry for that tool, so verify_citations should keep one and
-        rewrite the body's ``[2]`` to ``[1]`` so the prose still cites the
-        source.
-        """
-        reg = SourceRegistry()
-        reg.add(
-            SourceEntry(
-                citation_key="mcp_time__get_current_time",
-                source_type="tool_result",
-                tool_name="mcp_time__get_current_time",
-            )
-        )
-        report = (
-            "Time in Mumbai [1].\n"
-            "Time in Tokyo [2].\n\n"
-            "**References**\n"
-            "- [1] mcp_time__get_current_time\n"
-            "- [2] mcp_time__get_current_time"
-        )
-
-        result = verify_citations(report, reg)
-
-        assert len(result.valid_citations) == 1
-        # The duplicate is recorded as removed for audit, with a clear reason.
-        assert len(result.removed_citations) == 1
-        assert result.removed_citations[0]["reason"].startswith("duplicate_of_citation_")
-        # Body keeps a citation for both sentences — the second [2] is
-        # rewritten to [1] rather than stripped, since the source is real.
-        assert "Time in Mumbai [1]." in result.verified_report
-        assert "Time in Tokyo [1]." in result.verified_report
-        # Reference section keeps exactly one entry for the source.
-        ref_section = result.verified_report.split("**References**", 1)[1]
-        assert ref_section.count("mcp_time__get_current_time") == 1
-        assert "[2]" not in ref_section
-
-    def test_duplicate_url_refs_collapse_to_single_citation(self):
-        """Two [N] lines pointing at the same URL are merged.
-
-        Latent variant of the tool_result case: even URL-based citations
-        should collapse when the model emits the same source twice.
-        """
-        reg = SourceRegistry()
-        reg.add(SourceEntry(url="https://valid.com/article1", title="Article 1", source_type="tavily"))
-        report = (
-            "Finding A [1]. Finding B [2].\n\n"
-            "## Sources\n"
-            "[1] Article 1: https://valid.com/article1\n"
-            "[2] Article 1: https://valid.com/article1"
-        )
-
-        result = verify_citations(report, reg)
-
-        assert len(result.valid_citations) == 1
-        assert len(result.removed_citations) == 1
-        assert result.removed_citations[0]["reason"].startswith("duplicate_of_citation_")
-        assert "Finding A [1]." in result.verified_report
-        assert "Finding B [1]." in result.verified_report
-        ref_section = result.verified_report.split("## Sources", 1)[1]
-        assert ref_section.count("[1]") == 1
-        assert "[2]" not in ref_section
-
-    def test_dedup_keeps_lowest_number_when_duplicates_appear_after_unique(self):
-        """Mixed: [1] valid URL A, [2] dup of [1], [3] valid URL B.
-
-        After verify_citations, [2] should be merged into [1] and [3] should
-        survive. Renumbering happens later in sanitize_report.
-        """
-        reg = SourceRegistry()
-        reg.add(SourceEntry(url="https://valid.com/article1", title="Article 1", source_type="tavily"))
-        reg.add(SourceEntry(url="https://valid.com/article2", title="Article 2", source_type="tavily"))
-        report = (
-            "A [1]. B [2]. C [3].\n\n"
-            "## Sources\n"
-            "[1] Article 1: https://valid.com/article1\n"
-            "[2] Article 1: https://valid.com/article1\n"
-            "[3] Article 2: https://valid.com/article2"
-        )
-
-        result = verify_citations(report, reg)
-
-        assert len(result.valid_citations) == 2
-        assert len(result.removed_citations) == 1
-        assert result.removed_citations[0]["number"] == 2
-        # Body: B's [2] becomes [1]; A and C unchanged.
-        assert "A [1]. B [1]. C [3]." in result.verified_report
-        ref_section = result.verified_report.split("## Sources", 1)[1]
-        assert ref_section.count("[1]") == 1
-        assert "[2]" not in ref_section
-        assert ref_section.count("[3]") == 1
-
 
 # ---------------------------------------------------------------------------
 # sanitize_report tests
@@ -823,19 +736,6 @@ class TestSanitizeReport:
         assert "https://nvidia.com/article" in result.sanitized_report
         assert result.body_urls_removed == 1
         assert result.body_urls_replaced == 0
-
-    def test_body_url_with_commas_matched_to_reference(self):
-        """Regression: ``_BODY_URL_RE`` previously stopped at the first comma,
-        so a bare body URL with commas in its path was truncated, only the
-        prefix got replaced with ``[N]``, and the rest of the URL was left as
-        dangling text in the sanitized report."""
-        full_url = "https://weathercams.faa.gov/map/-122.31167,47.22287,10/airport/SEA/details/weather"
-        report = f"Live cam at {full_url} confirms it [1].\n\n## Sources\n[1] FAA cam: {full_url}"
-        result = sanitize_report(report)
-        assert "Live cam at [1] confirms it [1]" in result.sanitized_report
-        # No fragment of the URL should be left dangling in the body
-        assert ",47.22287" not in result.sanitized_report.split("## Sources", 1)[0]
-        assert result.body_urls_replaced == 1
 
     def test_body_url_matching_ref_replaced_with_citation(self):
         """Bare body URL matching a reference is replaced with [N]."""

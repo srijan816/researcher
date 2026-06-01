@@ -156,13 +156,22 @@ export const authOptions: AuthOptions = {
     async jwt({ token, account, user }: { token: JWT; account: Account | null; user?: User }) {
       // Initial sign-in — populate JWT with OAuth tokens
       if (account && user) {
+        const localUser = user as User & {
+          idToken?: string
+          refreshToken?: string
+          idTokenExpiresAt?: number
+          role?: string
+          mustChangePassword?: boolean
+        }
         const base = {
           ...token,
-          accessToken: account.access_token,
-          idToken: account.id_token,
-          refreshToken: account.refresh_token,
-          expiresAt: account.expires_at,
+          accessToken: account.access_token ?? localUser.idToken,
+          idToken: account.id_token ?? localUser.idToken,
+          refreshToken: account.refresh_token ?? localUser.refreshToken ?? localUser.idToken,
+          expiresAt: account.expires_at ?? localUser.idTokenExpiresAt,
           userId: user.id,
+          role: localUser.role,
+          mustChangePassword: localUser.mustChangePassword,
         }
 
         // Let the provider enrich the JWT (e.g. group membership checks)
@@ -203,6 +212,8 @@ export const authOptions: AuthOptions = {
         idToken: token.idToken as string | undefined,
         idTokenExpiresAt: token.expiresAt as number | undefined,
         userId: token.userId as string | undefined,
+        role: token.role as string | undefined,
+        mustChangePassword: token.mustChangePassword as boolean | undefined,
         error: token.error as string | undefined,
       }
 

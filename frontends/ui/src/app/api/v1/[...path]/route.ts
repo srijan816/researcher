@@ -20,7 +20,7 @@ import { cookies } from 'next/headers'
 import { isAuthRequired } from '@/adapters/auth/config'
 
 const getBackendUrl = (): string => {
-  const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
+  const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:9000'
   return url.replace(/\/$/, '')
 }
 
@@ -40,11 +40,27 @@ const getAuthHeaders = async (req: NextRequest): Promise<Record<string, string>>
   const cookieStore = await cookies()
   const idToken = cookieStore.get('idToken')?.value
 
+  if (!authToken && !idToken) {
+    throw new AuthRequiredError()
+  }
+
   return {
     ...(authToken ? { Authorization: authToken } : {}),
     ...(idToken ? { Cookie: `idToken=${idToken}` } : {}),
   }
 }
+
+class AuthRequiredError extends Error {
+  constructor() {
+    super('Authentication required')
+  }
+}
+
+const authRequiredResponse = (): NextResponse =>
+  new NextResponse(
+    JSON.stringify({ error: { code: 'AUTH_REQUIRED', message: 'Authentication required' } }),
+    { status: 401, headers: { 'Content-Type': 'application/json' } }
+  )
 
 export async function GET(
   req: NextRequest,
@@ -76,6 +92,7 @@ export async function GET(
     const data = await response.json()
     return NextResponse.json(data)
   } catch (error) {
+    if (error instanceof AuthRequiredError) return authRequiredResponse()
     const message = error instanceof Error ? error.message : 'Unknown error'
     return new NextResponse(
       JSON.stringify({ error: { code: 'PROXY_ERROR', message } }),
@@ -130,6 +147,7 @@ export async function POST(
     const data = await response.json()
     return NextResponse.json(data, { status: response.status })
   } catch (error) {
+    if (error instanceof AuthRequiredError) return authRequiredResponse()
     const message = error instanceof Error ? error.message : 'Unknown error'
     return new NextResponse(
       JSON.stringify({ error: { code: 'PROXY_ERROR', message } }),
@@ -181,6 +199,7 @@ export async function DELETE(
     const data = await response.json()
     return NextResponse.json(data, { status: response.status })
   } catch (error) {
+    if (error instanceof AuthRequiredError) return authRequiredResponse()
     const message = error instanceof Error ? error.message : 'Unknown error'
     return new NextResponse(
       JSON.stringify({ error: { code: 'PROXY_ERROR', message } }),

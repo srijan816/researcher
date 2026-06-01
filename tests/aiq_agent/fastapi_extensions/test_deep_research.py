@@ -52,6 +52,7 @@ Test coverage:
         - Routes registered when infrastructure available
 """
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -60,6 +61,7 @@ from aiq_api.routes.jobs import JobReportResponse
 from aiq_api.routes.jobs import JobStateResponse
 from aiq_api.routes.jobs import JobStatusResponse
 from aiq_api.routes.jobs import JobSubmitRequest
+from aiq_api.routes.jobs import _get_final_report_for_job
 
 
 class TestJobSubmitRequest:
@@ -73,6 +75,13 @@ class TestJobSubmitRequest:
         assert req.agent_type == "deep_researcher"
         assert req.job_id is None
         assert req.expiry_seconds is None
+        assert req.research_depth == "deeper"
+
+    def test_with_research_depth(self):
+        """Test submit request with a research-depth tier."""
+        req = JobSubmitRequest(agent_type="deep_researcher", input="query", research_depth="deep")
+
+        assert req.research_depth == "deep"
 
     def test_with_custom_job_id(self):
         """Test submit request with custom job ID."""
@@ -113,6 +122,11 @@ class TestJobStatusResponse:
         assert resp.status == "running"
         assert resp.error is None
         assert resp.created_at is None
+        assert resp.has_report is False
+        assert resp.report_ready is False
+        assert resp.terminal is False
+        assert resp.poll_after_seconds is None
+        assert resp.report_url is None
 
     def test_full_response(self):
         """Test full job response."""
@@ -121,12 +135,26 @@ class TestJobStatusResponse:
             status="success",
             error="some error",
             created_at="2026-01-20T10:00:00",
+            updated_at="2026-01-20T10:05:00",
+            has_report=True,
+            report_ready=True,
+            terminal=True,
+            message="Final report is ready.",
+            status_url="/v1/jobs/async/job/123",
+            report_url="/v1/jobs/async/job/123/report",
         )
 
         assert resp.job_id == "123"
         assert resp.status == "success"
         assert resp.error == "some error"
         assert resp.created_at == "2026-01-20T10:00:00"
+        assert resp.updated_at == "2026-01-20T10:05:00"
+        assert resp.has_report is True
+        assert resp.report_ready is True
+        assert resp.terminal is True
+        assert resp.message == "Final report is ready."
+        assert resp.status_url == "/v1/jobs/async/job/123"
+        assert resp.report_url == "/v1/jobs/async/job/123/report"
 
 
 class TestJobStateResponse:
@@ -158,14 +186,121 @@ class TestJobReportResponse:
 
         assert resp.job_id == "123"
         assert resp.has_report is False
+        assert resp.report_ready is False
+        assert resp.terminal is False
         assert resp.report is None
+        assert resp.report_markdown is None
 
     def test_with_report(self):
         """Test report response with report."""
-        resp = JobReportResponse(job_id="123", has_report=True, report="# Report\n\nContent here")
+        resp = JobReportResponse(
+            job_id="123",
+            has_report=True,
+            report_ready=True,
+            terminal=True,
+            report="# Report\n\nContent here",
+            report_markdown="# Report\n\nContent here",
+            status_url="/v1/jobs/async/job/123",
+            report_url="/v1/jobs/async/job/123/report",
+            sources_found=10,
+            sources_cited=3,
+        )
 
         assert resp.has_report is True
         assert resp.report == "# Report\n\nContent here"
+        assert resp.report_markdown == "# Report\n\nContent here"
+        assert resp.content_type == "text/markdown"
+        assert resp.report_ready is True
+        assert resp.terminal is True
+        assert resp.status_url == "/v1/jobs/async/job/123"
+        assert resp.report_url == "/v1/jobs/async/job/123/report"
+        assert resp.sources_found == 10
+        assert resp.sources_cited == 3
+
+
+def test_final_report_helper_rejects_off_topic_report(tmp_path):
+    """A completed deep-research job should not expose a drifted final report."""
+    from aiq_api.jobs.event_store import EventStore
+
+    db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
+    job_id = "job-off-topic"
+    store = EventStore(db_url, job_id)
+    store.store(
+        {
+            "type": "job.submitted",
+            "data": {
+                "agent_type": "deep_researcher",
+                "input": "University education costs and outcomes",
+                "owner": "tester@example.com",
+                "data_sources": [],
+                "research_depth": "deeper",
+            },
+        }
+    )
+    job = MagicMock(status="success", output='{"report": "# Alternate Ways to Get to Your Career\\n\\nBody"}')
+
+    assert _get_final_report_for_job(job, db_url, job_id) is None
+
+
+def test_final_report_helper_rejects_recovered_intermediate_report(tmp_path):
+    """A stale recovered-notes payload in job.output should not count as a final synthesis."""
+    from aiq_api.jobs.event_store import EventStore
+
+    db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
+    job_id = "job-recovered-intermediate"
+    store = EventStore(db_url, job_id)
+    store.store(
+        {
+            "type": "job.submitted",
+            "data": {
+                "agent_type": "deep_researcher",
+                "input": "University education value debate for primary students",
+                "owner": "tester@example.com",
+                "data_sources": [],
+                "research_depth": "shallow",
+            },
+        }
+    )
+    recovered = (
+        "# Recovered Research Report\n\n"
+        "The original job collected research artifacts but did not produce `/report.md`. "
+        "This report was recovered from the persisted intermediate research files.\n\n"
+        "## Recovered Findings\n\n"
+        "### shared/university_education_debate_research.txt\n\n"
+        "University Education Value Debate - Primary Student Research Notes"
+    )
+    job = MagicMock(status="success", output=json.dumps({"report": recovered}))
+
+    assert _get_final_report_for_job(job, db_url, job_id) is None
+
+
+def test_resume_files_strip_shared_route_prefix(tmp_path):
+    """Persisted /shared files must resume at routed state keys, not /shared/shared paths."""
+    from aiq_api.jobs.event_store import EventStore
+    from aiq_api.routes.jobs import _build_resume_files_from_events
+    from aiq_api.routes.jobs import _format_resume_input
+
+    db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
+    job_id = "job-resume-paths"
+    store = EventStore(db_url, job_id)
+    store.store(
+        {
+            "type": "artifact.update",
+            "name": "/shared/researcher_task1.md",
+            "data": {
+                "type": "file",
+                "file_path": "/shared/researcher_task1.md",
+                "content": "# Notes\n\nForeign policy evidence",
+            },
+        }
+    )
+
+    resume_files = _build_resume_files_from_events(db_url, job_id)
+    resume_input = _format_resume_input("Continue the report", resume_files)
+
+    assert "/researcher_task1.md" in resume_files
+    assert "/shared/researcher_task1.md" in resume_input
+    assert "/shared/shared/researcher_task1.md" not in resume_input
 
 
 class TestRegisterRoutes:
@@ -227,6 +362,89 @@ class TestRegisterRoutes:
 
         assert mock_app.post.call_count >= 2
         assert mock_app.get.call_count >= 6
+
+
+class TestJobLifecycleRecovery:
+    """Tests for restart/worker-loss job recovery helpers."""
+
+    def _seed_job_info(self, db_url: str, rows: list[tuple[str, str, int]]) -> None:
+        from sqlalchemy import text
+
+        from aiq_api.jobs.event_store import EventStore
+
+        EventStore._ensure_table_exists(db_url)
+        engine = EventStore._get_or_create_sync_engine(db_url)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE job_info ("
+                    "job_id TEXT PRIMARY KEY, "
+                    "status TEXT, "
+                    "error TEXT, "
+                    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+                    "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+                    "is_expired BOOLEAN DEFAULT FALSE"
+                    ")"
+                )
+            )
+            for job_id, status, is_expired in rows:
+                conn.execute(
+                    text("INSERT INTO job_info (job_id, status, is_expired) VALUES (:job_id, :status, :is_expired)"),
+                    {"job_id": job_id, "status": status, "is_expired": is_expired},
+                )
+
+    def test_find_jobs_by_status_excludes_terminal_and_expired_jobs(self, tmp_path):
+        from aiq_api.routes.jobs import _find_jobs_by_status
+
+        db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
+        self._seed_job_info(
+            db_url,
+            [
+                ("running-job", "running", 0),
+                ("submitted-job", "submitted", 0),
+                ("success-job", "success", 0),
+                ("expired-running-job", "running", 1),
+            ],
+        )
+
+        rows = _find_jobs_by_status(db_url, ["submitted", "running"])
+
+        assert {row["job_id"] for row in rows} == {"running-job", "submitted-job"}
+
+    @pytest.mark.asyncio
+    async def test_interrupt_orphaned_startup_jobs_marks_active_jobs_recoverable(self, tmp_path):
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.routes.jobs import _interrupt_orphaned_startup_jobs
+
+        db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
+        self._seed_job_info(
+            db_url,
+            [
+                ("running-job", "running", 0),
+                ("submitted-job", "submitted", 0),
+                ("success-job", "success", 0),
+            ],
+        )
+
+        class FakeJobStore:
+            def __init__(self) -> None:
+                self.calls = []
+
+            async def update_status(self, job_id, status, error=None, output=None):
+                self.calls.append((job_id, status.value, error, output))
+
+        job_store = FakeJobStore()
+
+        await _interrupt_orphaned_startup_jobs(job_store, db_url)
+
+        assert {(job_id, status) for job_id, status, _, _ in job_store.calls} == {
+            ("running-job", "interrupted"),
+            ("submitted-job", "interrupted"),
+        }
+        events = EventStore.get_events(db_url, "running-job", 0, 100)
+        assert events[-1]["type"] == "job.interrupted"
+        assert events[-1]["data"]["error_type"] == "BackendRestartInterrupted"
+        assert events[-1]["data"]["recoverable"] is True
 
 
 class TestArtifactHelpers:

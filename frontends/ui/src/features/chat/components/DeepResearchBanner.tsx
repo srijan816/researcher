@@ -15,9 +15,11 @@
 
 import { type FC, useCallback } from 'react'
 import { Banner, Button, Flex, Text } from '@/adapters/ui'
+import { StopCircle } from '@/adapters/ui/icons'
 import { formatTime } from '@/shared/utils/format-time'
 import { useLayoutStore } from '@/features/layout/store'
 import { useChatStore } from '../store'
+import { useCancelDeepResearchJob } from '../hooks/use-cancel-deep-research'
 import { useLoadJobData } from '../hooks/use-load-job-data'
 import type { DeepResearchBannerType } from '../types'
 
@@ -125,8 +127,14 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
   const reportContent = useChatStore((state) => state.reportContent)
   const deepResearchStreamLoaded = useChatStore((state) => state.deepResearchStreamLoaded)
   const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)
+  const { cancelDeepResearchJob, isCancelling } = useCancelDeepResearchJob()
   const { loadReport, importStreamOnly, isLoading: isStreamLoading } = useLoadJobData()
-  const config = getBannerConfig(bannerType, jobId, { totalTokens, toolCallCount })
+  const baseConfig = getBannerConfig(bannerType, jobId, { totalTokens, toolCallCount })
+  const hasReport = Boolean(reportContent.trim())
+  const config =
+    bannerType === 'failure' && hasReport
+      ? { ...baseConfig, buttonText: 'View Report', buttonTab: 'report' as const }
+      : baseConfig
 
   // Tabs that require full stream data (tasks, thinking, citations)
   const tabRequiresStream = ['tasks', 'thinking', 'citations'].includes(config.buttonTab)
@@ -152,16 +160,35 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
     // For incomplete jobs (starting), the live SSE connection is already populating data
   }, [config.buttonTab, openRightPanel, setResearchPanelTab, reportContent, loadReport, jobId, tabRequiresStream, deepResearchStreamLoaded, isDeepResearchStreaming, isStreamLoading, importStreamOnly, isJobComplete])
 
-  // Render action button (same for all banner types)
+  const handleCancelClick = useCallback(async () => {
+    await cancelDeepResearchJob(jobId)
+  }, [cancelDeepResearchJob, jobId])
+
+  // Render action buttons.
   const renderActions = () => (
-    <Button
-      kind="secondary"
-      size="small"
-      onClick={handleButtonClick}
-      aria-label={config.buttonText}
-    >
-      {config.buttonText}
-    </Button>
+    <Flex align="center" gap="2" className="flex-wrap justify-end">
+      {bannerType === 'starting' && (
+        <Button
+          kind="tertiary"
+          size="small"
+          onClick={handleCancelClick}
+          disabled={isCancelling}
+          aria-label="Cancel research"
+          title="Cancel current research"
+        >
+          <StopCircle className="h-4 w-4 sm:mr-2" aria-hidden="true" />
+          <span>{isCancelling ? 'Cancelling...' : 'Cancel'}</span>
+        </Button>
+      )}
+      <Button
+        kind="secondary"
+        size="small"
+        onClick={handleButtonClick}
+        aria-label={config.buttonText}
+      >
+        {config.buttonText}
+      </Button>
+    </Flex>
   )
 
   return (

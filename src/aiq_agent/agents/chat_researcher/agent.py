@@ -52,7 +52,9 @@ except ImportError:
     _AuthError = None  # type: ignore[assignment,misc]
 
 from .models import ChatResearcherState
+from .models import DepthDecision
 from .models import ShallowResult
+from .utils import coerce_content_text
 from .utils import trim_message_history
 
 logger = logging.getLogger(__name__)
@@ -124,7 +126,26 @@ class ChatResearcherAgent:
         """Build the LangGraph workflow."""
 
         async def intent_classifier_node(state: ChatResearcherState) -> dict[str, Any]:
-            return await self.intent_classifier_fn(state)
+            update = await self.intent_classifier_fn(state)
+            if (
+                update.get("user_intent")
+                and update["user_intent"].intent == "research"
+                and (state.force_deep_research or state.research_depth in {"deeper", "deep"})
+            ):
+                update["depth_decision"] = DepthDecision(
+                    decision="deep",
+                    raw_reasoning="Forced by selected research mode.",
+                )
+            elif (
+                update.get("user_intent")
+                and update["user_intent"].intent == "research"
+                and state.research_depth == "shallow"
+            ):
+                update["depth_decision"] = DepthDecision(
+                    decision="shallow",
+                    raw_reasoning="Forced by selected research mode.",
+                )
+            return update
 
         async def clarifier_node(state: ChatResearcherState) -> dict[str, Any]:
             original_query = get_latest_user_query(state.messages)
@@ -152,6 +173,7 @@ class ChatResearcherAgent:
                 available_docs = [doc.model_dump() for doc in (state.available_documents or [])]
                 clarifier_state = ClarifierAgentState(
                     messages=trimmed_messages,
+                    original_query=original_query,
                     data_sources=state.data_sources,
                     available_documents=available_docs if available_docs else None,
                 )
@@ -287,6 +309,7 @@ class ChatResearcherAgent:
             deep_state = DeepResearchAgentState(
                 messages=trimmed_messages + [HumanMessage(content=research_query)],
                 data_sources=state.data_sources,
+                research_depth=state.research_depth,
                 clarifier_result=state.clarifier_result,
                 available_documents=state.available_documents,
                 user_info=state.user_info,
@@ -327,6 +350,10 @@ class ChatResearcherAgent:
             """From combined orchestration: meta -> END (response already in messages), else by depth."""
             if state.user_intent and state.user_intent.intent == "meta":
                 return "END"
+            if state.force_deep_research or state.research_depth in {"deeper", "deep"}:
+                return "clarifier"
+            if state.research_depth == "shallow":
+                return "shallow_research"
             if state.depth_decision and state.depth_decision.decision == "deep":
                 return "clarifier"
             return "shallow_research"
@@ -355,7 +382,7 @@ class ChatResearcherAgent:
             if not last_ai_content:
                 return END
 
-            last_content = last_ai_content if isinstance(last_ai_content, str) else str(last_ai_content)
+            last_content = coerce_content_text(last_ai_content)
             if not last_content.strip():
                 return "deep_research"
 
@@ -421,7 +448,9 @@ class ChatResearcherAgent:
                 "messages": state.messages,
                 "user_info": state.user_info,
                 "data_sources": state.data_sources,
+                "research_depth": state.research_depth,
                 "available_documents": state.available_documents,
+                "force_deep_research": state.force_deep_research,
                 "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state
                 "skip_clarifier": state.skip_clarifier,
             }

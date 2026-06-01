@@ -9,14 +9,14 @@
  * - SessionsPanel (left, overlay)
  * - ChatArea + InputArea (center, responsive width)
  * - ResearchPanel (right, pushes content - takes 60% when open)
- * - DataSourcesPanel / SettingsPanel (right, overlay)
+ * - DataSourcesPanel / SettingsPanel / DocsPanel (right, overlay)
  *
  * Handles auth state to show different UI for logged-in vs logged-out users.
  */
 
 'use client'
 
-import { type FC, useCallback, useMemo } from 'react'
+import { type FC, useCallback, useEffect, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { Flex } from '@/adapters/ui'
 import { useReducedMotion } from '@/hooks/use-reduced-motion'
@@ -27,10 +27,23 @@ import { InputArea } from './InputArea'
 import { ResearchPanel } from './ResearchPanel'
 import { DataSourcesPanel } from './DataSourcesPanel'
 import { SettingsPanel } from './SettingsPanel'
+import { DocsPanel } from './DocsPanel'
 import { useChatStore, useDeepResearch, NoSourcesBanner } from '@/features/chat'
 import { hasActiveDeepResearchJob } from '@/features/chat/lib/session-activity'
+import { deleteAllConversationSnapshots, deleteConversationSnapshot } from '@/adapters/api'
 import { useLayoutStore } from '../store'
 import { useSessionUrl } from '@/hooks/use-session-url'
+
+const DISPLAYABLE_MESSAGE_TYPES = new Set([
+  'user',
+  'status',
+  'prompt',
+  'agent_response',
+  'file',
+  'file_upload_status',
+  'error',
+  'deep_research_banner',
+])
 
 interface MainLayoutProps {
   /** Whether the user is authenticated */
@@ -64,16 +77,12 @@ export const MainLayout: FC<MainLayoutProps> = ({
   const {
     currentConversation,
     conversations,
-    isStreaming,
-    pendingInteraction,
     isDeepResearchStreaming,
     deepResearchOwnerConversationId,
     currentUserId,
   } = useChatStore(useShallow((s) => ({
     currentConversation: s.currentConversation,
     conversations: s.conversations,
-    isStreaming: s.isStreaming,
-    pendingInteraction: s.pendingInteraction,
     isDeepResearchStreaming: s.isDeepResearchStreaming,
     deepResearchOwnerConversationId: s.deepResearchOwnerConversationId,
     currentUserId: s.currentUserId,
@@ -88,6 +97,15 @@ export const MainLayout: FC<MainLayoutProps> = ({
   const isResearchPanelOpen = useLayoutStore((s) => s.rightPanel === 'research')
   const closeRightPanel = useLayoutStore((s) => s.closeRightPanel)
   const prefersReducedMotion = useReducedMotion()
+  const [isMobileViewport, setIsMobileViewport] = useState(false)
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 767px)')
+    const handleChange = () => setIsMobileViewport(mediaQuery.matches)
+    handleChange()
+    mediaQuery.addEventListener('change', handleChange)
+    return () => mediaQuery.removeEventListener('change', handleChange)
+  }, [])
 
   // Deep research SSE hook - manages connection when deep research starts
   useDeepResearch()
@@ -116,6 +134,9 @@ export const MainLayout: FC<MainLayoutProps> = ({
     (sessionId: string) => {
       const wasCurrentSession = currentConversation?.id === sessionId
       deleteConversation(sessionId)
+      void deleteConversationSnapshot(sessionId).catch((error) => {
+        console.warn('Failed to delete conversation snapshot:', error)
+      })
       if (wasCurrentSession) {
         clearSessionUrl()
       }
@@ -126,20 +147,24 @@ export const MainLayout: FC<MainLayoutProps> = ({
   // Delete all sessions for the current user
   const handleDeleteAllSessions = useCallback(() => {
     deleteAllConversations()
+    void deleteAllConversationSnapshots().catch((error) => {
+      console.warn('Failed to delete conversation snapshots:', error)
+    })
     clearSessionUrl()
   }, [deleteAllConversations, clearSessionUrl])
 
-  const isNavigationBlocked = isStreaming || pendingInteraction !== null
-
+  const isAdmin = currentUserId === 'srijan'
   const userConversations = useMemo(
-    () => currentUserId ? conversations.filter((c) => c.userId === currentUserId) : [],
-    [conversations, currentUserId]
+    () => currentUserId ? conversations.filter((c) => isAdmin || c.userId === currentUserId) : [],
+    [conversations, currentUserId, isAdmin]
   )
 
   const sessions = useMemo(
     () => userConversations.map((conv) => ({
       id: conv.id,
       title: conv.title,
+      userId: conv.userId,
+      ownerDisplayName: conv.ownerDisplayName,
       date: conv.updatedAt,
       hasActiveDeepResearch:
         hasActiveDeepResearchJob(conv.messages) ||
@@ -148,8 +173,33 @@ export const MainLayout: FC<MainLayoutProps> = ({
     [userConversations, isDeepResearchStreaming, deepResearchOwnerConversationId]
   )
 
+  const hasDisplayableMessages = useMemo(
+    () =>
+      (currentConversation?.messages ?? []).some((msg) => {
+        const messageType = msg.messageType || (msg.role === 'user' ? 'user' : 'assistant')
+        return DISPLAYABLE_MESSAGE_TYPES.has(messageType)
+      }),
+    [currentConversation?.messages]
+  )
+
+  const showHomeExperience =
+    isAuthenticated && currentUserId === 'srijan' && !hasDisplayableMessages && !isResearchPanelOpen
+  const hasActiveResearchForCurrentConversation =
+    (isDeepResearchStreaming && deepResearchOwnerConversationId === currentConversation?.id) ||
+    hasActiveDeepResearchJob(currentConversation?.messages ?? [])
+  const showAmbientResearchVideo =
+    isAuthenticated &&
+    currentUserId === 'srijan' &&
+    !showHomeExperience &&
+    hasActiveResearchForCurrentConversation
+
   return (
-    <Flex direction="col" className="h-screen min-w-[768px] overflow-x-auto overflow-y-hidden">
+    <Flex
+      direction="col"
+      className={`deep-app-shell h-[100dvh] w-full overflow-hidden ${
+        showHomeExperience ? 'deep-app-shell--home' : ''
+      }`}
+    >
       {/* AppBar - Fixed at top */}
       <AppBar
         sessionTitle={currentConversation?.title || 'New Session'}
@@ -157,37 +207,46 @@ export const MainLayout: FC<MainLayoutProps> = ({
         authRequired={authRequired}
         user={user}
         onNewSession={handleNewSession}
-        isNewSessionDisabled={isNavigationBlocked}
         onSignIn={onSignIn}
         onSignOut={onSignOut}
       />
 
       {/* Main Content Area - using explicit widths instead of flex for smoother animation */}
-      <div className="relative flex flex-1 overflow-hidden">
+      <div className="relative flex min-w-0 flex-1 overflow-hidden">
         {/* Center Content: Chat + Input - Responsive to research panel */}
         <div
-          className="flex flex-col overflow-hidden"
+          className={`relative flex min-w-0 flex-col ${
+            showHomeExperience ? 'deep-home-stage scrollbar-hide overflow-y-auto' : 'overflow-hidden'
+          }`}
           style={{
-            width: isResearchPanelOpen ? '40%' : '100%',
+            width: isResearchPanelOpen && !isMobileViewport ? '40%' : '100%',
             transition: prefersReducedMotion ? 'none' : 'width 600ms ease-in-out',
           }}
         >
           {/* Chat Area - Scrollable */}
-          <ChatArea isAuthenticated={isAuthenticated} onSignIn={onSignIn} />
+          <ChatArea
+            isAuthenticated={isAuthenticated}
+            onSignIn={onSignIn}
+            homeExperience={showHomeExperience}
+          />
 
           {/* No sources warning - shown when no data sources or files available */}
-          <NoSourcesBanner isAuthenticated={isAuthenticated} />
+          {!showHomeExperience && <NoSourcesBanner isAuthenticated={isAuthenticated} />}
 
           {/* Input Area - Fixed at bottom of chat */}
           {/* Using WebSocket mode for full HITL (human-in-the-loop) support */}
           <InputArea
             isAuthenticated={isAuthenticated}
             connectionMode="websocket"
+            variant={showHomeExperience ? 'hero' : 'dock'}
           />
+
+          {showHomeExperience && <HomeMediaShowcase />}
+          {showAmbientResearchVideo && <ResearchAmbientVideo />}
         </div>
 
         {/* Research Panel (Right) - Pushes content, takes 60% width */}
-        <ResearchPanel isAuthenticated={isAuthenticated} />
+        <ResearchPanel isAuthenticated={isAuthenticated} showToggle={!showHomeExperience} />
       </div>
 
       {/* Overlay Panels - These slide over the content */}
@@ -208,6 +267,42 @@ export const MainLayout: FC<MainLayoutProps> = ({
 
       {/* Settings Panel (Right) - Overlay */}
       <SettingsPanel />
+
+      {/* Docs Panel (Right) - Overlay */}
+      <DocsPanel />
     </Flex>
   )
 }
+
+const HomeMediaShowcase: FC = () => (
+  <section className="mx-auto w-full max-w-5xl px-4 pb-8 pt-1 sm:px-6 sm:pb-10">
+    <div className="deep-home-video-frame">
+      <video
+        className="h-full w-full object-cover"
+        src="/media/deep-research-loop.mp4"
+        poster="/media/deep-research-poster.jpg"
+        autoPlay
+        muted
+        loop
+        playsInline
+        preload="metadata"
+        aria-label="Looping AI research workspace"
+      />
+    </div>
+  </section>
+)
+
+const ResearchAmbientVideo: FC = () => (
+  <div className="deep-research-ambient" aria-hidden="true">
+    <video
+      className="h-full w-full object-cover"
+      src="/media/deep-research-loop.mp4"
+      poster="/media/deep-research-poster.jpg"
+      autoPlay
+      muted
+      loop
+      playsInline
+      preload="metadata"
+    />
+  </div>
+)

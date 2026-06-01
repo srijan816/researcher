@@ -26,11 +26,13 @@ import types
 from pathlib import Path
 
 _SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
+_REPO_SRC_ROOT = Path(__file__).resolve().parents[3] / "src"
 _PKG_DIR = _SRC_ROOT / "aiq_api"
 
 if _PKG_DIR.is_dir():
-    if str(_SRC_ROOT) not in sys.path:
-        sys.path.insert(0, str(_SRC_ROOT))
+    for src_root in (_REPO_SRC_ROOT, _SRC_ROOT):
+        if src_root.is_dir() and str(src_root) not in sys.path:
+            sys.path.insert(0, str(src_root))
 
     if "aiq_api" not in sys.modules:
         _pkg = types.ModuleType("aiq_api")

@@ -1,0 +1,21 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools >= 64", "setuptools-scm>=8"]
+
+[tool.setuptools]
+packages = ["searxng_jina_web_search"]
+package-dir = {"searxng_jina_web_search" = "src"}
+
+[project]
+name = "searxng-jina-web-search"
+version = "1.0.0"
+description = "NAT SearXNG web search tool with Jina Reader page extraction"
+requires-python = ">=3.11"
+dependencies = [
+    "ddgs>=7.0.0",
+    "pydantic>=2.0.0",
+    "scrapling[fetchers]>=0.4.7",
+]
+
+[project.entry-points."nat.plugins"]
+searxng_jina_web_search = "searxng_jina_web_search.register"

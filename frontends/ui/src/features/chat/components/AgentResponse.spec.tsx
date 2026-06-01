@@ -155,4 +155,17 @@ describe('AgentResponse', () => {
 
     expect(mockImportJobStream).toHaveBeenCalledWith('test-job-123')
   })
+
+  test('renders inline report artifact and copy action when report content is provided', () => {
+    render(
+      <AgentResponse
+        content="Response"
+        reportContent="# Final Report\n\nThis is the final report."
+      />
+    )
+
+    expect(screen.getByText('Final report artifact')).toBeInTheDocument()
+    expect(screen.getByText(/This is the final report/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Copy report' })).toBeInTheDocument()
+  })
 })

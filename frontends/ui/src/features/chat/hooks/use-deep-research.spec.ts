@@ -37,6 +37,7 @@ const mockPatchConversationMessage = vi.fn()
 const mockPersistDeepResearchToSession = vi.fn()
 const mockAddDeepResearchBanner = vi.fn()
 const mockSetStreamLoaded = vi.fn()
+const mockSetDeepResearchActivity = vi.fn()
 
 let mockStoreState = {
   deepResearchJobId: null as string | null,
@@ -55,7 +56,7 @@ let mockStoreState = {
 
 vi.mock('../store', () => ({
   useChatStore: Object.assign(
-    vi.fn((selector?: (s: any) => any) => {
+    vi.fn((selector?: (state: unknown) => unknown) => {
       const state = {
         ...mockStoreState,
         updateDeepResearchStatus: mockUpdateDeepResearchStatus,
@@ -85,8 +86,9 @@ vi.mock('../store', () => ({
         persistDeepResearchToSession: mockPersistDeepResearchToSession,
         addDeepResearchBanner: mockAddDeepResearchBanner,
         setStreamLoaded: mockSetStreamLoaded,
+        setDeepResearchActivity: mockSetDeepResearchActivity,
       }
-      return selector ? selector(state) : state
+      return typeof selector === 'function' ? selector(state) : state
     }),
     {
       getState: vi.fn(() => ({
@@ -114,12 +116,12 @@ const mockOpenRightPanel = vi.fn()
 const mockSetResearchPanelTab = vi.fn()
 
 vi.mock('@/features/layout/store', () => ({
-  useLayoutStore: vi.fn((selector?: (s: any) => any) => {
+  useLayoutStore: vi.fn((selector?: (state: unknown) => unknown) => {
     const state = {
       openRightPanel: mockOpenRightPanel,
       setResearchPanelTab: mockSetResearchPanelTab,
     }
-    return selector ? selector(state) : state
+    return typeof selector === 'function' ? selector(state) : state
   }),
 }))
 
@@ -162,8 +164,9 @@ const mockCreateDeepResearchClient = vi.fn((options: { callbacks: Record<string,
 })
 
 const mockCancelJob = vi.fn()
-const mockGetJobStatus = vi.fn<() => Promise<{ status: string }>>().mockResolvedValue({ status: 'running' })
+const mockGetJobStatus = vi.fn<() => Promise<{ status: string; error?: string | null }>>().mockResolvedValue({ status: 'running' })
 const mockGetJobReport = vi.fn<() => Promise<{ has_report: boolean; report?: string }>>().mockResolvedValue({ has_report: false })
+const mockResumeJob = vi.fn<(...args: unknown[]) => Promise<{ status: string; error?: string | null }>>().mockResolvedValue({ status: 'running' })
 
 vi.mock('@/adapters/api', () => ({
   createDeepResearchClient: (options: { callbacks: Record<string, (...args: unknown[]) => void> }) =>
@@ -171,6 +174,7 @@ vi.mock('@/adapters/api', () => ({
   cancelJob: (...args: unknown[]) => mockCancelJob(...args),
   getJobStatus: () => mockGetJobStatus(),
   getJobReport: () => mockGetJobReport(),
+  resumeJob: (...args: unknown[]) => mockResumeJob(...args),
 }))
 
 import { useChatStore } from '../store'
@@ -267,7 +271,7 @@ describe('useDeepResearch', () => {
       expect(mockOpenRightPanel).toHaveBeenCalledWith('research')
     })
 
-    test('always connects from the beginning (no lastEventId)', async () => {
+    test('passes lastEventId when reconnecting to an existing job', async () => {
       mockStoreState.deepResearchJobId = 'job-456'
       mockStoreState.deepResearchLastEventId = 'event-789'
       mockStoreState.isDeepResearchStreaming = true
@@ -279,11 +283,7 @@ describe('useDeepResearch', () => {
       expect(mockCreateDeepResearchClient).toHaveBeenCalledWith(
         expect.objectContaining({
           jobId: 'job-456',
-        })
-      )
-      expect(mockCreateDeepResearchClient).not.toHaveBeenCalledWith(
-        expect.objectContaining({
-          lastEventId: expect.anything(),
+          lastEventId: 'event-789',
         })
       )
     })
@@ -617,59 +617,6 @@ describe('useDeepResearch', () => {
       )
     })
 
-    test('onJobStatus interrupted by user shows cancelled banner', async () => {
-      await setupConnectedHook()
-
-      act(() => {
-        mockClient?.callbacks.onJobStatus?.('interrupted', 'cancelled by user')
-      })
-
-      expect(mockAddDeepResearchBanner).toHaveBeenCalledWith(
-        'cancelled',
-        'job-456',
-        'test-conv-123'
-      )
-      expect(mockAddErrorCard).not.toHaveBeenCalled()
-    })
-
-    test('onJobStatus interrupted for non-user reason shows failure banner', async () => {
-      await setupConnectedHook()
-
-      act(() => {
-        mockClient?.callbacks.onJobStatus?.('interrupted', 'worker lost during reconnect')
-      })
-
-      expect(mockAddDeepResearchBanner).toHaveBeenCalledWith(
-        'failure',
-        'job-456',
-        'test-conv-123'
-      )
-      expect(mockAddErrorCard).toHaveBeenCalledWith(
-        'agent.deep_research_failed',
-        'worker lost during reconnect'
-      )
-    })
-
-    test('onJobStatus interrupted without error shows fallback failure', async () => {
-      await setupConnectedHook()
-
-      expect(() => {
-        act(() => {
-          mockClient?.callbacks.onJobStatus?.('interrupted', undefined)
-        })
-      }).not.toThrow()
-
-      expect(mockAddDeepResearchBanner).toHaveBeenCalledWith(
-        'failure',
-        'job-456',
-        'test-conv-123'
-      )
-      expect(mockAddErrorCard).toHaveBeenCalledWith(
-        'agent.deep_research_failed',
-        'Research was interrupted before completion.'
-      )
-    })
-
     test('onWorkflowStart adds thinking step and agent', async () => {
       await setupConnectedHook()
 
@@ -905,7 +852,7 @@ describe('useDeepResearch', () => {
       })
     })
 
-    test('onError logs error and performs full cleanup when backend is unreachable', async () => {
+    test('onError keeps active research alive and schedules reconnect when backend is unreachable', async () => {
       await setupConnectedHook({
         activeDeepResearchMessageId: 'msg-123',
         reportContent: 'Partial report',
@@ -928,7 +875,6 @@ describe('useDeepResearch', () => {
       })) as unknown as typeof useChatStore.getState
 
       const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
       const testError = new Error('Connection lost')
 
@@ -937,41 +883,36 @@ describe('useDeepResearch', () => {
       })
 
       expect(consoleWarnSpy).toHaveBeenCalledWith('Deep research SSE error:', 'Connection lost')
-      expect(consoleErrorSpy).toHaveBeenCalledWith('Deep research SSE failed (backend unreachable):', testError)
-      expect(mockSetCurrentStatus).toHaveBeenCalledWith('error')
-      expect(mockAddErrorCard).toHaveBeenCalledWith(
-        'agent.deep_research_failed',
-        'Connection lost',
-        testError.stack
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        'Deep research SSE failed while backend was unreachable. Keeping job active.',
+        testError
       )
-
-      expect(mockPatchConversationMessage).toHaveBeenCalledWith(
+      expect(mockSetCurrentStatus).toHaveBeenCalledWith('researching')
+      expect(mockAddErrorCard).not.toHaveBeenCalled()
+      expect(mockPatchConversationMessage).not.toHaveBeenCalledWith(
         'test-conv-123',
         'msg-123',
-        expect.objectContaining({
-          deepResearchJobStatus: 'failure',
-          isDeepResearchActive: false,
-          showViewReport: true,
-        })
+        expect.objectContaining({ deepResearchJobStatus: 'failure' })
       )
-      expect(mockAddDeepResearchBanner).toHaveBeenCalledWith('failure', 'job-456', 'test-conv-123')
-      expect(mockStopAllDeepResearchSpinners).toHaveBeenCalled()
+      expect(mockAddDeepResearchBanner).not.toHaveBeenCalledWith('failure', 'job-456', 'test-conv-123')
+      expect(mockStopAllDeepResearchSpinners).not.toHaveBeenCalled()
       expect(mockClient?.disconnect).toHaveBeenCalled()
-      expect(mockSetStreamLoaded).toHaveBeenCalledWith(true)
-      expect(mockCompleteDeepResearch).toHaveBeenCalled()
-      expect(mockSetStreaming).toHaveBeenCalledWith(false)
+      expect(mockSetStreamLoaded).not.toHaveBeenCalledWith(true)
+      expect(mockCompleteDeepResearch).not.toHaveBeenCalled()
+      expect(mockSetStreaming).not.toHaveBeenCalledWith(false)
 
       consoleWarnSpy.mockRestore()
-      consoleErrorSpy.mockRestore()
     })
 
-    test('onError surfaces error when backend is reachable (no longer silently swallowed)', async () => {
+    test('onError reconnects without failing the job when backend reports it still running', async () => {
       await setupConnectedHook()
 
       mockCheckBackendHealthCached.mockResolvedValue(true)
+      mockGetJobStatus.mockResolvedValue({ status: 'running' })
       vi.mocked(useChatStore).getState = vi.fn(() => ({
         ...mockStoreState,
         isDeepResearchStreaming: true,
+        deepResearchJobId: 'job-456',
         addErrorCard: mockAddErrorCard,
         stopAllDeepResearchSpinners: mockStopAllDeepResearchSpinners,
       })) as unknown as typeof useChatStore.getState
@@ -982,16 +923,41 @@ describe('useDeepResearch', () => {
         await mockClient?.callbacks.onError?.(new Error('Transient error'))
       })
 
-      // Errors are now surfaced instead of silently swallowed when backend is healthy
-      expect(mockAddErrorCard).toHaveBeenCalledWith(
-        'connection.failed',
-        'Transient error',
-        expect.any(String)
-      )
-      expect(mockCompleteDeepResearch).toHaveBeenCalled()
-      expect(mockSetStreaming).toHaveBeenCalledWith(false)
+      expect(mockGetJobStatus).toHaveBeenCalled()
+      expect(mockUpdateDeepResearchStatus).toHaveBeenCalledWith('running')
+      expect(mockSetCurrentStatus).toHaveBeenCalledWith('researching')
+      expect(mockAddErrorCard).not.toHaveBeenCalled()
+      expect(mockCompleteDeepResearch).not.toHaveBeenCalled()
+      expect(mockSetStreaming).not.toHaveBeenCalledWith(false)
 
       consoleWarnSpy.mockRestore()
+    })
+
+    test('onJobStatus auto-resumes recoverable non-user interruption', async () => {
+      await setupConnectedHook()
+
+      mockResumeJob.mockResolvedValue({ status: 'running' })
+      vi.mocked(useChatStore).getState = vi.fn(() => ({
+        ...mockStoreState,
+        isDeepResearchStreaming: true,
+        deepResearchJobId: 'job-456',
+        addErrorCard: mockAddErrorCard,
+        stopAllDeepResearchSpinners: mockStopAllDeepResearchSpinners,
+      })) as unknown as typeof useChatStore.getState
+
+      await act(async () => {
+        await mockClient?.callbacks.onJobStatus?.(
+          'interrupted',
+          'Job lost its worker heartbeat; resume is available'
+        )
+      })
+
+      expect(mockResumeJob).toHaveBeenCalledWith('job-456', 'mock-id-token')
+      expect(mockUpdateDeepResearchStatus).toHaveBeenCalledWith('running')
+      expect(mockSetCurrentStatus).toHaveBeenCalledWith('researching')
+      expect(mockAddDeepResearchBanner).not.toHaveBeenCalledWith('failure', 'job-456', expect.anything())
+      expect(mockCompleteDeepResearch).not.toHaveBeenCalled()
+      expect(mockSetStreaming).not.toHaveBeenCalledWith(false)
     })
 
     test('onError skips cleanup when research already in terminal state', async () => {

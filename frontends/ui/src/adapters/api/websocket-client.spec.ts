@@ -110,4 +110,56 @@ describe('NATWebSocketClient auth observability', () => {
     expect(onError).toHaveBeenCalled()
     expect(addError).not.toHaveBeenCalled()
   })
+
+  test('sends shallow research mode without force-deep override', async () => {
+    const client = new NATWebSocketClient({
+      conversationId: 'conv-1',
+      websocketUrl: 'ws://localhost/websocket',
+      callbacks: {},
+    })
+
+    await client.connect()
+    const ws = MockWebSocket.instances[0]
+    ws.onopen?.(new Event('open'))
+
+    client.sendMessage('University education', ['web_search'], 'shallow')
+
+    const envelope = JSON.parse(ws.send.mock.calls[0][0])
+    const payload = JSON.parse(envelope.content.messages[0].content[0].text)
+    expect(payload).toMatchObject({
+      query: 'University education',
+      data_sources: ['web_search'],
+      research_depth: 'shallow',
+      force_deep_research: false,
+    })
+  })
+
+  test('sends deeper and deep modes as explicit deep-research requests', async () => {
+    const client = new NATWebSocketClient({
+      conversationId: 'conv-1',
+      websocketUrl: 'ws://localhost/websocket',
+      callbacks: {},
+    })
+
+    await client.connect()
+    const ws = MockWebSocket.instances[0]
+    ws.onopen?.(new Event('open'))
+
+    client.sendMessage('Best way to live in the age of AI', ['web_search'], 'deeper')
+    client.sendMessage('Monetize takeabreak.life', ['web_search'], 'deep')
+
+    const deeperEnvelope = JSON.parse(ws.send.mock.calls[0][0])
+    const deepEnvelope = JSON.parse(ws.send.mock.calls[1][0])
+    const deeperPayload = JSON.parse(deeperEnvelope.content.messages[0].content[0].text)
+    const deepPayload = JSON.parse(deepEnvelope.content.messages[0].content[0].text)
+
+    expect(deeperPayload).toMatchObject({
+      research_depth: 'deeper',
+      force_deep_research: true,
+    })
+    expect(deepPayload).toMatchObject({
+      research_depth: 'deep',
+      force_deep_research: true,
+    })
+  })
 })

@@ -22,6 +22,8 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
+from aiq_agent.common import DEFAULT_RESEARCH_DEPTH
+from aiq_agent.common import ResearchDepthTier
 from aiq_agent.knowledge import AvailableDocument
 
 from .depth import DepthDecision
@@ -38,6 +40,7 @@ class ChatResearcherState(BaseModel):
         tools_info: Information about available tools.
         user_info: Optional user information for personalization.
         data_sources: Optional list of user-selected data source IDs.
+        research_depth: User-selected source/depth tier for deep research.
         user_intent: Result of intent classification.
         depth_decision: Result of depth routing.
         final_report: The final research report.
@@ -45,6 +48,8 @@ class ChatResearcherState(BaseModel):
         clarifier_result: Log from clarifier agent dialog.
         original_query: The latest user query, preserved for deep research.
         available_documents: User-uploaded documents with summaries for context.
+        force_deep_research: When True, research queries skip shallow routing and
+            go directly to deep research. Meta queries are still answered as meta.
         skip_clarifier: When True the clarifier node is bypassed regardless of
             ``enable_clarifier``.  Set automatically for API-key and anonymous
             callers so headless workflows do not stall waiting for user input.
@@ -53,6 +58,7 @@ class ChatResearcherState(BaseModel):
     messages: Annotated[list[AnyMessage], add_messages]
     user_info: dict[str, Any] | None = None
     data_sources: list[str] | None = None
+    research_depth: ResearchDepthTier = DEFAULT_RESEARCH_DEPTH
     user_intent: IntentResult | None = None
     depth_decision: DepthDecision | None = None
     final_report: str | None = None
@@ -60,4 +66,5 @@ class ChatResearcherState(BaseModel):
     clarifier_result: str | None = None
     original_query: str | None = None
     available_documents: list[AvailableDocument] | None = None
+    force_deep_research: bool = False
     skip_clarifier: bool = False

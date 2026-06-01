@@ -12,12 +12,10 @@
 
 'use client'
 
-import { type FC, type ReactNode, memo, useCallback, useRef, useEffect } from 'react'
+import { type FC, type ReactNode, memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { Flex, Button, SegmentedControl, Spinner, Text } from '@/adapters/ui'
 import { Close, Generate, StopCircle } from '@/adapters/ui/icons'
-import { cancelJob } from '@/adapters/api'
-import { useChatStore, useLoadJobData } from '@/features/chat'
-import { useAuth } from '@/adapters/auth'
+import { useCancelDeepResearchJob, useChatStore, useLoadJobData } from '@/features/chat'
 import { useReducedMotion } from '@/hooks/use-reduced-motion'
 import { useLayoutStore } from '../store'
 import { PlanTab } from './PlanTab'
@@ -29,15 +27,22 @@ import type { ResearchPanelTab } from '../types'
 
 const TABS_REQUIRING_STREAM: ResearchPanelTab[] = ['tasks', 'thinking', 'citations']
 
-/** Fallback timeout: if the SSE stream doesn't deliver the interrupted
- *  status within this window after cancel, clean up the UI optimistically. */
-const CANCEL_FALLBACK_TIMEOUT_MS = 5000
+const formatElapsed = (timestamp?: Date): string => {
+  if (!timestamp) return ''
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - timestamp.getTime()) / 1000))
+  if (elapsedSeconds < 5) return 'just now'
+  if (elapsedSeconds < 60) return `${elapsedSeconds}s ago`
+  const minutes = Math.floor(elapsedSeconds / 60)
+  return `${minutes}m ago`
+}
 
 interface ResearchPanelProps {
   /** Content to display in the panel */
   children?: ReactNode
   /** Whether the user is authenticated */
   isAuthenticated?: boolean
+  /** Whether to show the protruding toggle when the panel is closed */
+  showToggle?: boolean
 }
 
 /**
@@ -45,7 +50,11 @@ interface ResearchPanelProps {
  * Opens from the right side of the screen, pushing the chat area.
  * Takes 60% of the screen width when open.
  */
-export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel({ children, isAuthenticated = false }) {
+export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel({
+  children,
+  isAuthenticated = false,
+  showToggle = true,
+}) {
   const isOpen = useLayoutStore((s) => s.rightPanel === 'research')
   const researchPanelTab = useLayoutStore((s) => s.researchPanelTab)
   const setResearchPanelTab = useLayoutStore((s) => s.setResearchPanelTab)
@@ -54,66 +63,47 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
   const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)
   const deepResearchJobId = useChatStore((state) => state.deepResearchJobId)
   const deepResearchStreamLoaded = useChatStore((state) => state.deepResearchStreamLoaded)
+  const deepResearchStatus = useChatStore((state) => state.deepResearchStatus)
+  const deepResearchActivity = useChatStore((state) => state.deepResearchActivity)
+  const deepResearchAgents = useChatStore((state) => state.deepResearchAgents)
+  const deepResearchToolCalls = useChatStore((state) => state.deepResearchToolCalls)
+  const deepResearchFiles = useChatStore((state) => state.deepResearchFiles)
   const { importStreamOnly, isLoading: isStreamLoading } = useLoadJobData()
-  const { idToken } = useAuth()
+  const { cancelDeepResearchJob, isCancelling } = useCancelDeepResearchJob()
 
   const prefersReducedMotion = useReducedMotion()
-  const cancelFallbackRef = useRef<NodeJS.Timeout | null>(null)
+  const [isMobileViewport, setIsMobileViewport] = useState(false)
+  const [, forceActivityTick] = useState(0)
 
-  // Clean up cancel fallback timer on unmount
   useEffect(() => {
-    return () => {
-      if (cancelFallbackRef.current) {
-        clearTimeout(cancelFallbackRef.current)
-        cancelFallbackRef.current = null
-      }
-    }
+    const mediaQuery = window.matchMedia('(max-width: 767px)')
+    const handleChange = () => setIsMobileViewport(mediaQuery.matches)
+    handleChange()
+    mediaQuery.addEventListener('change', handleChange)
+    return () => mediaQuery.removeEventListener('change', handleChange)
   }, [])
+
+  useEffect(() => {
+    if (!isDeepResearchStreaming) return
+    const timer = window.setInterval(() => forceActivityTick((value) => value + 1), 5000)
+    return () => window.clearInterval(timer)
+  }, [isDeepResearchStreaming])
+
+  const activityStats = useMemo(() => {
+    const runningAgents = deepResearchAgents.filter((agent) => agent.status === 'running').length
+    const completedAgents = deepResearchAgents.filter((agent) => agent.status === 'complete').length
+    const runningTools = deepResearchToolCalls.filter((tool) => tool.status === 'running').length
+    const completedTools = deepResearchToolCalls.filter((tool) => tool.status === 'complete').length
+    return { runningAgents, completedAgents, runningTools, completedTools, files: deepResearchFiles.length }
+  }, [deepResearchAgents, deepResearchToolCalls, deepResearchFiles])
 
   const handleClose = useCallback(() => {
     closeRightPanel()
   }, [closeRightPanel])
 
   const handleStopResearch = useCallback(async () => {
-    if (!deepResearchJobId) return
-    const cancelledJobId = deepResearchJobId
-    try {
-      await cancelJob(cancelledJobId, idToken || undefined)
-
-      // Fallback: if the SSE stream is broken or stalled and the
-      // useDeepResearch hook's onJobStatus never receives the
-      // "interrupted" event, clean up locally after a grace period.
-      // This is a safety net in addition to the hook's own fallback.
-      if (cancelFallbackRef.current) clearTimeout(cancelFallbackRef.current)
-      cancelFallbackRef.current = setTimeout(() => {
-        cancelFallbackRef.current = null
-        const state = useChatStore.getState()
-        if (!state.isDeepResearchStreaming || state.deepResearchJobId !== cancelledJobId) {
-          return // Already cleaned up by SSE or hook fallback
-        }
-        console.warn(
-          '[ResearchPanel] Cancel fallback: SSE did not deliver interrupted status. Cleaning up locally.'
-        )
-        state.stopAllDeepResearchSpinners()
-        const ownerConvId = state.deepResearchOwnerConversationId
-        const messageId = state.activeDeepResearchMessageId
-        const hasReport = Boolean(state.reportContent?.trim())
-        if (ownerConvId && messageId) {
-          state.patchConversationMessage(ownerConvId, messageId, {
-            content: '',
-            deepResearchJobStatus: 'interrupted',
-            isDeepResearchActive: false,
-            showViewReport: hasReport,
-          })
-        }
-        state.addDeepResearchBanner('cancelled', cancelledJobId, ownerConvId || undefined)
-        state.completeDeepResearch()
-        state.setStreaming(false)
-      }, CANCEL_FALLBACK_TIMEOUT_MS)
-    } catch (error) {
-      console.error('Failed to cancel job:', error)
-    }
-  }, [deepResearchJobId, idToken])
+    await cancelDeepResearchJob(deepResearchJobId)
+  }, [cancelDeepResearchJob, deepResearchJobId])
 
   const handleToggle = useCallback(() => {
     if (!isAuthenticated) return
@@ -156,13 +146,23 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
     [setResearchPanelTab, deepResearchJobId, deepResearchStreamLoaded, isDeepResearchStreaming, isStreamLoading, importStreamOnly]
   )
 
+  if (!showToggle && !isOpen) {
+    return null
+  }
+
   return (
     // Wrapper: uses flex to keep button visible while panel animates
     <div
-      className="relative h-full flex"
+      className={
+        isMobileViewport
+          ? isOpen
+            ? 'fixed inset-0 z-40 flex h-[100dvh]'
+            : 'absolute right-0 top-0 z-30 flex h-full'
+          : 'relative h-full flex'
+      }
       style={{
-        width: isOpen ? 'calc(60% + 40px)' : '40px',
-        minWidth: isOpen ? 'calc(60% + 40px)' : '40px',
+        width: isMobileViewport ? (isOpen ? '100vw' : '40px') : isOpen ? 'calc(60% + 40px)' : '40px',
+        minWidth: isMobileViewport ? (isOpen ? '100vw' : '40px') : isOpen ? 'calc(60% + 40px)' : '40px',
         transition: prefersReducedMotion
           ? 'none'
           : 'width 600ms ease-in-out, min-width 600ms ease-in-out',
@@ -170,10 +170,15 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
     >
       {/* Toggle Tag Button - protruding from left side, always visible */}
       <button
+        type="button"
         onClick={handleToggle}
         disabled={!isAuthenticated}
-        className={`research-panel-toggle border-base bg-surface-base relative z-10 flex w-10 shrink-0 items-center justify-center self-start overflow-hidden mt-[calc(var(--spacing)*3)] rounded-l-lg border-b border-l border-r border-t transition-colors ${
-          isAuthenticated ? 'cursor-pointer hover:border-[#76B900]' : 'cursor-not-allowed opacity-50'
+        className={`research-panel-toggle border-base bg-surface-base relative z-10 w-10 shrink-0 items-center justify-center self-start overflow-hidden mt-[calc(var(--spacing)*3)] rounded-l-lg border-b border-l border-r border-t transition-colors ${
+          isMobileViewport && isOpen ? 'hidden' : 'flex'
+        } ${
+          !showToggle && !isOpen ? 'hidden' : ''
+        } ${
+          isAuthenticated ? 'cursor-pointer hover:border-[#20808d]' : 'cursor-not-allowed opacity-50'
         }`}
         style={{ height: 'calc(var(--spacing) * 38)' }}
         aria-label={isOpen ? 'Close research panel' : 'Open research panel'}
@@ -202,7 +207,9 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
 
       {/* Outer container: clips content, fills remaining space */}
       <div
-        className="border-base bg-surface-base h-full flex-1 overflow-hidden rounded-tl-xl border-l border-t -ml-px"
+        className={`border-base bg-surface-base h-full flex-1 overflow-hidden border-l border-t -ml-px ${
+          isMobileViewport && isOpen ? 'rounded-none' : 'rounded-tl-xl'
+        }`}
         aria-hidden={!isOpen}
       >
         {/* Inner container: fixed width so content stays stable */}
@@ -220,8 +227,8 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
           }}
         >
         {/* Header with tabs and close button */}
-        <Flex align="center" justify="between" className="border-base shrink-0 border-b pl-6 pr-8 py-4">
-          <Flex align="center" gap="density-xl">
+        <Flex align="center" justify="between" className="border-base shrink-0 flex-wrap gap-2 border-b px-3 py-3 sm:pl-6 sm:pr-8 sm:py-4">
+          <Flex align="center" gap="density-xl" className="min-w-0 flex-1 overflow-x-auto">
             <SegmentedControl
               value={researchPanelTab}
               onValueChange={handleTabChange}
@@ -239,13 +246,13 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
               kind="tertiary"
               size="small"
               onClick={isDeepResearchStreaming ? handleStopResearch : undefined}
-              disabled={!isDeepResearchStreaming}
+              disabled={!isDeepResearchStreaming || isCancelling}
               aria-label="Stop researching"
-              title={isDeepResearchStreaming ? 'Stop researching' : 'No active research'}
+              title={isDeepResearchStreaming ? 'Cancel current research' : 'No active research'}
               data-testid="research-panel-stop"
             >
-              <StopCircle className="h-4 w-4 mr-2" aria-hidden="true" />
-              Stop Researching
+              <StopCircle className="h-4 w-4 sm:mr-2" aria-hidden="true" />
+              <span className="hidden sm:inline">{isCancelling ? 'Cancelling...' : 'Cancel Research'}</span>
             </Button>
           </Flex>
           <Flex align="center" gap="density-xl">
@@ -263,8 +270,52 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
           </Flex>
         </Flex>
 
+        {(isDeepResearchStreaming || deepResearchActivity) && (
+          <div className="border-base shrink-0 border-b bg-surface-raised px-3 py-3 sm:px-6">
+            <Flex align="center" justify="between" gap="3" className="min-w-0">
+              <Flex align="center" gap="3" className="min-w-0 flex-1">
+                {isDeepResearchStreaming ? (
+                  <Spinner size="small" aria-label="Research activity" />
+                ) : (
+                  <Generate className="h-4 w-4 shrink-0 text-subtle" aria-hidden="true" />
+                )}
+                <Flex direction="col" gap="0" className="min-w-0 flex-1">
+                  <Text kind="label/semibold/sm" className="truncate text-primary">
+                    {deepResearchActivity?.message || (deepResearchStatus === 'submitted' ? 'Research job queued' : 'Research activity')}
+                  </Text>
+                  <Text kind="body/regular/xs" className="truncate text-subtle">
+                    {deepResearchActivity?.detail || 'Waiting for the next research event'}
+                  </Text>
+                </Flex>
+              </Flex>
+              <Flex align="center" gap="2" className="hidden shrink-0 md:flex">
+                <Text kind="body/regular/xs" className="text-tertiary">
+                  {activityStats.runningAgents > 0
+                    ? `${activityStats.runningAgents} agents running`
+                    : `${activityStats.completedAgents} agents`}
+                </Text>
+                <Text kind="body/regular/xs" className="text-tertiary">
+                  {activityStats.runningTools > 0
+                    ? `${activityStats.runningTools} tools running`
+                    : `${activityStats.completedTools} tools`}
+                </Text>
+                {activityStats.files > 0 && (
+                  <Text kind="body/regular/xs" className="text-tertiary">
+                    {activityStats.files} files
+                  </Text>
+                )}
+                {deepResearchActivity?.timestamp && (
+                  <Text kind="body/regular/xs" className="text-tertiary">
+                    {formatElapsed(deepResearchActivity.timestamp)}
+                  </Text>
+                )}
+              </Flex>
+            </Flex>
+          </div>
+        )}
+
         {/* Content Area - each tab manages its own scrolling and footer */}
-        <Flex direction="col" className="flex-1 overflow-hidden py-5 pl-6 pr-8">
+        <Flex direction="col" className="flex-1 overflow-hidden px-3 py-4 sm:py-5 sm:pl-6 sm:pr-8">
           {isStreamLoading ? (
             <Flex direction="col" align="center" justify="center" className="h-full gap-4">
               <Spinner size="medium" aria-label="Loading research data" />

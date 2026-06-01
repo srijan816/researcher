@@ -18,14 +18,22 @@
 
 import { type FC, memo, useState, useCallback, useRef, useEffect, type KeyboardEvent } from 'react'
 import { Flex, Text, Button, TextArea, Banner, Popover } from '@/adapters/ui'
-import { useWebSocketChat, useChatStore, useIsCurrentSessionBusy } from '@/features/chat'
+import { useCancelDeepResearchJob, useWebSocketChat, useChatStore, useIsCurrentSessionBusy } from '@/features/chat'
 import { useLayoutStore } from '../store'
 import { useAppConfig } from '@/shared/context'
 import { useFileUpload, useFileDragDrop, useFileUploadBanners } from '@/features/documents'
-import { Globe, Document, Paperclip, Paperplane, Cancel } from '@/adapters/ui/icons'
+import { Globe, Document, Paperclip, Paperplane, Cancel, StopCircle } from '@/adapters/ui/icons'
+import type { ResearchDepth } from '../types'
 
 /** Connection mode for the chat */
 export type ConnectionMode = 'sse' | 'websocket'
+export type InputAreaVariant = 'dock' | 'hero'
+
+const RESEARCH_DEPTH_OPTIONS: Array<{ value: ResearchDepth; label: string; title: string }> = [
+  { value: 'shallow', label: 'Shallow', title: 'Target 10-20 sources' },
+  { value: 'deeper', label: 'Deeper', title: 'Target 32-64 sources' },
+  { value: 'deep', label: 'Deep', title: 'Target 90-150+ sources' },
+]
 
 interface InputAreaProps {
   /** Placeholder text */
@@ -34,6 +42,8 @@ interface InputAreaProps {
   isAuthenticated?: boolean
   /** Connection mode: 'websocket' auto-connects, 'sse' disables auto-connect (default: 'websocket') */
   connectionMode?: ConnectionMode
+  /** Visual variant for the docked chat composer or the homepage search surface */
+  variant?: InputAreaVariant
 }
 
 /**
@@ -52,6 +62,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   placeholder = 'Check data sources and ask a research question...',
   isAuthenticated = false,
   connectionMode = 'websocket',
+  variant = 'dock',
 }) {
   const [message, setMessage] = useState('')
 
@@ -73,8 +84,11 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
 
   // Deep research completion state - disables new submissions after research completes
   const deepResearchStatus = useChatStore((state) => state.deepResearchStatus)
+  const deepResearchJobId = useChatStore((state) => state.deepResearchJobId)
   const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)
   const deepResearchOwnerConversationId = useChatStore((state) => state.deepResearchOwnerConversationId)
+  const isCurrentResearchOwner = deepResearchOwnerConversationId === currentConversation?.id
+  const { cancelDeepResearchJob, isCancelling } = useCancelDeepResearchJob()
 
   // Check for active deep research in conversation messages (persisted state)
   // This handles the case where ephemeral state has been reset (page refresh, session switch)
@@ -107,6 +121,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   // 2. Persisted message has terminal deep research job status
   const isResearchSessionComplete =
     (!isDeepResearchStreaming &&
+      isCurrentResearchOwner &&
       (deepResearchStatus === 'success' ||
         deepResearchStatus === 'failure' ||
         deepResearchStatus === 'interrupted')) ||
@@ -118,6 +133,18 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   const isResearchSessionInProgress =
     (isDeepResearchStreaming && deepResearchOwnerConversationId === currentConversation?.id) ||
     hasActiveDeepResearch
+
+  const persistedActiveJobId = currentConversation?.messages
+    .slice()
+    .reverse()
+    .find(
+      (m) =>
+        m.messageType === 'agent_response' &&
+        m.deepResearchJobId &&
+        (m.deepResearchJobStatus === 'submitted' || m.deepResearchJobStatus === 'running')
+    )?.deepResearchJobId
+  const activeResearchJobId =
+    isCurrentResearchOwner && deepResearchJobId ? deepResearchJobId : persistedActiveJobId
 
   // File upload hook - provides session files and handles validation internally
   const {
@@ -188,6 +215,8 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   const openRightPanel = useLayoutStore((s) => s.openRightPanel)
   const closeRightPanel = useLayoutStore((s) => s.closeRightPanel)
   const setDataSourcesPanelTab = useLayoutStore((s) => s.setDataSourcesPanelTab)
+  const researchDepth = useLayoutStore((s) => s.researchDepth)
+  const setResearchDepth = useLayoutStore((s) => s.setResearchDepth)
 
   // Check if we're in response mode (responding to a HITL prompt)
   const isResponseMode = !!pendingInteraction
@@ -267,6 +296,10 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
     [handleSubmit]
   )
 
+  const handleCancelResearch = useCallback(async () => {
+    await cancelDeepResearchJob(activeResearchJobId)
+  }, [activeResearchJobId, cancelDeepResearchJob])
+
   const handleValueChange = useCallback(
     (value: string) => {
       if (isDisabledByAuth) return // Don't allow typing when not authenticated
@@ -338,13 +371,22 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   // Data sources counts for indicator
   const enabledSourcesCount = enabledDataSourceIds.length
   const totalSourcesCount = availableDataSources?.length ?? 0
+  const isHero = variant === 'hero'
 
   return (
-    <Flex direction="col" className="mx-auto w-full max-w-3xl p-4">
+    <Flex
+      direction="col"
+      className={
+        isHero
+          ? 'deep-home-input-wrap mx-auto w-full max-w-4xl px-4 pb-4 sm:px-6'
+          : 'mx-auto w-full max-w-3xl p-3 sm:p-4'
+      }
+    >
       <Flex
         direction="col"
         className={`
-          bg-surface-raised relative rounded-2xl border border-black p-4 transition-colors
+          relative border border-base p-3 shadow-sm transition-colors sm:p-4
+          ${isHero ? 'deep-home-search' : 'bg-surface-raised rounded-lg'}
           ${isDisabledByAuth ? 'opacity-60' : ''}
           ${isDragging && isUnsupportedDrag ? 'border-error border-dashed' : isDragging ? 'border-brand border-dashed' : ''}
         `}
@@ -376,7 +418,9 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
         {/* Text Input */}
         <div onKeyDown={handleKeyDown}>
           <TextArea
-            className="bg-surface-raised border-0"
+            className={`border-0 text-base ${
+              isHero ? 'deep-home-textarea bg-transparent' : 'bg-surface-raised'
+            }`}
             value={message}
             onValueChange={handleValueChange}
             placeholder={getPlaceholder()}
@@ -395,9 +439,62 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
         )}
 
         {/* Bottom Actions Bar */}
-        <Flex align="center" justify="end" className="mt-3">
+        <Flex
+          align="center"
+          justify="between"
+          className={`gap-2 max-sm:!flex-col max-sm:!items-stretch ${isHero ? 'mt-2' : 'mt-3'}`}
+        >
+          <Flex align="center" gap="2" className="min-w-0 flex-wrap max-sm:!w-full">
+            <div
+              className={`flex min-w-0 flex-1 items-center gap-2 rounded-md border border-accent-primary p-1 max-sm:w-full sm:flex-none ${
+                isHero ? 'bg-surface-raised-30' : 'bg-surface-base'
+              }`}
+            >
+              <span className="shrink-0 px-1 text-[11px] font-semibold uppercase tracking-normal text-accent-primary">
+                Mode
+              </span>
+              <div
+                className={`grid min-w-0 flex-1 grid-cols-3 rounded border border-base p-0.5 sm:w-[12.5rem] sm:flex-none ${
+                  isHero ? 'bg-surface-raised-30' : 'bg-surface-base'
+                }`}
+                role="group"
+                aria-label="Research mode"
+              >
+                {RESEARCH_DEPTH_OPTIONS.map((option) => {
+                  const selected = researchDepth === option.value
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setResearchDepth(option.value)}
+                      disabled={disabled || isResearchSessionInProgress}
+                      className={`h-7 min-w-0 rounded px-1 text-[11px] font-medium leading-none transition-colors sm:h-6 sm:text-xs ${
+                        selected
+                          ? 'bg-surface-sunken text-primary shadow-sm'
+                          : 'text-subtle hover:bg-surface-raised hover:text-primary'
+                      } disabled:cursor-not-allowed disabled:opacity-60`}
+                      aria-label={`Research mode: ${option.label}`}
+                      aria-pressed={selected}
+                      title={option.title}
+                    >
+                      <span className="block min-w-0 truncate">{option.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            <span className="hidden rounded-md border border-base bg-surface-base px-2 py-1 text-xs text-subtle sm:inline-flex">
+              Web
+            </span>
+            {attachedFilesCount > 0 && (
+              <span className="rounded-md border border-base bg-surface-base px-2 py-1 text-xs text-subtle">
+                Files
+              </span>
+            )}
+          </Flex>
+
           {/* Right Actions: Counters, Attach, Research, Submit */}
-          <Flex align="center" gap="2">
+          <Flex align="center" gap="2" className="max-w-full flex-wrap justify-end max-sm:!w-full">
             {/* Sources indicator - clickable to toggle data connections tab */}
             <Button
               kind="tertiary"
@@ -497,25 +594,17 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                 </Button>
               </Popover>
             ) : isResearchSessionInProgress && !isResponseMode ? (
-              <Popover
-                side="top"
-                align="end"
-                slotContent={
-                  <Text kind="body/regular/sm" className="max-w-xs p-3">
-                    Research is currently in progress. Chat is paused to prevent generating multiple reports at
-                    the same time.
-                  </Text>
-                }
+              <Button
+                kind="secondary"
+                size="small"
+                onClick={handleCancelResearch}
+                disabled={!activeResearchJobId || isCancelling}
+                aria-label="Cancel current research"
+                title="Cancel current research"
               >
-                <Button
-                  kind="primary"
-                  size="small"
-                  aria-label="Research in progress - please wait"
-                  title="Research in progress"
-                >
-                  <Paperplane className="h-4 w-4" />
-                </Button>
-              </Popover>
+                <StopCircle className="h-4 w-4 sm:mr-2" />
+                <span className="hidden sm:inline">{isCancelling ? 'Cancelling...' : 'Cancel'}</span>
+              </Button>
             ) : (
               <Button
                 kind="primary"

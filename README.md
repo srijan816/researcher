@@ -1,3 +1,23 @@
+## Start Here: MiniMax Deep Research
+
+From the repo root, run this single command to start fresh:
+
+```bash
+./scripts/run_minimax_deep_research.sh
+```
+
+This clears any existing local backend/frontend listeners for this app, verifies the MiniMax/SearXNG/Scrapling workflow dependencies, starts SearXNG if needed, and launches:
+
+- Backend: `http://localhost:9000`
+- Frontend: `http://localhost:3000`
+- Workflow config: `configs/config_cli_minimax_ddgs.yml`
+
+Stop everything later with:
+
+```bash
+FORCE_STOP_DEEP_RESEARCH=1 ./scripts/stop_deep_research.sh
+```
+
 <!--
 SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0
@@ -15,6 +35,26 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 -->
+## Deep Research Local Run
+
+Start both the backend and frontend:
+
+```bash
+./scripts/start_deep_research.sh
+```
+
+Stop both local services:
+
+```bash
+./scripts/stop_deep_research.sh
+```
+
+Defaults: backend `http://localhost:9000`, frontend `http://localhost:3000`, logs and PID files in `.deep-research-runtime/`. Override with environment variables when needed:
+
+```bash
+AIQ_CONFIG_FILE=configs/config_cli_minimax_ddgs.yml BACKEND_PORT=9000 FRONTEND_PORT=3000 ./scripts/start_deep_research.sh
+```
+
 <h1>NVIDIA AI-Q Blueprint</h1>
 
 > **🏆 BENCHMARK NOTE 🏆**
@@ -292,6 +332,7 @@ For more details, refer to:
 ### Async Deep Research Jobs
 
 Endpoints, SSE streaming, and debug console: refer to [frontends/aiq_api/README.md](frontends/aiq_api/README.md).
+For service integrations with MiniMax Deep Research, auth, startup commands, plan approval behavior, and copy-paste client examples, see [docs/deep-research-api.md](docs/deep-research-api.md).
 
 ### Benchmarks
 

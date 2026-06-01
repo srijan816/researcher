@@ -17,6 +17,7 @@
 
 import { type FC, useState } from 'react'
 import { Flex, Text, Button } from '@/adapters/ui'
+import { coerceSSEText } from '@/adapters/api'
 import { Chat, ChevronDown, LoadingSpinner } from '@/adapters/ui/icons'
 import { MarkdownRenderer } from '@/shared/components/MarkdownRenderer'
 
@@ -60,7 +61,7 @@ const formatTime = (date: Date | string): string => {
  * Get preview text for collapsed state (prioritize thinking content)
  */
 const getPreviewText = (thought: ThoughtInfo): string => {
-  const source = thought.thinking || thought.content || ''
+  const source = coerceSSEText((thought.thinking || thought.content || '') as unknown)
   const trimmed = source.substring(0, 130)
   return source.length > 130 ? `${trimmed}...` : trimmed
 }
@@ -70,6 +71,8 @@ const getPreviewText = (thought: ThoughtInfo): string => {
  */
 export const ThoughtCard: FC<ThoughtCardProps> = ({ thought }) => {
   const [isExpanded, setIsExpanded] = useState(false)
+  const thinkingText = coerceSSEText(thought.thinking as unknown)
+  const contentText = coerceSSEText(thought.content as unknown)
 
   const previewText = getPreviewText(thought)
   const hasPreview = previewText.length > 0
@@ -172,19 +175,19 @@ export const ThoughtCard: FC<ThoughtCardProps> = ({ thought }) => {
           className="px-3 pb-3 border-t border-base"
         >
           {/* Thinking content (if available) */}
-          {thought.thinking && (
+          {thinkingText && (
             <div className="bg-surface-raised text-primary p-2 rounded text-sm italic mt-2">
-              <MarkdownRenderer content={thought.thinking} compact />
+              <MarkdownRenderer content={thinkingText} compact />
             </div>
           )}
 
           {/* Output content */}
-          {thought.content && (
-            <Flex direction="col" gap="1" className={thought.thinking ? '' : 'mt-2'}>
+          {contentText && (
+            <Flex direction="col" gap="1" className={thinkingText ? '' : 'mt-2'}>
               <Text kind="label/semibold/xs" className="text-subtle uppercase">
                 Output
               </Text>
-              <MarkdownRenderer content={thought.content} compact />
+              <MarkdownRenderer content={contentText} compact />
             </Flex>
           )}
         </Flex>

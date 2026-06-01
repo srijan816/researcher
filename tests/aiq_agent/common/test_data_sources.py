@@ -68,17 +68,17 @@ class TestParseDataSources:
         """Test that None input returns None (not specified, use all)."""
         assert parse_data_sources(None) is None
 
-    def test_parse_empty_list_returns_empty_list(self):
-        """Test that empty list returns empty list (explicitly no sources)."""
-        assert parse_data_sources([]) == []
+    def test_parse_empty_list_returns_default_sources(self):
+        """Test that empty list falls back to default sources."""
+        assert parse_data_sources([]) == DEFAULT_DATA_SOURCES
 
-    def test_parse_empty_string_returns_empty_list(self):
-        """Test that empty string returns empty list."""
-        assert parse_data_sources("") == []
+    def test_parse_empty_string_returns_default_sources(self):
+        """Test that empty string falls back to default sources."""
+        assert parse_data_sources("") == DEFAULT_DATA_SOURCES
 
-    def test_parse_whitespace_only_string_returns_empty_list(self):
-        """Test that whitespace-only string returns empty list."""
-        assert parse_data_sources("   ") == []
+    def test_parse_whitespace_only_string_returns_default_sources(self):
+        """Test that whitespace-only string falls back to default sources."""
+        assert parse_data_sources("   ") == DEFAULT_DATA_SOURCES
 
     def test_parse_list_of_strings(self):
         """Test parsing a list of strings."""
@@ -95,9 +95,9 @@ class TestParseDataSources:
         result = parse_data_sources(["web_search", "", "  ", "confluence"])
         assert result == ["web_search", "confluence"]
 
-    def test_parse_list_all_empty_returns_empty_list(self):
-        """Test that list with only empty items returns empty list."""
-        assert parse_data_sources(["", "  ", ""]) == []
+    def test_parse_list_all_empty_returns_default_sources(self):
+        """Test that list with only empty items falls back to default sources."""
+        assert parse_data_sources(["", "  ", ""]) == DEFAULT_DATA_SOURCES
 
     def test_parse_comma_separated_string(self):
         """Test parsing comma-separated string."""
@@ -140,14 +140,14 @@ class TestFilterToolsBySourcesBasic:
         result = filter_tools_by_sources(tools, None)
         assert result == tools
 
-    def test_filter_empty_sources_returns_empty(self):
-        """Test that empty data_sources excludes web and knowledge tools (only 'other' tools included)."""
+    def test_filter_empty_sources_uses_default_sources(self):
+        """Test that empty data_sources falls back to default web tools."""
         web_tool = MagicMock()
         web_tool.name = "web_search_tool"
         knowledge_tool = MagicMock()
         knowledge_tool.name = "knowledge_search"
         result = filter_tools_by_sources([web_tool, knowledge_tool], [])
-        assert result == []
+        assert result == [web_tool]
 
 
 class TestFilterToolsBySourcesWebSearch:

@@ -17,8 +17,12 @@ import type {
   ResearchPanelTab,
   DataSourcesPanelTab,
   ThemeMode,
+  ResearchDepth,
 } from './types'
 import { createDataSourcesClient, type DataSourceFromAPI } from '@/adapters/api'
+
+const isEnabledByDefault = (source: DataSourceFromAPI): boolean =>
+  !source.requires_auth && (source.default_enabled ?? source.id === 'web_search')
 
 const initialState: LayoutState = {
   isSessionsPanelOpen: false,
@@ -26,7 +30,8 @@ const initialState: LayoutState = {
   researchPanelTab: 'plan',
   dataSourcesPanelTab: 'connections',
   enabledDataSourceIds: [], // Start empty, populated when data sources are fetched
-  theme: 'system',
+  researchDepth: 'deeper',
+  theme: 'dark',
   availableDataSources: null,
   knowledgeLayerAvailable: false, // Default to false until API confirms availability
   dataSourcesLoading: false,
@@ -79,7 +84,10 @@ export const useLayoutStore = create<LayoutStore>()(
       setEnabledDataSources: (ids: string[]) =>
         set({ enabledDataSourceIds: ids }, false, 'setEnabledDataSources'),
 
-      setTheme: (theme: ThemeMode) => set({ theme }, false, 'setTheme'),
+      setResearchDepth: (depth: ResearchDepth) =>
+        set({ researchDepth: depth }, false, 'setResearchDepth'),
+
+      setTheme: (_theme: ThemeMode) => set({ theme: 'dark' }, false, 'setTheme'),
 
       fetchDataSources: async (authToken?: string) => {
         set({ dataSourcesLoading: true, dataSourcesError: null }, false, 'fetchDataSources/start')
@@ -88,9 +96,10 @@ export const useLayoutStore = create<LayoutStore>()(
           const client = createDataSourcesClient({ authToken })
           const response = await client.getDataSources()
 
-          // Enable sources that don't require auth by default
+          // Enable only sources marked as default by the backend. This keeps local
+          // corpora opt-in unless a user selects them for a session.
           const enabledIds = response.data_sources
-            .filter((source) => !source.requires_auth)
+            .filter(isEnabledByDefault)
             .map((source) => source.id)
 
           set(

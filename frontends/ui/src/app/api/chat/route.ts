@@ -17,7 +17,7 @@ import { cookies } from 'next/headers'
 import { isAuthRequired } from '@/adapters/auth/config'
 
 const getBackendUrl = (): string => {
-  const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
+  const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:9000'
   return url.replace(/\/$/, '')
 }
 
@@ -35,6 +35,9 @@ export async function POST(req: Request): Promise<Response> {
     // Get idToken cookie for backend authentication (skip if auth not required)
     const cookieStore = await cookies()
     const idToken = authRequired ? cookieStore.get('idToken')?.value : null
+    if (authRequired && !authToken && !idToken) {
+      return authRequiredResponse()
+    }
 
     // Build the backend URL
     const backendUrl = `${getBackendUrl()}/chat/stream`
@@ -121,3 +124,9 @@ export async function POST(req: Request): Promise<Response> {
     )
   }
 }
+
+const authRequiredResponse = (): NextResponse =>
+  new NextResponse(
+    JSON.stringify({ error: { code: 'AUTH_REQUIRED', message: 'Authentication required' } }),
+    { status: 401, headers: { 'Content-Type': 'application/json' } }
+  )

@@ -19,6 +19,9 @@ from typing import Any
 from langchain_core.messages import BaseMessage
 from langchain_core.messages import trim_messages
 
+from aiq_agent.common import DEFAULT_RESEARCH_DEPTH
+from aiq_agent.common import ResearchDepthTier
+from aiq_agent.common import normalize_research_depth
 from aiq_agent.common import parse_data_sources
 
 
@@ -96,36 +99,83 @@ def _extract_text_from_message(message: Any) -> str | None:
     return None
 
 
-def _extract_query_from_text(text: str) -> tuple[str, list[str] | None]:
+def coerce_content_text(content: Any) -> str:
+    """Convert LangChain/OpenAI/Anthropic text content variants into plain text.
+
+    MiniMax's Anthropic-compatible endpoint returns a list of content blocks
+    (for example ``thinking`` plus ``text``). Several orchestration nodes only
+    need the user-visible text block for JSON parsing.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "text" and item.get("text"):
+                    parts.append(str(item["text"]))
+                elif item.get("type") in {"thinking", "reasoning"} and item.get("thinking"):
+                    continue
+            elif hasattr(item, "type") and _is_text_type(getattr(item, "type")):
+                text = getattr(item, "text", None)
+                if text:
+                    parts.append(str(text))
+        if parts:
+            return "\n".join(parts).strip()
+    return str(content)
+
+
+def _parse_force_deep(value: Any) -> bool:
+    """Parse truthy force-deep flags from JSON payloads."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _extract_query_sources_force_depth_from_text(
+    text: str,
+) -> tuple[str, list[str] | None, bool, ResearchDepthTier]:
     if not text:
-        return ("", None)
+        return ("", None, False, DEFAULT_RESEARCH_DEPTH)
     trimmed = text.strip()
     if trimmed.startswith("{") and trimmed.endswith("}"):
         try:
             payload = json.loads(trimmed)
         except json.JSONDecodeError:
-            return (text, None)
+            return (text, None, False, DEFAULT_RESEARCH_DEPTH)
         if isinstance(payload, dict):
             data_sources = parse_data_sources(payload.get("data_sources"))
             query_text = payload.get("query") or payload.get("text")
+            force_deep = _parse_force_deep(payload.get("force_deep_research"))
+            research_depth = normalize_research_depth(payload.get("research_depth"))
             if isinstance(query_text, str) and query_text.strip():
-                return (query_text.strip(), data_sources)
-    return (text, None)
+                return (query_text.strip(), data_sources, force_deep, research_depth)
+    return (text, None, False, DEFAULT_RESEARCH_DEPTH)
 
 
-def _extract_query_and_sources(payload: Any) -> tuple[str, list[str] | None]:
-    """Extract query text and data sources from various payload formats.
+def _extract_query_sources_force_from_text(text: str) -> tuple[str, list[str] | None, bool]:
+    """Backward-compatible helper returning query, sources, and force-deep."""
+    query_text, data_sources, force_deep, _research_depth = _extract_query_sources_force_depth_from_text(text)
+    return (query_text, data_sources, force_deep)
 
-    Returns:
-        Tuple of (query_text, data_sources).
-        - data_sources is None if not specified, meaning use all configured tools
-        - data_sources is a list if explicitly specified (use only those)
-    """
+
+def _extract_query_sources_force_depth(
+    payload: Any,
+) -> tuple[str, list[str] | None, bool, ResearchDepthTier]:
+    """Extract query, data sources, force-deep flag, and selected research-depth tier."""
     if isinstance(payload, dict):
         content = payload.get("content", {}) if isinstance(payload.get("content"), dict) else {}
         data_sources = parse_data_sources(payload.get("data_sources")) or parse_data_sources(
             content.get("data_sources")
         )
+        force_deep = _parse_force_deep(payload.get("force_deep_research")) or _parse_force_deep(
+            content.get("force_deep_research")
+        )
+        research_depth = normalize_research_depth(payload.get("research_depth") or content.get("research_depth"))
         messages = content.get("messages", [])
         query_text = None
         if isinstance(messages, list) and messages:
@@ -141,14 +191,20 @@ def _extract_query_and_sources(payload: Any) -> tuple[str, list[str] | None]:
                 payload.get("text")
             )
         if query_text:
-            inline_query, inline_sources = _extract_query_from_text(query_text)
+            inline_query, inline_sources, inline_force_deep, inline_depth = (
+                _extract_query_sources_force_depth_from_text(query_text)
+            )
             query_text = inline_query
             data_sources = data_sources or inline_sources
-        return (query_text or "", data_sources)
+            force_deep = force_deep or inline_force_deep
+            research_depth = inline_depth if inline_depth != DEFAULT_RESEARCH_DEPTH else research_depth
+        return (query_text or "", data_sources, force_deep, research_depth)
 
     messages = getattr(payload, "messages", None)
     if isinstance(messages, list):
         data_sources = parse_data_sources(getattr(payload, "data_sources", None))
+        force_deep = _parse_force_deep(getattr(payload, "force_deep_research", None))
+        research_depth = normalize_research_depth(getattr(payload, "research_depth", None))
         query_text = None
         for msg in reversed(messages):
             if _is_user_role(getattr(msg, "role", None)):
@@ -158,11 +214,38 @@ def _extract_query_and_sources(payload: Any) -> tuple[str, list[str] | None]:
         if not query_text and messages:
             query_text = _extract_text_from_message(messages[-1])
         if query_text:
-            inline_query, inline_sources = _extract_query_from_text(query_text)
+            inline_query, inline_sources, inline_force_deep, inline_depth = (
+                _extract_query_sources_force_depth_from_text(query_text)
+            )
             query_text = inline_query
             data_sources = data_sources or inline_sources
-        return (query_text or "", data_sources)
+            force_deep = force_deep or inline_force_deep
+            research_depth = inline_depth if inline_depth != DEFAULT_RESEARCH_DEPTH else research_depth
+        return (query_text or "", data_sources, force_deep, research_depth)
 
     query_text = str(payload)
-    inline_query, inline_sources = _extract_query_from_text(query_text)
-    return (inline_query, inline_sources)
+    return _extract_query_sources_force_depth_from_text(query_text)
+
+
+def _extract_query_sources_and_force_deep(payload: Any) -> tuple[str, list[str] | None, bool]:
+    """Extract query text and data sources from various payload formats.
+
+    Returns:
+        Tuple of (query_text, data_sources, force_deep_research).
+        - data_sources is None if not specified, meaning use all configured tools
+        - data_sources is a list if explicitly specified (use only those)
+    """
+    query_text, data_sources, force_deep, _research_depth = _extract_query_sources_force_depth(payload)
+    return (query_text, data_sources, force_deep)
+
+
+def _extract_query_from_text(text: str) -> tuple[str, list[str] | None]:
+    """Backward-compatible helper returning only query text and data sources."""
+    query_text, data_sources, _force_deep = _extract_query_sources_force_from_text(text)
+    return (query_text, data_sources)
+
+
+def _extract_query_and_sources(payload: Any) -> tuple[str, list[str] | None]:
+    """Backward-compatible helper returning only query text and data sources."""
+    query_text, data_sources, _force_deep = _extract_query_sources_and_force_deep(payload)
+    return (query_text, data_sources)

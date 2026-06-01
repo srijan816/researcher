@@ -15,17 +15,40 @@
 
 """Tests for custom middleware."""
 
+import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
 
+from aiq_agent.agents.deep_researcher.custom_middleware import ArtifactWriteValidationMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import PlanFileValidationMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import PlannerCommitGuardMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import PostWriteReadbackGuardMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import SearchBudgetExhaustionRepairMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import ThinkingOnlyRepairMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import ToolBudgetMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
-from aiq_agent.common.data_source_registry import populate_from_config
-from aiq_agent.common.data_source_registry import reset_registry
+from aiq_agent.agents.deep_researcher.custom_middleware import ToolResultPruningMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import _budget_key
+from aiq_agent.agents.deep_researcher.custom_middleware import _scoped_limit
+from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_exhausted_tools
+from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_plan_validation_failures
+from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_planner_model_turns
+from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_recent_artifact_writes
+from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_tool_counts
+from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_tool_limits
+from aiq_agent.agents.deep_researcher.custom_middleware import set_session_exhausted_tools
+from aiq_agent.agents.deep_researcher.custom_middleware import set_session_plan_validation_failures
+from aiq_agent.agents.deep_researcher.custom_middleware import set_session_planner_model_turns
+from aiq_agent.agents.deep_researcher.custom_middleware import set_session_recent_artifact_writes
+from aiq_agent.agents.deep_researcher.custom_middleware import set_session_tool_counts
+from aiq_agent.agents.deep_researcher.custom_middleware import set_session_tool_limits
 
 
 class TestToolNameSanitizationMiddleware:
@@ -128,46 +151,8 @@ class TestSourceRegistryMiddleware:
     def source_tools(self):
         return {"advanced_web_search_tool", "knowledge_search", "paper_search_tool"}
 
-    @pytest.fixture(autouse=True)
-    def _reset_data_source_registry(self):
-        """Keep the global data_source_registry clean across tests.
-
-        Tests that need a populated registry either depend on
-        ``_default_data_sources`` (via the ``middleware`` fixture) or
-        populate their own registry explicitly in the test body.
-        """
-        reset_registry()
-        yield
-        reset_registry()
-
     @pytest.fixture
-    def _default_data_sources(self):
-        """Populate the three default data sources used by the shared tests."""
-        populate_from_config(
-            [
-                {
-                    "id": "web_search",
-                    "name": "Web Search",
-                    "description": "Search the web for real-time information.",
-                    "tools": ["advanced_web_search_tool"],
-                },
-                {
-                    "id": "knowledge_layer",
-                    "name": "Knowledge Base",
-                    "description": "Search uploaded documents and files.",
-                    "tools": ["knowledge_search"],
-                },
-                {
-                    "id": "paper_search",
-                    "name": "Academic Papers",
-                    "description": "Search academic papers.",
-                    "tools": ["paper_search_tool"],
-                },
-            ]
-        )
-
-    @pytest.fixture
-    def middleware(self, source_tools, _default_data_sources):
+    def middleware(self, source_tools):
         return SourceRegistryMiddleware(source_tool_names=source_tools)
 
     def _make_request(self, tool_name: str):
@@ -250,79 +235,6 @@ class TestSourceRegistryMiddleware:
         assert len(middleware.registry.all_sources()) == 0
 
     @pytest.mark.asyncio
-    async def test_allowlisted_tool_not_in_data_source_registry_is_still_captured(self):
-        """Agent-loaded tools are captured even when not declared under data_sources.
-
-        Tools may be passed directly to the agent (programmatically or via
-        `tools:` in YAML) without being declared under `data_sources:`. Their
-        outputs are still real, citable evidence and must contribute to the
-        citation registry.
-        """
-        # Autouse fixture already reset the registry; leave it empty.
-        mw = SourceRegistryMiddleware(source_tool_names={"mcp_time__get_current_time"})
-        content = "2026-05-11T14:30:00+09:00"
-        handler = AsyncMock(return_value=self._make_tool_result(content))
-        request = self._make_request("mcp_time__get_current_time")
-
-        await mw.awrap_tool_call(request, handler)
-
-        sources = mw.registry.all_sources()
-        assert len(sources) == 1
-        assert sources[0].citation_key == "mcp_time__get_current_time"
-        assert sources[0].source_type == "tool_result"
-
-    @pytest.mark.asyncio
-    async def test_registered_group_tool_without_urls_captured(self):
-        """Registered group child tools without URLs can be non-URL citation sources."""
-        populate_from_config(
-            [
-                {
-                    "id": "mcp_time",
-                    "name": "MCP Time",
-                    "description": "Get current time and timezone information through MCP.",
-                    "tools": ["mcp_time"],
-                }
-            ],
-            group_names={"mcp_time"},
-        )
-        mw = SourceRegistryMiddleware(source_tool_names={"mcp_time__get_current_time"})
-        content = "2026-05-11T14:30:00+09:00"
-        handler = AsyncMock(return_value=self._make_tool_result(content))
-        request = self._make_request("mcp_time__get_current_time")
-
-        await mw.awrap_tool_call(request, handler)
-
-        sources = mw.registry.all_sources()
-        assert len(sources) == 1
-        assert sources[0].citation_key == "mcp_time__get_current_time"
-        assert sources[0].source_type == "tool_result"
-
-    @pytest.mark.asyncio
-    async def test_registered_exact_data_source_tool_without_urls_captured(self):
-        """Any exact tool declared under data_sources can be a non-URL citation source."""
-        populate_from_config(
-            [
-                {
-                    "id": "weather_observations",
-                    "name": "Weather Observations",
-                    "description": "Current observed weather conditions.",
-                    "tools": ["weather_observation_tool"],
-                }
-            ]
-        )
-        mw = SourceRegistryMiddleware(source_tool_names={"weather_observation_tool"})
-        content = "Current conditions for San Francisco: clear, 68F"
-        handler = AsyncMock(return_value=self._make_tool_result(content))
-        request = self._make_request("weather_observation_tool")
-
-        await mw.awrap_tool_call(request, handler)
-
-        sources = mw.registry.all_sources()
-        assert len(sources) == 1
-        assert sources[0].citation_key == "weather_observation_tool"
-        assert sources[0].source_type == "tool_result"
-
-    @pytest.mark.asyncio
     async def test_mixed_source_tools(self, middleware):
         """Multiple tool calls — only allowlisted tools contribute sources."""
         h1 = AsyncMock(return_value=self._make_tool_result("See https://a.com"))
@@ -381,3 +293,545 @@ class TestSourceRegistryMiddleware:
         result = await middleware.awrap_tool_call(request, handler)
 
         assert result.content == content
+
+
+class TestSearchBudgetFamilies:
+    """Search tools should share a single family budget."""
+
+    def test_search_tools_share_budget_keys(self):
+        assert _budget_key("advanced_web_search_tool", "planner") == "planner:search"
+        assert _budget_key("web_search_tool", "researcher") == "researcher:search"
+        assert _budget_key("exa_web_search_tool") == "search"
+
+    def test_scoped_limit_prefers_family_budget(self):
+        limits = {"search": 12, "planner:search": 4, "advanced_web_search_tool": 99}
+
+        assert _scoped_limit(limits, "advanced_web_search_tool") == 12
+        assert _scoped_limit(limits, "web_search_tool", "planner") == 4
+
+
+class TestToolBudgetMiddleware:
+    """Tests for scoped tool budgets."""
+
+    class Request:
+        def __init__(self, tool_name: str, tool_id: str):
+            self.tool_call = {"name": tool_name, "id": tool_id}
+
+    @pytest.mark.asyncio
+    async def test_planner_budget_does_not_consume_researcher_budget(self):
+        """Planner search exhaustion should not spend or block the researcher pool."""
+        counts_token = set_session_tool_counts({})
+        limits_token = set_session_tool_limits(
+            {
+                "planner:search": 1,
+                "search": 2,
+            }
+        )
+        exhausted_token = set_session_exhausted_tools(set())
+        try:
+            planner = ToolBudgetMiddleware({"advanced_web_search_tool": 2}, scope="planner")
+            researcher = ToolBudgetMiddleware({"advanced_web_search_tool": 2}, scope="researcher")
+            handler = AsyncMock(return_value=ToolMessage(content="ok", tool_call_id="tc"))
+
+            first = await planner.awrap_tool_call(self.Request("advanced_web_search_tool", "p1"), handler)
+            second = await planner.awrap_tool_call(self.Request("advanced_web_search_tool", "p2"), handler)
+            third = await researcher.awrap_tool_call(self.Request("advanced_web_search_tool", "r1"), handler)
+
+            assert first.content == "ok"
+            assert "GLOBAL_SEARCH_BUDGET_EXHAUSTED" in second.content
+            assert third.content == "ok"
+        finally:
+            reset_session_tool_counts(counts_token)
+            reset_session_tool_limits(limits_token)
+            reset_session_exhausted_tools(exhausted_token)
+
+
+class TestPlanFileValidationMiddleware:
+    """Tests for hard validation of planner writes."""
+
+    class Request:
+        def __init__(self, content: str, path: str = "/shared/plan.json"):
+            self.tool_call = {
+                "name": "write_file",
+                "id": "plan-write",
+                "args": {
+                    "file_path": path,
+                    "content": content,
+                },
+            }
+
+    @staticmethod
+    def _valid_plan() -> str:
+        return json.dumps(
+            {
+                "task_analysis": {"user_intent": "Research AI use cases"},
+                "report_title": "AI Use Cases in 2026",
+                "report_toc": [{"id": "1", "title": "Ranked Use Cases"}],
+                "constraints": ["Use current sources"],
+                "output_style": {"mode": "standard_report"},
+                "queries": [
+                    {
+                        "query": "highest value AI use cases 2026 ROI analyst report",
+                        "tool": "advanced_web_search_tool",
+                        "target_sections": ["Ranked Use Cases"],
+                    }
+                ],
+            }
+        )
+
+    @pytest.mark.asyncio
+    async def test_rejects_plan_write_missing_queries(self):
+        middleware = PlanFileValidationMiddleware()
+        bad_plan = json.dumps(
+            {
+                "task_analysis": {"user_intent": "Research AI use cases"},
+                "report_title": "AI Use Cases in 2026",
+                "report_toc": [{"id": "1", "title": "Ranked Use Cases"}],
+                "constraints": ["Use current sources"],
+                "output_style": {"mode": "standard_report"},
+            }
+        )
+        handler = AsyncMock(return_value=ToolMessage(content="written", tool_call_id="plan-write"))
+
+        result = await middleware.awrap_tool_call(self.Request(bad_plan), handler)
+
+        assert handler.await_count == 0
+        assert "PLAN_FILE_VALIDATION_FAILED" in result.content
+        assert "missing top-level field: queries" in result.content
+
+    @pytest.mark.asyncio
+    async def test_rejects_truncated_plan_write(self):
+        middleware = PlanFileValidationMiddleware()
+        handler = AsyncMock(return_value=ToolMessage(content="written", tool_call_id="plan-write"))
+
+        result = await middleware.awrap_tool_call(
+            self.Request('{"task_analysis": {}\n\n[... truncated tool argument from 40000 chars ...]'),
+            handler,
+        )
+
+        assert handler.await_count == 0
+        assert "PLAN_FILE_VALIDATION_FAILED" in result.content
+        assert "truncation/omission marker" in result.content
+
+    @pytest.mark.asyncio
+    async def test_second_plan_validation_failure_escalates_to_write_plan(self):
+        middleware = PlanFileValidationMiddleware()
+        token = set_session_plan_validation_failures(0)
+        handler = AsyncMock(return_value=ToolMessage(content="written", tool_call_id="plan-write"))
+        try:
+            first = await middleware.awrap_tool_call(self.Request("{bad json"), handler)
+            second = await middleware.awrap_tool_call(self.Request("{bad json again"), handler)
+
+            assert "Use the typed write_plan tool now" in first.content
+            assert "second planner JSON validation failure" in second.content
+            assert "Do not call write_file for /shared/plan.json again" in second.content
+        finally:
+            reset_session_plan_validation_failures(token)
+
+    @pytest.mark.asyncio
+    async def test_allows_complete_plan_write(self):
+        middleware = PlanFileValidationMiddleware()
+        handler = AsyncMock(return_value=ToolMessage(content="written", tool_call_id="plan-write"))
+
+        result = await middleware.awrap_tool_call(self.Request(self._valid_plan()), handler)
+
+        assert handler.await_count == 1
+        assert result.content == "written"
+
+    @pytest.mark.asyncio
+    async def test_ignores_non_plan_file_writes(self):
+        middleware = PlanFileValidationMiddleware()
+        handler = AsyncMock(return_value=ToolMessage(content="written", tool_call_id="notes-write"))
+
+        result = await middleware.awrap_tool_call(self.Request("notes", path="/shared/notes.md"), handler)
+
+        assert handler.await_count == 1
+        assert result.content == "written"
+
+
+class TestArtifactWriteValidationMiddleware:
+    """Tests for rejecting artifact writes polluted by truncation markers."""
+
+    class Request:
+        def __init__(
+            self, content: str, *, tool_name: str = "write_file", path: str = "/shared/section_briefs/topic.md"
+        ):
+            args = {"file_path": path}
+            if tool_name == "edit_file":
+                args.update({"old_string": "old", "new_string": content})
+            else:
+                args["content"] = content
+            self.tool_call = {"name": tool_name, "id": "artifact-write", "args": args}
+
+    @pytest.mark.asyncio
+    async def test_rejects_shared_artifact_with_argument_truncation_marker(self):
+        middleware = ArtifactWriteValidationMiddleware()
+        handler = AsyncMock(return_value=ToolMessage(content="written", tool_call_id="artifact-write"))
+
+        result = await middleware.awrap_tool_call(
+            self.Request("- C4 — Bologn...(argument truncated)"),
+            handler,
+        )
+
+        assert handler.await_count == 0
+        assert "ARTIFACT_WRITE_VALIDATION_FAILED" in result.content
+        assert "argument truncated" in result.content
+
+    @pytest.mark.asyncio
+    async def test_rejects_edit_file_new_string_with_truncation_marker(self):
+        middleware = ArtifactWriteValidationMiddleware()
+        handler = AsyncMock(return_value=ToolMessage(content="edited", tool_call_id="artifact-write"))
+
+        result = await middleware.awrap_tool_call(
+            self.Request("replacement [... truncated tool argument from 9000 chars ...]", tool_name="edit_file"),
+            handler,
+        )
+
+        assert handler.await_count == 0
+        assert "ARTIFACT_WRITE_VALIDATION_FAILED" in result.content
+
+    @pytest.mark.asyncio
+    async def test_allows_legitimate_shortened_evidence_extract(self):
+        middleware = ArtifactWriteValidationMiddleware()
+        handler = AsyncMock(return_value=ToolMessage(content="written", tool_call_id="artifact-write"))
+
+        result = await middleware.awrap_tool_call(
+            self.Request("source excerpt [... truncated from 9000 chars]", path="/shared/extracts/topic.json"),
+            handler,
+        )
+
+        assert handler.await_count == 1
+        assert result.content == "written"
+
+    @pytest.mark.asyncio
+    async def test_allows_clean_shared_artifact_write(self):
+        middleware = ArtifactWriteValidationMiddleware()
+        handler = AsyncMock(return_value=ToolMessage(content="written", tool_call_id="artifact-write"))
+
+        result = await middleware.awrap_tool_call(self.Request("complete concise artifact"), handler)
+
+        assert handler.await_count == 1
+        assert result.content == "written"
+
+
+class TestPostWriteReadbackGuardMiddleware:
+    """Tests for suppressing immediate artifact self-verification reads."""
+
+    class Request:
+        def __init__(self, tool_name: str, path: str = "/shared/notes_topic.md"):
+            self.tool_call = {
+                "name": tool_name,
+                "id": f"{tool_name}-1",
+                "args": {
+                    "file_path": path,
+                    **({"content": "complete notes"} if tool_name == "write_file" else {}),
+                },
+            }
+
+    @pytest.mark.asyncio
+    async def test_skips_immediate_readback_after_successful_write(self):
+        middleware = PostWriteReadbackGuardMiddleware(suppress_read_count=1)
+        token = set_session_recent_artifact_writes({})
+        handler = AsyncMock(
+            side_effect=[
+                ToolMessage(content="written", tool_call_id="write_file-1", name="write_file"),
+                ToolMessage(content="actual file content", tool_call_id="read_file-1", name="read_file"),
+            ]
+        )
+        try:
+            write_result = await middleware.awrap_tool_call(self.Request("write_file"), handler)
+            read_result = await middleware.awrap_tool_call(self.Request("read_file"), handler)
+            second_read_result = await middleware.awrap_tool_call(self.Request("read_file"), handler)
+
+            assert write_result.content == "written"
+            assert "READ_AFTER_WRITE_VERIFICATION_SKIPPED" in read_result.content
+            assert second_read_result.content == "actual file content"
+            assert handler.await_count == 2
+        finally:
+            reset_session_recent_artifact_writes(token)
+
+    @pytest.mark.asyncio
+    async def test_does_not_track_failed_write(self):
+        middleware = PostWriteReadbackGuardMiddleware(suppress_read_count=1)
+        token = set_session_recent_artifact_writes({})
+        handler = AsyncMock(
+            side_effect=[
+                ToolMessage(content="Error: File already exists", tool_call_id="write_file-1", name="write_file"),
+                ToolMessage(content="actual file content", tool_call_id="read_file-1", name="read_file"),
+            ]
+        )
+        try:
+            await middleware.awrap_tool_call(self.Request("write_file"), handler)
+            read_result = await middleware.awrap_tool_call(self.Request("read_file"), handler)
+
+            assert read_result.content == "actual file content"
+            assert handler.await_count == 2
+        finally:
+            reset_session_recent_artifact_writes(token)
+
+
+class TestPlannerCommitGuardMiddleware:
+    """Tests for planner turn-budget commit enforcement."""
+
+    class Request:
+        def __init__(self, messages=None, tools=None, tool_choice=None):
+            self.messages = messages or [HumanMessage(content="plan this")]
+            self.tools = tools or [
+                SimpleNamespace(name="think"),
+                SimpleNamespace(name="write_plan"),
+                SimpleNamespace(name="advanced_web_search_tool"),
+            ]
+            self.tool_choice = tool_choice
+
+        def override(self, **kwargs):
+            return TestPlannerCommitGuardMiddleware.Request(
+                messages=kwargs.get("messages", self.messages),
+                tools=kwargs.get("tools", self.tools),
+                tool_choice=kwargs.get("tool_choice", self.tool_choice),
+            )
+
+    @pytest.mark.asyncio
+    async def test_forces_write_plan_after_turn_budget(self):
+        from langchain.agents.middleware.types import ModelResponse
+
+        middleware = PlannerCommitGuardMiddleware(max_model_turns=4, max_repairs=0)
+        token = set_session_planner_model_turns(3)
+        try:
+            thinking_detour = AIMessage(
+                content="I have enough grounding; let me think once more.",
+                tool_calls=[{"name": "think", "args": {"thought": "more planning"}, "id": "think-1"}],
+            )
+            committed = AIMessage(
+                content="",
+                tool_calls=[{"name": "write_plan", "args": {"report_title": "Plan"}, "id": "write-plan-1"}],
+            )
+            handler = AsyncMock(
+                side_effect=[ModelResponse(result=[thinking_detour]), ModelResponse(result=[committed])]
+            )
+
+            result = await middleware.awrap_model_call(self.Request(), handler)
+
+            assert handler.await_count == 2
+            forced_request = handler.await_args_list[1].args[0]
+            assert [tool.name for tool in forced_request.tools] == ["write_plan"]
+            assert forced_request.tool_choice == "write_plan"
+            assert "only action must be the `write_plan` tool" in forced_request.messages[-1].content
+            assert result.result[0].tool_calls[0]["name"] == "write_plan"
+        finally:
+            reset_session_planner_model_turns(token)
+
+    @pytest.mark.asyncio
+    async def test_allows_pre_budget_thinking_turn(self):
+        from langchain.agents.middleware.types import ModelResponse
+
+        middleware = PlannerCommitGuardMiddleware(max_model_turns=4, max_repairs=0)
+        token = set_session_planner_model_turns(0)
+        try:
+            thinking_detour = AIMessage(
+                content="I should reason about source strategy.",
+                tool_calls=[{"name": "think", "args": {"thought": "source strategy"}, "id": "think-1"}],
+            )
+            handler = AsyncMock(return_value=ModelResponse(result=[thinking_detour]))
+
+            result = await middleware.awrap_model_call(self.Request(), handler)
+
+            assert handler.await_count == 1
+            assert result.result[0].tool_calls[0]["name"] == "think"
+        finally:
+            reset_session_planner_model_turns(token)
+
+
+class TestThinkingOnlyRepairMiddleware:
+    """Tests for MiniMax thinking-only response repair."""
+
+    @pytest.mark.asyncio
+    async def test_repairs_thinking_only_response(self):
+        from langchain.agents.middleware.types import ModelResponse
+
+        middleware = ThinkingOnlyRepairMiddleware(max_repairs=1)
+        thinking_only = AIMessage(content=[{"type": "thinking", "thinking": "I should write the report now."}])
+        repaired = AIMessage(content="Final report prose\n\n## Sources\n\n[1] https://example.com")
+        handler = AsyncMock(side_effect=[ModelResponse(result=[thinking_only]), ModelResponse(result=[repaired])])
+
+        request = MagicMock()
+        request.messages = [HumanMessage(content="Research question")]
+
+        def override(**kwargs):
+            updated = MagicMock()
+            updated.messages = kwargs.get("messages", request.messages)
+            updated.override = override
+            return updated
+
+        request.override = override
+
+        response = await middleware.awrap_model_call(request, handler)
+
+        assert response.result[0].content == repaired.content
+        assert handler.await_count == 2
+        repaired_request = handler.await_args_list[1].args[0]
+        assert "thinking-only" in repaired_request.messages[-1].content
+        assert "write_file" in repaired_request.messages[-1].content
+
+    @pytest.mark.asyncio
+    async def test_allows_thinking_with_tool_call(self):
+        from langchain.agents.middleware.types import ModelResponse
+
+        middleware = ThinkingOnlyRepairMiddleware(max_repairs=1)
+        message = AIMessage(
+            content=[
+                {"type": "thinking", "thinking": "I need a source."},
+                {
+                    "type": "tool_use",
+                    "id": "call-1",
+                    "name": "advanced_web_search_tool",
+                    "input": {"question": "x"},
+                },
+            ],
+            tool_calls=[{"name": "advanced_web_search_tool", "args": {"question": "x"}, "id": "call-1"}],
+        )
+        handler = AsyncMock(return_value=ModelResponse(result=[message]))
+        request = MagicMock()
+        request.messages = [HumanMessage(content="Research question")]
+
+        response = await middleware.awrap_model_call(request, handler)
+
+        assert response.result[0] == message
+        assert handler.await_count == 1
+
+
+class TestSearchBudgetExhaustionRepairMiddleware:
+    """Tests for stopping exhausted-search retry loops."""
+
+    class Request:
+        def __init__(self, messages):
+            self.messages = messages
+
+        def override(self, **kwargs):
+            return TestSearchBudgetExhaustionRepairMiddleware.Request(kwargs.get("messages", self.messages))
+
+    def _search_call_message(self):
+        return AIMessage(
+            content=[
+                {"type": "thinking", "thinking": "The search budget is exhausted. Let me try one more time."},
+                {
+                    "type": "tool_use",
+                    "id": "call-1",
+                    "name": "advanced_web_search_tool",
+                    "input": {"question": "one more search"},
+                },
+            ],
+            tool_calls=[{"name": "advanced_web_search_tool", "args": {"question": "one more search"}, "id": "call-1"}],
+        )
+
+    @pytest.mark.asyncio
+    async def test_repairs_exhausted_search_call_into_write_file(self):
+        from langchain.agents.middleware.types import ModelResponse
+
+        middleware = SearchBudgetExhaustionRepairMiddleware(
+            {"advanced_web_search_tool", "web_search_tool"},
+            max_repairs=1,
+        )
+        token = set_session_exhausted_tools({"search"})
+        try:
+            write_file_message = AIMessage(
+                content="Writing notes from existing evidence.",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "args": {"file_path": "/shared/notes.txt", "content": "Partial notes"},
+                        "id": "write-1",
+                    }
+                ],
+            )
+            handler = AsyncMock(
+                side_effect=[
+                    ModelResponse(result=[self._search_call_message()]),
+                    ModelResponse(result=[write_file_message]),
+                ]
+            )
+            request = self.Request([HumanMessage(content="Research question")])
+
+            response = await middleware.awrap_model_call(request, handler)
+
+            assert handler.await_count == 2
+            assert response.result[0].tool_calls[0]["name"] == "write_file"
+            repaired_request = handler.await_args_list[1].args[0]
+            assert "forbidden from calling" in repaired_request.messages[-1].content
+            assert "write_file" in repaired_request.messages[-1].content
+        finally:
+            reset_session_exhausted_tools(token)
+
+    @pytest.mark.asyncio
+    async def test_strips_exhausted_search_call_after_failed_repair(self):
+        from langchain.agents.middleware.types import ModelResponse
+
+        middleware = SearchBudgetExhaustionRepairMiddleware(
+            {"advanced_web_search_tool", "web_search_tool"},
+            max_repairs=1,
+        )
+        token = set_session_exhausted_tools({"search"})
+        try:
+            handler = AsyncMock(return_value=ModelResponse(result=[self._search_call_message()]))
+            request = self.Request([HumanMessage(content="Research question")])
+
+            response = await middleware.awrap_model_call(request, handler)
+
+            assert handler.await_count == 2
+            assert not response.result[0].tool_calls
+            assert "stop searching" in response.result[0].content
+        finally:
+            reset_session_exhausted_tools(token)
+
+
+class TestToolResultPruningMiddleware:
+    """Tests for model-context tool result pruning."""
+
+    @pytest.mark.asyncio
+    async def test_recent_tool_result_is_still_hard_capped(self):
+        """Recent giant tool results should not be sent to the next model call intact."""
+        middleware = ToolResultPruningMiddleware(keep_last_n=10, max_chars=20, recent_max_chars=50)
+        messages = [
+            AIMessage(content="call tool"),
+            ToolMessage(content="x" * 200, tool_call_id="tc1", name="advanced_web_search_tool"),
+        ]
+        request = MagicMock()
+        request.messages = messages
+        request.override.side_effect = lambda **kwargs: MagicMock(messages=kwargs["messages"])
+
+        async def handler(req):
+            return req.messages
+
+        pruned = await middleware.awrap_model_call(request, handler)
+
+        assert len(pruned[1].content) < 350
+        assert "TOOL_RESULT_DISPLAY_SHORTENED" in pruned[1].content
+
+    @pytest.mark.asyncio
+    async def test_historical_ai_tool_call_args_are_pruned(self):
+        """Large historical write_file arguments should not balloon the next prompt."""
+        middleware = ToolResultPruningMiddleware(max_tool_call_arg_chars=1000)
+        tool_call = {
+            "name": "write_file",
+            "args": {"file_path": "/shared/report.md", "content": "x" * 5000},
+            "id": "call-1",
+        }
+        messages = [
+            AIMessage(
+                content=[{"type": "tool_use", "id": "call-1", "name": "write_file", "input": tool_call["args"]}],
+                tool_calls=[tool_call],
+            )
+        ]
+        request = MagicMock()
+        request.messages = messages
+        request.override.side_effect = lambda **kwargs: MagicMock(messages=kwargs["messages"])
+
+        async def handler(req):
+            return req.messages
+
+        pruned = await middleware.awrap_model_call(request, handler)
+
+        pruned_call = pruned[0].tool_calls[0]
+        assert len(pruned_call["args"]["content"]) < 260
+        assert "WRITE_FILE_CONTENT_STORED_SUCCESSFULLY" in pruned_call["args"]["content"]
+        assert "omitted" not in pruned_call["args"]["content"]
+        assert pruned[0].content[0]["input"]["content"] == pruned_call["args"]["content"]

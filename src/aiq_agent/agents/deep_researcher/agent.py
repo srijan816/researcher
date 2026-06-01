@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections.abc import Sequence
+from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -15,27 +17,63 @@ from deepagents import create_deep_agent
 from langchain.agents.middleware import ModelRetryMiddleware
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
+from langchain_core.messages import SystemMessage
 from langchain_core.tools import BaseTool
 from langchain_core.tools import tool
 from langgraph.store.memory import InMemoryStore
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
+from aiq_agent.common import current_datetime_context
+from aiq_agent.common import evaluate_report_source_quality
+from aiq_agent.common import get_research_depth_config
+from aiq_agent.common import is_model_failure_report
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
+from aiq_agent.common import report_matches_request_scope
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import verify_citations
+from aiq_agent.common.claim_table import merge_claim_tables_json
+from aiq_agent.common.claim_table import validate_claim_table_json
+from aiq_agent.common.evidence_packet import build_evidence_packet
+from aiq_agent.common.fact_ledger import merge_fact_ledgers_json
+from aiq_agent.common.source_quality_gates import evaluate_source_quality as evaluate_url_source_quality
 
+from .custom_middleware import ArtifactWriteValidationMiddleware
 from .custom_middleware import EmptyContentFixMiddleware
+from .custom_middleware import PlanFileValidationMiddleware
+from .custom_middleware import PlannerCommitGuardMiddleware
+from .custom_middleware import PostWriteReadbackGuardMiddleware
+from .custom_middleware import SearchBudgetExhaustionRepairMiddleware
+from .custom_middleware import SequentialSearchMiddleware
 from .custom_middleware import SourceRegistryMiddleware
+from .custom_middleware import TaskBatchLimitMiddleware
+from .custom_middleware import ThinkingOnlyRepairMiddleware
+from .custom_middleware import ToolBudgetMiddleware
 from .custom_middleware import ToolNameSanitizationMiddleware
 from .custom_middleware import ToolResultPruningMiddleware
 from .custom_middleware import ToolRetryMiddleware
+from .custom_middleware import reset_session_exhausted_tools
+from .custom_middleware import reset_session_parallel_tool_limits
+from .custom_middleware import reset_session_plan_validation_failures
+from .custom_middleware import reset_session_planner_model_turns
+from .custom_middleware import reset_session_recent_artifact_writes
+from .custom_middleware import reset_session_tool_counts
+from .custom_middleware import reset_session_tool_limits
+from .custom_middleware import set_session_exhausted_tools
+from .custom_middleware import set_session_parallel_tool_limits
+from .custom_middleware import set_session_plan_validation_failures
+from .custom_middleware import set_session_planner_model_turns
+from .custom_middleware import set_session_recent_artifact_writes
+from .custom_middleware import set_session_tool_counts
+from .custom_middleware import set_session_tool_limits
 from .deepagents_runtime import DeepAgentsRuntime
 from .deepagents_runtime import SandboxConfig
 from .deepagents_runtime import SkillsConfig
 from .models import DeepResearchAgentState
+from .plan_tools import create_write_plan_tool
 
 try:
     from aiq_api.auth.errors import AuthError as _AuthError
@@ -48,9 +86,60 @@ logger = logging.getLogger(__name__)
 # Used by both _extract_report_content (to decide if write_file fallback is needed)
 # and _is_report_complete (to reject too-short reports).
 _MIN_REPORT_LENGTH = 1500
+_REPORT_COMPILER_MAX_INPUT_CHARS = 80000
+_REPORT_COMPILER_MAX_ARTIFACT_CHARS = 24000
 
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
+
+APPROVED_PLAN_RE = re.compile(
+    r"\*\*Approved Research Plan\*\*\s*Title:\s*(?P<title>.+?)\s*Sections:\s*(?P<sections>(?:\s*-\s*.+(?:\n|$))+)",
+    re.IGNORECASE,
+)
+"""Extract approved plan context created by the clarifier."""
+
+GENERIC_APPROVED_PLAN_SECTIONS = {
+    "introduction",
+    "background",
+    "analysis",
+    "findings",
+    "conclusion",
+}
+
+GENERIC_APPROVED_PLAN_SECTION_MARKERS = {
+    "landscape",
+    "recent evidence and signals",
+    "capability gaps",
+    "adoption risks and recommendations",
+    "requirements",
+    "architecture and interfaces",
+    "failure paths and guardrails",
+    "implementation plan",
+    "core question",
+    "evidence and competing views",
+    "practical strategy options",
+    "trade-offs and failure modes",
+    "decision framework",
+}
+
+EXACT_LESSON_TOPIC_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?(?:Exact lesson topic|Broad topic)(?:\*\*)?\s*:\s*(?P<topic>.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+FINAL_DEBATE_MOTION_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?Final debate motion(?:\*\*)?\s*:\s*(?P<motion>.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+REPORT_TYPE_RE = re.compile(r"^\s*Report type:\s*(?P<report_type>.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+AUDIENCE_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?(?:Audience|Student tier)(?:\*\*)?\s*:\s*(?P<audience>.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+MARKDOWN_SECTION_LIST_RE = re.compile(
+    r"The Markdown must include these sections:\s*(?P<sections>(?:\s*\d+\.\s*.+(?:\n|$))+)",
+    re.IGNORECASE,
+)
+"""Extract structured lesson/report prompts generated by the content API."""
 
 
 @tool
@@ -70,6 +159,21 @@ def think(thought: str) -> str:
     """
     logger.info("Thinking: %s", thought)
     return "Thought recorded."
+
+
+@tool
+def defer_task(description: str, reason: str) -> str:
+    """Record a researcher task that should be launched after the current batch.
+
+    Args:
+        description: Full researcher-agent task description to run later.
+        reason: Why the task was deferred.
+    """
+    return (
+        "Deferred researcher task for a later batch.\n\n"
+        f"Reason: {reason}\n\n"
+        f"Task to launch later if still needed:\n{description}"
+    )
 
 
 class DeepResearcherAgent:
@@ -138,6 +242,7 @@ class DeepResearcherAgent:
         self.max_loops = max_loops
         self.verbose = verbose
         self.callbacks = callbacks or []
+        self.job_id = job_id
 
         if self.verbose:
             logger.info("Tools configured: %d", len(self.tools))
@@ -175,16 +280,111 @@ class DeepResearcherAgent:
                 return source_list
             return "No sources captured yet. Run research queries first."
 
-        self.all_tools = [think, get_verified_sources, *self.tools]
+        @tool
+        def get_source_quality_snapshot() -> str:
+            """Return the current captured-source diversity and source-class mix.
 
-        self.middleware = [
+            Call this after each researcher batch and before final synthesis. If
+            status is warn/fail, steer the next available researcher task toward
+            stronger or more diverse sources instead of waiting for post-run gates.
+            """
+            sources = registry_middleware._get_registry().all_sources()
+            urls = [source.url for source in sources if source.url]
+            if not urls:
+                return json.dumps(
+                    {
+                        "status": "fail",
+                        "message": "No source URLs captured yet. Researchers must use search/source tools.",
+                    },
+                    indent=2,
+                )
+            report = evaluate_url_source_quality(list(dict.fromkeys(urls)), tier="deep")
+            return report.model_dump_json(indent=2)
+
+        write_plan_tool = create_write_plan_tool()
+        # M3 has native thinking; exposing an additional planner `think` tool
+        # caused costly detours after "I have enough grounding" instead of a
+        # committed plan. Keep `think` for orchestration/synthesis, but make
+        # planner-agent commit through write_plan or search tools only.
+        self.planner_tools = [write_plan_tool, *self.tools]
+        self.orchestrator_tools = [
+            think,
+            defer_task,
+            write_plan_tool,
+            get_verified_sources,
+            get_source_quality_snapshot,
+        ]
+        self.all_tools = [*self.orchestrator_tools, *self.tools]
+
+        self.middleware = self._build_middleware_for_scope("orchestrator")
+
+    def _build_middleware_for_scope(self, budget_scope: str):
+        """Build middleware with role-scoped search budgets and shared source registry."""
+        middleware = [
             EmptyContentFixMiddleware(),
             ToolNameSanitizationMiddleware(valid_tool_names=[t.name for t in self.all_tools]),
-            ToolRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
+            PlanFileValidationMiddleware(),
+            ArtifactWriteValidationMiddleware(),
+            PostWriteReadbackGuardMiddleware(),
+            TaskBatchLimitMiddleware(task_tool_name="task", defer_tool_name="defer_task"),
+            SequentialSearchMiddleware(
+                search_tool_names={"advanced_web_search_tool", "web_search_tool", "exa_web_search_tool"}
+            ),
+            SearchBudgetExhaustionRepairMiddleware(
+                search_tool_names={"advanced_web_search_tool", "web_search_tool", "exa_web_search_tool"},
+                max_repairs=0,
+                scope=budget_scope,
+            ),
+            ToolBudgetMiddleware(
+                limits={
+                    "exa_web_search_tool": 6,
+                    "advanced_web_search_tool": 8,
+                    "web_search_tool": 4,
+                    "stock_quote_tool": 4,
+                },
+                scope=budget_scope,
+            ),
+            ToolRetryMiddleware(max_retries=1, backoff_factor=1.5, initial_delay=0.5),
             self.source_registry_middleware,
-            ToolResultPruningMiddleware(keep_last_n=10, max_chars=2000),
-            ModelRetryMiddleware(max_retries=10, backoff_factor=2.0, initial_delay=1.0),
+            # Keep planner/researcher turns compact. M3's large context is most
+            # valuable for final synthesis over structured evidence packets,
+            # not for every search/write loop inside subagents.
+            self._tool_result_pruning_middleware_for_scope(budget_scope),
+            ThinkingOnlyRepairMiddleware(max_repairs=2),
+            ModelRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0),
         ]
+        if budget_scope == "planner":
+            middleware.insert(3, PlannerCommitGuardMiddleware(max_model_turns=2, max_repairs=0))
+        return middleware
+
+    @staticmethod
+    def _tool_result_pruning_middleware_for_scope(scope: str) -> ToolResultPruningMiddleware:
+        """Return role-specific pruning tuned for M3 stability.
+
+        Researcher and planner agents should work from compact current evidence
+        plus virtual files. The orchestrator gets a wider window because final
+        synthesis is where M3's long context is useful.
+        """
+        if scope == "orchestrator":
+            return ToolResultPruningMiddleware(
+                keep_last_n=8,
+                max_chars=1200,
+                recent_max_chars=40000,
+                max_tool_call_arg_chars=5000,
+            )
+        if scope == "planner":
+            return ToolResultPruningMiddleware(
+                keep_last_n=4,
+                max_chars=500,
+                recent_max_chars=10000,
+                max_tool_call_arg_chars=1600,
+            )
+        return ToolResultPruningMiddleware(
+            keep_last_n=4,
+            max_chars=700,
+            recent_max_chars=12000,
+            max_tool_call_arg_chars=1800,
+        )
 
     def _load_prompts(self) -> dict[str, str]:
         """Load all prompts for subagents."""
@@ -227,6 +427,9 @@ class DeepResearcherAgent:
         available_docs = [doc.model_dump() for doc in (state.available_documents or [])]
         deepagents_prompt_context = self._deepagents_prompt_context()
         skill_sources = self.deepagents_runtime.skill_sources
+        current_datetime = current_datetime_context()
+        depth_config = get_research_depth_config(state.research_depth)
+        budget_profile = self._budget_profile_for_state(state)
         planner_agent: dict[str, Any] = {
             "name": "planner-agent",
             "description": (
@@ -235,15 +438,17 @@ class DeepResearcherAgent:
             ),
             "system_prompt": render_prompt_template(
                 self._prompts["planner"],
-                current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                current_datetime=current_datetime,
                 user_info=state.user_info,
                 tools=self.tools_info,
                 available_documents=available_docs,
+                research_depth=depth_config,
+                budget_profile=budget_profile,
                 **deepagents_prompt_context,
             ),
-            "tools": self.all_tools,
+            "tools": self.planner_tools,
             "model": self.llm_provider.get(LLMRole.PLANNER),
-            "middleware": self.middleware,
+            "middleware": self._build_middleware_for_scope("planner"),
         }
         researcher_agent: dict[str, Any] = {
             "name": "researcher-agent",
@@ -253,15 +458,17 @@ class DeepResearcherAgent:
             ),
             "system_prompt": render_prompt_template(
                 self._prompts["researcher"],
-                current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                current_datetime=current_datetime,
                 user_info=state.user_info,
                 tools=self.tools_info,
                 available_documents=available_docs,
+                research_depth=depth_config,
+                budget_profile=budget_profile,
                 **deepagents_prompt_context,
             ),
             "tools": self.all_tools,
             "model": self.llm_provider.get(LLMRole.RESEARCHER),
-            "middleware": self.middleware,
+            "middleware": self._build_middleware_for_scope("researcher"),
         }
         if skill_sources is not None:
             planner_agent["skills"] = skill_sources
@@ -273,13 +480,17 @@ class DeepResearcherAgent:
 
         available_docs = [doc.model_dump() for doc in (state.available_documents or [])]
         deepagents_prompt_context = self._deepagents_prompt_context()
+        depth_config = get_research_depth_config(state.research_depth)
+        budget_profile = self._budget_profile_for_state(state)
         orchestrator_instructions = render_prompt_template(
             self._prompts["orchestrator"],
-            current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            current_datetime=current_datetime_context(),
             user_info=state.user_info,
             clarifier_result=state.clarifier_result,
             available_documents=available_docs,
             tools=self.tools_info,
+            research_depth=depth_config,
+            budget_profile=budget_profile,
             **deepagents_prompt_context,
         )
 
@@ -287,7 +498,7 @@ class DeepResearcherAgent:
 
         agent = create_deep_agent(
             model=self.llm_provider.get(LLMRole.ORCHESTRATOR),
-            tools=self.all_tools,
+            tools=self.orchestrator_tools,
             system_prompt=orchestrator_instructions,
             subagents=self._get_subagents(state),
             store=InMemoryStore(),
@@ -298,6 +509,1424 @@ class DeepResearcherAgent:
         return agent.with_config({"recursion_limit": 1000})
 
     @staticmethod
+    def _latest_user_text(state: DeepResearchAgentState) -> str:
+        """Return the latest human message as text."""
+        for message in reversed(state.messages or []):
+            if isinstance(message, HumanMessage):
+                content = message.content
+                return content if isinstance(content, str) else str(content)
+        return ""
+
+    @staticmethod
+    def _extract_approved_plan(text: str | None) -> tuple[str, list[str]] | None:
+        """Extract an approved plan title/sections from clarification context text."""
+        if not text:
+            return None
+        match = APPROVED_PLAN_RE.search(text)
+        if not match:
+            return None
+
+        title = match.group("title").strip()
+        raw_sections = match.group("sections")
+        sections = []
+        for line in raw_sections.splitlines():
+            normalized = line.strip()
+            if normalized.startswith("-"):
+                section = normalized[1:].strip()
+                if section:
+                    sections.append(section)
+
+        return (title, sections) if title and sections else None
+
+    @staticmethod
+    def _query_without_context(query: str) -> str:
+        """Strip appended clarification context from API/direct deep-research input."""
+        markers = ("## Clarification Context", "**Approved Research Plan**")
+        clean = query
+        for marker in markers:
+            if marker in clean:
+                clean = clean.split(marker, 1)[0]
+        return clean.strip() or query.strip()
+
+    @staticmethod
+    def _is_financial_screen_query(query: str) -> bool:
+        """Return true for precise stock/fair-value discount screens."""
+        clean_query = query.lower()
+        return all(term in clean_query for term in ("stock", "fair value")) and bool(
+            re.search(r"\d+\s*(?:-|–|to)\s*\d+\s*%", clean_query)
+        )
+
+    @staticmethod
+    def _format_approved_plan_context(title: str, sections: list[str]) -> str:
+        """Format plan scope so the orchestrator prompt takes the approved-plan fast path."""
+        section_lines = "\n".join(f"- {section}" for section in sections)
+        return f"**Approved Research Plan**\n\nTitle: {title}\n\nSections:\n{section_lines}"
+
+    @staticmethod
+    def _is_generic_approved_plan(title: str, sections: list[str]) -> bool:
+        """Detect placeholder plans that should be replaced by real planning."""
+        normalized_title = title.strip().lower()
+        normalized_sections = {section.strip().lower() for section in sections}
+        if normalized_title == "research report" and normalized_sections == GENERIC_APPROVED_PLAN_SECTIONS:
+            return True
+        generic_marker_count = 0
+        for section in normalized_sections:
+            section_tail = re.sub(r"^[a-z0-9 ,.'\"-]{0,80}\s+", "", section)
+            if (
+                section in GENERIC_APPROVED_PLAN_SECTION_MARKERS
+                or section_tail in GENERIC_APPROVED_PLAN_SECTION_MARKERS
+            ):
+                generic_marker_count += 1
+        if generic_marker_count >= 2:
+            return True
+        if normalized_title in {"approve", "approved", "continue", "skip"}:
+            return True
+        instruction_leak_markers = (
+            "you are deep research",
+            "operating in full autonomous",
+            "your task is to",
+        )
+        if any(marker in normalized_title for marker in instruction_leak_markers):
+            return True
+        return any(any(marker in section for marker in instruction_leak_markers) for section in normalized_sections)
+
+    @staticmethod
+    def _strip_approved_plan_context(text: str | None) -> str | None:
+        """Remove a placeholder approved-plan block so planner-agent can rebuild it."""
+        if not text:
+            return text
+        stripped = APPROVED_PLAN_RE.sub("", text).strip()
+        if stripped:
+            return (
+                f"{stripped}\n\n"
+                "The previous plan preview was a generic placeholder. Generate a fresh, specific research plan."
+            )
+        return "The previous plan preview was a generic placeholder. Generate a fresh, specific research plan."
+
+    @staticmethod
+    def _title_case_phrase(text: str) -> str:
+        """Title-case a short topic phrase while preserving AI casing."""
+        words = []
+        for word in re.sub(r"\s+", " ", text.strip()).split(" "):
+            if word.lower() == "ai":
+                words.append("AI")
+            elif word.isupper() and len(word) <= 5:
+                words.append(word)
+            else:
+                words.append(word[:1].upper() + word[1:])
+        return " ".join(words).strip()
+
+    @staticmethod
+    def _fallback_plan_topic(query: str | None) -> str:
+        """Extract a compact topic label from an explicit prompt."""
+        if not query:
+            return "Research Report"
+        clean_query = DeepResearcherAgent._query_without_context(query)
+        clean_query = re.sub(
+            r"^(?:conduct\s+)?(?:a\s+)?(?:comprehensive\s+)?(?:deep\s+)?research(?:\s+report)?\s+(?:on|about)?\s*",
+            "",
+            clean_query,
+            flags=re.IGNORECASE,
+        ).strip()
+        clean_query = re.sub(
+            r"^(?:on\s+)?all\s+the\s+ingred(?:ie|ei)nts\s+required\s+to\s+build\s*:?\s*",
+            "",
+            clean_query,
+            flags=re.IGNORECASE,
+        )
+        clean_query = re.split(r"[?.!\n]", clean_query, maxsplit=1)[0]
+        words = [word.strip(" ,:;()[]{}\"'“”") for word in clean_query.split()]
+        words = [word for word in words if word]
+        return DeepResearcherAgent._title_case_phrase(" ".join(words[:8]))[:120].rstrip(" .,:;") or "Research Report"
+
+    @staticmethod
+    def _explicit_plan_from_rich_query(query: str | None) -> tuple[str, list[str]] | None:
+        """Recover a specific plan from rich prompts when the UI approval plan was generic."""
+        if not query:
+            return None
+        clean_query = DeepResearcherAgent._query_without_context(query)
+        normalized = re.sub(r"\s+", " ", clean_query).strip()
+        lowered = normalized.lower()
+
+        top_match = re.search(
+            r"\btop\s+(\d{1,2})\s+(?:highest[-\s]value\s+)?(?:use\s+cases?|applications?)\s+of\s+AI\b",
+            normalized,
+            re.IGNORECASE,
+        )
+        if top_match and re.search(r"\b(rank|ranked|ranking|business value|roi|transformative)\b", lowered):
+            count = top_match.group(1)
+            year_match = re.search(r"\b(20\d{2})\b", normalized)
+            year_suffix = f" in {year_match.group(1)}" if year_match else ""
+            return (
+                f"Top {count} Highest-Value AI Use Cases{year_suffix}",
+                [
+                    "Executive Summary and Ranking Criteria",
+                    f"Ranked Top {count} AI Use Cases",
+                    "Business Impact, ROI, and Efficiency Evidence",
+                    "2025-2026 Real-World Deployment Examples",
+                    "Maturity Levels and Enabling Technologies",
+                    "Adoption Barriers and Best-Fit Beneficiaries",
+                    "2027-2028 AI Value Creation Outlook",
+                ],
+            )
+
+        if re.search(r"\bingred(?:ie|ei)nts\s+required\s+to\s+build\b", lowered) and "curiosity" in lowered:
+            return (
+                "Building AI Curiosity Engines",
+                [
+                    "Learning Science and Curiosity Foundations",
+                    "Dynamic Interest Modeling Over Time",
+                    "Long-Tail Discovery and Serendipity Architecture",
+                    "Adaptive Teaching, Scaffolding, and Dialogue",
+                    "RAG, Knowledge Graphs, and Agentic Workflows",
+                    "Niche Content Verification and Hallucination Controls",
+                    "Engagement, Retention, and Learning Outcome Metrics",
+                ],
+            )
+
+        numbered = re.findall(
+            r"(?:^|\s)\d{1,2}[\.\)]\s*([A-Z][^0-9]{4,160}?)(?=\s+\d{1,2}[\.\)]\s*[A-Z]|\s+Rank\b|\s+Present\b|$)",
+            normalized,
+        )
+        if len(numbered) >= 4 and re.search(r"\b(report|research|comprehensive|deep research)\b", lowered):
+            sections = ["Executive Summary and Scope"]
+            if re.search(r"\b(rank|ranking|ranked)\b", lowered):
+                sections.append("Ranking Framework and Priority Order")
+            for item in numbered[:5]:
+                title = re.split(r"\s+[–—-]\s+", re.sub(r"\s+", " ", item).strip(), maxsplit=1)[0]
+                sections.append(DeepResearcherAgent._title_case_phrase(title)[:100].rstrip(" .,:;"))
+            return (DeepResearcherAgent._fallback_plan_topic(normalized), sections[:7])
+
+        return None
+
+    @staticmethod
+    def _extract_structured_lesson_scope(text: str | None) -> dict[str, Any] | None:
+        """Extract content-lesson prompts with a broad topic and narrower debate motion.
+
+        These API prompts already contain enough structure to build a safer plan
+        deterministically. Preloading that plan prevents the orchestrator from
+        collapsing the whole run onto the motion-specific branch.
+        """
+        if not text:
+            return None
+
+        topic_match = EXACT_LESSON_TOPIC_RE.search(text)
+        motion_match = FINAL_DEBATE_MOTION_RE.search(text)
+        if not topic_match or not motion_match:
+            return None
+
+        topic = topic_match.group("topic").strip().rstrip(".")
+        motion = motion_match.group("motion").strip()
+        if not topic or not motion:
+            return None
+
+        report_type_match = REPORT_TYPE_RE.search(text)
+        audience_match = AUDIENCE_RE.search(text)
+        sections_match = MARKDOWN_SECTION_LIST_RE.search(text)
+        sections: list[str] = []
+        if sections_match:
+            for line in sections_match.group("sections").splitlines():
+                section_match = re.match(r"\s*\d+\.\s*(.+?)\s*$", line)
+                if section_match:
+                    sections.append(section_match.group(1).strip().rstrip("."))
+        if not sections:
+            numbered_sections = re.findall(r"^\s*\d{1,2}\.\s*(.+?)\s*$", text, flags=re.MULTILINE)
+            if len(numbered_sections) >= 4:
+                sections = [
+                    re.sub(r"\s+", " ", section).strip().rstrip(".")
+                    for section in numbered_sections
+                    if len(section.strip()) >= 3
+                ][:16]
+
+        return {
+            "topic": topic,
+            "motion": motion,
+            "report_type": report_type_match.group("report_type").strip() if report_type_match else None,
+            "audience": audience_match.group("audience").strip() if audience_match else None,
+            "sections": sections,
+        }
+
+    @staticmethod
+    def _source_strategy_for_claims() -> dict[str, Any]:
+        return {
+            "required_source_classes": [
+                "first_party",
+                "primary_issuer",
+                "academic",
+                "authoritative_third_party",
+                "trade_press",
+                "forum",
+                "mixed",
+            ],
+            "diversity_floor_domains": 4,
+            "max_single_domain_share": 0.4,
+            "numeric_claim_rule": (
+                "Use primary/authoritative sources for numbers; if unavailable, label secondary-source "
+                "numbers as partially verified."
+            ),
+        }
+
+    @staticmethod
+    def _target_claim(
+        claim_id: str,
+        claim_type: str,
+        claim: str,
+        required_source_class: str,
+    ) -> dict[str, str]:
+        return {
+            "claim_id": claim_id,
+            "claim_type": claim_type,
+            "claim": claim,
+            "required_source_class": required_source_class,
+        }
+
+    @staticmethod
+    def _budget_profile_for_state(
+        state: DeepResearchAgentState,
+        *,
+        mode_override: str | None = None,
+        section_count_override: int | None = None,
+    ) -> dict[str, Any]:
+        """Return a human-readable search budget plan for the current request."""
+        depth_config = get_research_depth_config(state.research_depth)
+        latest_query = DeepResearcherAgent._query_without_context(DeepResearcherAgent._latest_user_text(state))
+        structured_scope = DeepResearcherAgent._extract_structured_lesson_scope(latest_query)
+        approved_plan = None
+        if not structured_scope:
+            approved_plan = DeepResearcherAgent._extract_approved_plan(state.clarifier_result or latest_query)
+
+        mode = mode_override
+        if mode is None:
+            if structured_scope:
+                mode = "lesson_first"
+            elif DeepResearcherAgent._is_financial_screen_query(latest_query):
+                mode = "focused_screen"
+            else:
+                mode = "symmetric"
+
+        section_count = section_count_override
+        if section_count is None:
+            if structured_scope:
+                section_count = max(1, len(structured_scope.get("sections") or []))
+            elif approved_plan:
+                section_count = max(1, len(approved_plan[1]))
+            else:
+                section_count = 4
+
+        return depth_config.budget_profile(mode=mode, section_count=section_count)
+
+    @staticmethod
+    def _build_structured_lesson_plan_json(scope: dict[str, Any], query: str, depth_config) -> str:
+        """Create a topic-first plan for structured lesson/dossier API prompts."""
+        topic = str(scope["topic"])
+        motion = str(scope["motion"])
+        report_type = scope.get("report_type") or "content_research"
+        audience = scope.get("audience") or "the stated audience"
+        sections = list(scope.get("sections") or [])
+
+        if not sections:
+            sections = [
+                "Research scope and final motion anchor",
+                "Age and audience assumptions",
+                "Topic essentials: definitions, key terms, and background concepts",
+                "Factual findings with citations",
+                "Key examples and case studies",
+                "Important tensions and misconceptions",
+                "Motion relevance notes",
+                "Source table and final bibliography",
+            ]
+
+        toc = [
+            {
+                "id": str(index + 1),
+                "title": section,
+                "subsections": [],
+            }
+            for index, section in enumerate(sections)
+        ]
+
+        broad_sections = sections[: max(3, min(6, len(sections)))]
+        example_sections = [
+            section
+            for section in sections
+            if any(keyword in section.lower() for keyword in ("finding", "example", "case", "tension", "misconception"))
+        ] or sections
+        motion_sections = [
+            section
+            for section in sections
+            if any(keyword in section.lower() for keyword in ("motion", "bridge", "relevance", "scope", "anchor"))
+        ] or [sections[-1]]
+
+        queries = [
+            {
+                "query": (
+                    f"{topic} broad lesson background definitions key terms core concepts stakeholders "
+                    f"systems and age-appropriate explanations for {audience}; do not center the final debate motion"
+                ),
+                "tool": "advanced_web_search_tool",
+                "target_sections": broad_sections,
+                "rationale": (
+                    "Cover the exact lesson topic first so the report teaches the broader content before any "
+                    "motion-specific debate branch."
+                ),
+                "target_claims": [
+                    DeepResearcherAgent._target_claim(
+                        "C1",
+                        "definition",
+                        f"Core definitions, terms, stakeholders, and systems needed to explain {topic}",
+                        "third_party_authoritative",
+                    ),
+                    DeepResearcherAgent._target_claim(
+                        "C2",
+                        "discovery",
+                        f"Important background facts and misconceptions about {topic}",
+                        "mixed",
+                    ),
+                ],
+            },
+            {
+                "query": (
+                    f"{topic} factual findings reputable sources concrete examples case studies misconceptions "
+                    f"and visual teaching opportunities for {audience}"
+                ),
+                "tool": "advanced_web_search_tool",
+                "target_sections": example_sections,
+                "rationale": (
+                    "Collect source-backed raw material and examples that teach the topic itself, not only one "
+                    "narrow argument or policy controversy."
+                ),
+                "target_claims": [
+                    DeepResearcherAgent._target_claim(
+                        "C3",
+                        "discovery",
+                        f"Concrete examples and case studies that accurately teach {topic}",
+                        "mixed",
+                    ),
+                    DeepResearcherAgent._target_claim(
+                        "C4",
+                        "recommendation",
+                        f"Teaching-relevant framing and visual opportunities for {topic}",
+                        "practitioner",
+                    ),
+                ],
+            },
+            {
+                "query": (
+                    f"{topic} final debate motion {motion} bounded motion relevance ethical legal tradeoffs "
+                    "case examples; keep as a bridge from the broader topic, not the whole report"
+                ),
+                "tool": "advanced_web_search_tool",
+                "target_sections": motion_sections,
+                "rationale": (
+                    "Gather enough evidence to connect the broader lesson to the final motion without allowing "
+                    "the motion to replace the lesson topic."
+                ),
+                "target_claims": [
+                    DeepResearcherAgent._target_claim(
+                        "C5",
+                        "comparative",
+                        f"How the final motion relates to {topic} without replacing the broader lesson scope",
+                        "mixed",
+                    ),
+                ],
+            },
+        ]
+
+        plan = {
+            "task_analysis": {
+                "user_intent": DeepResearcherAgent._query_without_context(query),
+                "claim_profile": {
+                    "definition_claims": [
+                        DeepResearcherAgent._target_claim(
+                            "C1",
+                            "definition",
+                            f"Core definitions, terms, stakeholders, and systems needed to explain {topic}",
+                            "third_party_authoritative",
+                        )
+                    ],
+                    "discovery_claims": [
+                        DeepResearcherAgent._target_claim(
+                            "C2", "discovery", f"Important background facts and misconceptions about {topic}", "mixed"
+                        ),
+                        DeepResearcherAgent._target_claim(
+                            "C3",
+                            "discovery",
+                            f"Concrete examples and case studies that accurately teach {topic}",
+                            "mixed",
+                        ),
+                    ],
+                    "recommendation_claims": [
+                        DeepResearcherAgent._target_claim(
+                            "C4",
+                            "recommendation",
+                            f"Teaching-relevant framing and visual opportunities for {topic}",
+                            "practitioner",
+                        )
+                    ],
+                    "comparative_claims": [
+                        DeepResearcherAgent._target_claim(
+                            "C5",
+                            "comparative",
+                            f"How the final motion relates to {topic} without replacing the broader lesson scope",
+                            "mixed",
+                        )
+                    ],
+                    "claim_density_estimate": "medium",
+                    "verifiability_estimate": "mixed",
+                },
+                "source_strategy": DeepResearcherAgent._source_strategy_for_claims(),
+                "budget_profile": depth_config.budget_profile(mode="lesson_first", section_count=len(sections)),
+                "structured_lesson_scope_used_directly": True,
+                "exact_lesson_topic": topic,
+                "final_debate_motion": motion,
+                "report_type": report_type,
+                "out_of_scope": [
+                    "Renaming the lesson around only the final motion",
+                    "Letting an adjacent theme or single controversy replace the exact lesson topic",
+                    "Writing a prop/opp debate case file",
+                ],
+            },
+            "report_title": f"{topic} Content Research Dossier",
+            "report_toc": toc,
+            "budget_profile": depth_config.budget_profile(mode="lesson_first", section_count=len(sections)),
+            "constraints": [
+                {
+                    "category": "content",
+                    "constraint": (
+                        f"The exact lesson topic '{topic}' is the primary scope. Research and report structure "
+                        "must teach that broad topic before discussing the final debate motion."
+                    ),
+                    "rationale": (
+                        "The final motion is an anchor for later debate, not permission to narrow the whole dossier."
+                    ),
+                    "verification": (
+                        "The opening title, topic essentials, factual findings, and examples visibly cover "
+                        "the exact topic."
+                    ),
+                },
+                {
+                    "category": "content",
+                    "constraint": (
+                        "Motion-specific material must be subordinate: use it in scope/anchor, bridge, relevance, "
+                        "and selected examples, but do not make every researcher task or report section about it."
+                    ),
+                    "rationale": (
+                        "Prevents broad content lessons from drifting into a single motion-specific controversy."
+                    ),
+                    "verification": (
+                        "At least two researcher outputs and at least half the report body cover the broad topic."
+                    ),
+                },
+                {
+                    "category": "structure",
+                    "constraint": (
+                        "Preserve the requested Markdown sections and write a teacher-facing content dossier, "
+                        "not a debate case file."
+                    ),
+                    "rationale": "The API prompt requested structured raw material for a lesson writer.",
+                    "verification": (
+                        "All requested sections appear and no Arguments For/Against/Rebuttals section is introduced."
+                    ),
+                },
+                {
+                    "category": "source",
+                    "constraint": (
+                        "Use reputable official, academic, legal, medical, policy, or journalism sources, and cite "
+                        "concrete claims close to where they are made."
+                    ),
+                    "rationale": "The lesson writer needs reliable raw material for student-facing slides.",
+                    "verification": (
+                        "Source table and bibliography contain source-backed claims across broad-topic and "
+                        "motion sections."
+                    ),
+                },
+            ],
+            "output_style": {
+                "mode": "standard_report",
+                "topic_anchor": topic,
+                "motion_anchor": motion,
+                "target": "Teacher-facing Markdown content dossier that teaches the exact lesson topic first.",
+                "avoid": [
+                    "A report centered only on the final debate motion",
+                    "A report centered only on one adjacent controversy",
+                    "Prop/opp case-file structure",
+                ],
+            },
+            "queries": queries,
+        }
+        return json.dumps(plan, indent=2)
+
+    @staticmethod
+    def _build_plan_json_from_approved_context(
+        title: str,
+        sections: list[str],
+        query: str,
+        depth_config,
+    ) -> str:
+        """Create a compact /shared/plan.json from an already approved user plan."""
+        clean_query = DeepResearcherAgent._query_without_context(query)
+        is_financial_screen = DeepResearcherAgent._is_financial_screen_query(clean_query)
+
+        toc = [
+            {
+                "id": str(index + 1),
+                "title": section,
+                "subsections": [],
+            }
+            for index, section in enumerate(sections)
+        ]
+
+        if is_financial_screen:
+            queries = [
+                {
+                    "query": (
+                        "U.S. stocks 40% 50% below fair value current price fair value estimate "
+                        "GuruFocus Morningstar analyst consensus; validate current quotes and methodology caveats"
+                    ),
+                    "tool": "advanced_web_search_tool",
+                    "target_sections": sections,
+                    "rationale": (
+                        "Find and validate source-backed fair-value discount candidates in one bounded "
+                        "researcher task without expanding the scope."
+                    ),
+                    "target_claims": [
+                        DeepResearcherAgent._target_claim(
+                            "C1",
+                            "quantitative",
+                            "Current ticker price, fair-value estimate, and discount percentage for each candidate",
+                            "primary_issuer",
+                        ),
+                        DeepResearcherAgent._target_claim(
+                            "C2",
+                            "specification",
+                            "Methodology caveats behind each cited fair-value estimate",
+                            "third_party_authoritative",
+                        ),
+                    ],
+                },
+            ]
+            constraints = [
+                "Only include candidates with current price, fair-value estimate, discount percentage, and source.",
+                "Keep the answer to the approved sections; do not add generic value-investing background.",
+                "Use stock_quote_tool for current quote snapshots after identifying ticker candidates.",
+                "Avoid buy/sell recommendations; present source-backed market research and caveats.",
+                (
+                    "Use exactly one researcher-agent task for this narrow stock screen; do not split into "
+                    "parallel duplicate tasks."
+                ),
+                (
+                    "Write a compact final report: table first, then concise evidence notes and caveats. "
+                    "Avoid long methodology essays."
+                ),
+            ]
+            output_style = {
+                "mode": "focused_screen",
+                "target": (
+                    "Compact answer with a candidate table, source-backed current prices, fair-value estimates, "
+                    "discount math, and caveats."
+                ),
+                "avoid": [
+                    "Generic value-investing background",
+                    "Long methodology sections",
+                    "Recommendations",
+                ],
+            }
+        else:
+            queries = [
+                {
+                    "query": f"{clean_query} {section}",
+                    "tool": "advanced_web_search_tool",
+                    "target_sections": [section],
+                    "rationale": "Answer the approved plan section directly.",
+                    "target_claims": [
+                        DeepResearcherAgent._target_claim(
+                            f"C{index + 1}",
+                            "discovery",
+                            f"Evidence needed to answer approved section: {section}",
+                            "mixed",
+                        )
+                    ],
+                }
+                for index, section in enumerate(sections)
+            ]
+            constraints = [
+                "Keep the report no broader than the approved plan.",
+                "Cover each approved section directly.",
+                "Use source-backed facts and cite returned URLs.",
+            ]
+            output_style = {
+                "mode": "standard_report",
+                "target": "Depth should match the approved sections and user intent.",
+                "avoid": ["Expanding beyond the approved plan"],
+            }
+
+        plan = {
+            "task_analysis": {
+                "user_intent": clean_query,
+                "claim_profile": {
+                    "discovery_claims": [
+                        DeepResearcherAgent._target_claim(
+                            f"C{index + 1}",
+                            "discovery",
+                            f"Evidence needed to answer approved section: {section}",
+                            "mixed",
+                        )
+                        for index, section in enumerate(sections)
+                    ],
+                    "quantitative_claims": [
+                        DeepResearcherAgent._target_claim(
+                            "C1",
+                            "quantitative",
+                            "Current ticker price, fair-value estimate, and discount percentage for each candidate",
+                            "primary_issuer",
+                        )
+                    ]
+                    if is_financial_screen
+                    else [],
+                    "claim_density_estimate": "medium",
+                    "verifiability_estimate": "mixed",
+                },
+                "source_strategy": DeepResearcherAgent._source_strategy_for_claims(),
+                "budget_profile": depth_config.budget_profile(
+                    mode="focused_screen" if is_financial_screen else "symmetric",
+                    section_count=len(sections),
+                ),
+                "approved_plan_used_directly": True,
+                "out_of_scope": ["Expanding beyond the approved plan", "Generic background not requested by the user"],
+            },
+            "report_title": title,
+            "report_toc": toc,
+            "budget_profile": depth_config.budget_profile(
+                mode="focused_screen" if is_financial_screen else "symmetric",
+                section_count=len(sections),
+            ),
+            "constraints": constraints,
+            "output_style": output_style,
+            "queries": queries,
+        }
+        return json.dumps(plan, indent=2)
+
+    @staticmethod
+    def _file_state_entry(content: str | list[str], *, created_at: str | None = None) -> dict[str, Any]:
+        """Build deepagents-compatible virtual file data with required metadata."""
+        now = datetime.now(UTC).isoformat()
+        lines = content.splitlines() if isinstance(content, str) else [str(line) for line in content]
+        return {
+            "content": lines,
+            "created_at": created_at or now,
+            "modified_at": now,
+        }
+
+    @staticmethod
+    def _normalize_files_state(files: dict[str, Any] | None) -> dict[str, Any]:
+        """Ensure preloaded/checkpointed files match deepagents FileData shape."""
+        if not files:
+            return {}
+
+        normalized: dict[str, Any] = {}
+        now = datetime.now(UTC).isoformat()
+        for path, value in files.items():
+            if value is None:
+                continue
+            if isinstance(value, dict):
+                content = value.get("content", [])
+                if isinstance(content, str):
+                    content_lines = content.splitlines()
+                elif isinstance(content, list):
+                    content_lines = [str(line) for line in content]
+                else:
+                    content_lines = [str(content)]
+                created_at = str(value.get("created_at") or now)
+                normalized[path] = {
+                    **value,
+                    "content": content_lines,
+                    "created_at": created_at,
+                    "modified_at": str(value.get("modified_at") or created_at),
+                }
+            elif isinstance(value, str):
+                normalized[path] = DeepResearcherAgent._file_state_entry(value)
+            elif isinstance(value, list):
+                normalized[path] = DeepResearcherAgent._file_state_entry(value)
+        return normalized
+
+    def _seed_source_registry_from_files(self, files: dict[str, Any]) -> None:
+        """Rehydrate verified sources from resume artifacts in virtual files."""
+        if not files:
+            return
+
+        registry = self.source_registry_middleware._get_registry()
+        seeded = 0
+        for value in files.values():
+            content = self._coerce_file_content(value)
+            if self._is_unavailable_source_context(content):
+                continue
+            for url in re.findall(r"https?://[^\s<>'\")\]}]+", content):
+                url = url.rstrip(".,;:")
+                if url in {"https://exa.ai/", "https://exa.ai"}:
+                    continue
+                registry.add(SourceEntry(url=url, source_type="resume", tool_name="resume"))
+                seeded += 1
+        if seeded:
+            logger.info("Deep Research: seeded %d source URL(s) from resume files", seeded)
+
+    def _inject_approved_plan_if_available(self, state: DeepResearchAgentState) -> DeepResearchAgentState:
+        """Preload /shared/plan.json when clarification already produced an approved plan."""
+        files = self._normalize_files_state(state.files)
+        if "/plan.json" in files or "/shared/plan.json" in files:
+            return state.model_copy(update={"files": files})
+
+        latest_query = self._latest_user_text(state)
+        clean_query = self._query_without_context(latest_query)
+        depth_config = get_research_depth_config(state.research_depth)
+        structured_scope = self._extract_structured_lesson_scope(clean_query)
+        if structured_scope:
+            plan_json = self._build_structured_lesson_plan_json(structured_scope, latest_query, depth_config)
+            logger.info("Deep Research: preloading topic-first structured lesson plan into /shared/plan.json")
+            plan_file = self._file_state_entry(plan_json)
+            merged_files = {
+                **files,
+                "/plan.json": plan_file,
+                "/shared/plan.json": plan_file,
+            }
+            plan_context = self._format_approved_plan_context(
+                f"{structured_scope['topic']} Content Research Dossier",
+                [str(section["title"]) for section in json.loads(plan_json)["report_toc"]],
+            )
+            return state.model_copy(update={"files": merged_files, "clarifier_result": plan_context})
+
+        plan_context = state.clarifier_result or latest_query
+        approved_plan = self._extract_approved_plan(plan_context)
+        if not approved_plan and state.clarifier_result:
+            approved_plan = self._extract_approved_plan(latest_query)
+        if not approved_plan:
+            explicit_plan = self._explicit_plan_from_rich_query(latest_query)
+            if explicit_plan:
+                title, sections = explicit_plan
+                plan_json = self._build_plan_json_from_approved_context(title, sections, latest_query, depth_config)
+                logger.info("Deep Research: preloading deterministic rich-query plan into /shared/plan.json")
+                plan_file = self._file_state_entry(plan_json)
+                merged_files = {
+                    **files,
+                    "/plan.json": plan_file,
+                    "/shared/plan.json": plan_file,
+                }
+                plan_context = self._format_approved_plan_context(title, sections)
+                return state.model_copy(update={"files": merged_files, "clarifier_result": plan_context})
+            if self._is_financial_screen_query(clean_query):
+                title = "Stocks Trading 40-50% Below Estimated Fair Value"
+                sections = [
+                    "Candidate stocks matching the requested discount range",
+                    "Current price and fair-value evidence",
+                    "Methodology caveats and source limitations",
+                ]
+                plan_json = self._build_plan_json_from_approved_context(title, sections, latest_query, depth_config)
+                logger.info("Deep Research: preloading focused stock-screen plan into /shared/plan.json")
+                plan_file = self._file_state_entry(plan_json)
+                merged_files = {
+                    **files,
+                    "/plan.json": plan_file,
+                    "/shared/plan.json": plan_file,
+                }
+                plan_context = self._format_approved_plan_context(title, sections)
+                return state.model_copy(update={"files": merged_files, "clarifier_result": plan_context})
+            return state
+
+        title, sections = approved_plan
+        if self._is_generic_approved_plan(title, sections):
+            explicit_plan = self._explicit_plan_from_rich_query(latest_query)
+            if explicit_plan:
+                title, sections = explicit_plan
+                plan_json = self._build_plan_json_from_approved_context(title, sections, latest_query, depth_config)
+                logger.info("Deep Research: replacing generic approved plan with deterministic rich-query plan")
+                plan_file = self._file_state_entry(plan_json)
+                merged_files = {
+                    **files,
+                    "/plan.json": plan_file,
+                    "/shared/plan.json": plan_file,
+                }
+                plan_context = self._format_approved_plan_context(title, sections)
+                return state.model_copy(update={"files": merged_files, "clarifier_result": plan_context})
+            logger.info("Deep Research: ignoring generic approved plan so planner-agent can create a specific TOC")
+            return state.model_copy(
+                update={
+                    "files": files,
+                    "clarifier_result": self._strip_approved_plan_context(state.clarifier_result),
+                }
+            )
+
+        plan_json = self._build_plan_json_from_approved_context(title, sections, latest_query, depth_config)
+        logger.info("Deep Research: preloading approved plan into /shared/plan.json")
+        plan_file = self._file_state_entry(plan_json)
+        merged_files = {
+            **files,
+            "/plan.json": plan_file,
+            "/shared/plan.json": plan_file,
+        }
+        return state.model_copy(update={"files": merged_files})
+
+    @staticmethod
+    def _tool_limits_for_state(state: DeepResearchAgentState) -> dict[str, int]:
+        """Return per-run expensive-tool limits based on task scope."""
+        latest_query = DeepResearcherAgent._query_without_context(DeepResearcherAgent._latest_user_text(state))
+        if DeepResearcherAgent._is_financial_screen_query(latest_query):
+            return {
+                "planner:search": 2,
+                "planner:exa_web_search_tool": 2,
+                "planner:advanced_web_search_tool": 2,
+                "planner:web_search_tool": 2,
+                "search": 4,
+                "exa_web_search_tool": 4,
+                "advanced_web_search_tool": 4,
+                "web_search_tool": 4,
+                "stock_quote_tool": 2,
+            }
+        depth_config = get_research_depth_config(state.research_depth)
+        budget_profile = DeepResearcherAgent._budget_profile_for_state(state)
+        search_limit = int(budget_profile.get("total_search_calls") or depth_config.advanced_web_search_limit)
+        return {
+            "planner:search": depth_config.planner_search_limit,
+            "planner:exa_web_search_tool": depth_config.planner_search_limit,
+            "planner:advanced_web_search_tool": depth_config.planner_search_limit,
+            "planner:web_search_tool": min(depth_config.web_search_limit, depth_config.planner_search_limit),
+            "search": search_limit,
+            "exa_web_search_tool": depth_config.advanced_web_search_limit,
+            "advanced_web_search_tool": depth_config.advanced_web_search_limit,
+            "web_search_tool": depth_config.web_search_limit,
+            "stock_quote_tool": depth_config.stock_quote_limit,
+        }
+
+    @staticmethod
+    def _parallel_tool_limits_for_state(state: DeepResearchAgentState) -> dict[str, int]:
+        """Return per-response parallel tool limits for long-running agent tools."""
+        depth_config = get_research_depth_config(state.research_depth)
+        return {"task": depth_config.max_parallel_researcher_tasks}
+
+    @staticmethod
+    def _result_messages(result: Any) -> list[Any]:
+        """Return a mutable list of messages from a deepagents result payload."""
+        if isinstance(result, dict):
+            messages = result.get("messages")
+            return list(messages) if isinstance(messages, list) else []
+        messages = getattr(result, "messages", None)
+        return list(messages) if isinstance(messages, list) else []
+
+    @staticmethod
+    def _looks_like_provider_payload(content: str) -> bool:
+        """Reject raw provider protocol blocks as report prose."""
+        stripped = content.lstrip()
+        if (
+            stripped.startswith("[{'thinking'")
+            or stripped.startswith('[{"thinking"')
+            or stripped.startswith("{'thinking'")
+            or stripped.startswith('{"thinking"')
+            or stripped.startswith("[{'signature'")
+            or stripped.startswith('[{"signature"')
+        ):
+            return True
+        lowered = content.lower()
+        return any(
+            marker in lowered
+            for marker in (
+                "'type': 'thinking'",
+                '"type": "thinking"',
+                "'type': 'tool_use'",
+                '"type": "tool_use"',
+                "input_json_delta",
+            )
+        )
+
+    @staticmethod
+    def _coerce_file_content(value: Any) -> str:
+        """Convert deepagents file-state content into plain text."""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            return "\n".join(str(line) for line in value)
+        if isinstance(value, dict):
+            return DeepResearcherAgent._coerce_file_content(value.get("content", ""))
+        return ""
+
+    @staticmethod
+    def _extract_report_file_content(result: dict | Any) -> str:
+        """Extract /report.md from deepagents state when the model wrote a file."""
+        if isinstance(result, dict):
+            files = result.get("files") or {}
+        else:
+            files = getattr(result, "files", {}) or {}
+
+        if not isinstance(files, dict):
+            return ""
+
+        candidates = (
+            files.get("/report.md"),
+            files.get("report.md"),
+        )
+        best = ""
+        for candidate in candidates:
+            content = DeepResearcherAgent._coerce_file_content(candidate)
+            if DeepResearcherAgent._looks_like_provider_payload(content):
+                continue
+            if len(content) > len(best):
+                best = content
+        return best
+
+    @staticmethod
+    def _extract_research_notes_content(result: dict | Any) -> str:
+        """Extract researcher note files as a last-resort report fallback."""
+        if isinstance(result, dict):
+            files = result.get("files") or {}
+        else:
+            files = getattr(result, "files", {}) or {}
+
+        if not isinstance(files, dict):
+            return ""
+
+        ignored_paths = {
+            "/plan.json",
+            "plan.json",
+            "/shared/plan.json",
+            "shared/plan.json",
+            "/shared/consolidated_findings.md",
+            "shared/consolidated_findings.md",
+            "/report.md",
+            "report.md",
+        }
+        note_blocks = []
+        for path, value in sorted(files.items()):
+            normalized_path = str(path).lstrip("/")
+            if str(path) in ignored_paths or normalized_path in ignored_paths:
+                continue
+            if not (str(path).startswith("/shared/") or normalized_path.startswith("shared/")):
+                continue
+            if not (normalized_path.endswith(".txt") or normalized_path.endswith(".md")):
+                continue
+
+            content = DeepResearcherAgent._coerce_file_content(value).strip()
+            if len(content) < 200:
+                continue
+            note_blocks.append(f"### {Path(normalized_path).name}\n\n{content}")
+
+        if not note_blocks:
+            return ""
+
+        return "\n\n".join(note_blocks)
+
+    def _build_report_from_research_notes(self, result: dict | Any) -> str:
+        """Render a usable report from researcher notes when final synthesis fails."""
+        notes = self._extract_research_notes_content(result)
+        if not notes:
+            return ""
+
+        source_list = self.source_registry_middleware.get_source_list_text() or ""
+        sources_section = f"\n\n## Sources\n\n{source_list}" if source_list and "## Sources" not in notes else ""
+        return (
+            "# Research Findings\n\n"
+            "Based on the evidence gathered for this job, the following findings were available.\n\n"
+            "## Evidence Notes\n\n"
+            f"{notes}"
+            f"{sources_section}"
+        )
+
+    @staticmethod
+    def _extract_files(result: dict | Any) -> dict[str, Any]:
+        if isinstance(result, dict):
+            files = result.get("files") or {}
+        else:
+            files = getattr(result, "files", {}) or {}
+        return files if isinstance(files, dict) else {}
+
+    @staticmethod
+    def _set_files(result: dict | Any, files: dict[str, Any]) -> None:
+        if isinstance(result, dict):
+            result["files"] = files
+        elif hasattr(result, "files"):
+            result.files = files
+
+    @staticmethod
+    def _is_claim_fragment_path(path: str) -> bool:
+        normalized = str(path).lstrip("/").lower()
+        name = Path(normalized).name
+        return (normalized.startswith("shared/claims/") and name.startswith("claims_") and name.endswith(".json")) or (
+            normalized.startswith("shared/") and name.startswith("claims_") and name.endswith(".json")
+        )
+
+    @staticmethod
+    def _merge_claim_fragments_into_result(result: dict | Any, *, job_id: str | None = None) -> bool:
+        """Merge per-researcher claim fragments into canonical /shared/claim_table.json."""
+        files = dict(DeepResearcherAgent._extract_files(result))
+        if not files:
+            return False
+
+        fragments = [
+            DeepResearcherAgent._coerce_file_content(value).strip()
+            for path, value in files.items()
+            if DeepResearcherAgent._is_claim_fragment_path(str(path))
+        ]
+        fragments = [content for content in fragments if content]
+        if not fragments:
+            return False
+
+        table, errors = merge_claim_tables_json(fragments)
+        if table is None:
+            logger.warning("Unable to merge claim fragments: %s", "; ".join(errors))
+            return False
+        if job_id:
+            table.job_id = job_id
+        if errors:
+            table.model_extra["merge_errors"] = errors
+
+        content = table.model_dump_json(indent=2)
+        entry = DeepResearcherAgent._file_state_entry(content)
+        files["/shared/claim_table.json"] = entry
+        files["shared/claim_table.json"] = entry
+        DeepResearcherAgent._set_files(result, files)
+        logger.info(
+            "Merged %d claim fragment(s) into /shared/claim_table.json (%d claims)",
+            len(fragments),
+            len(table.all_claims()),
+        )
+        return True
+
+    @staticmethod
+    def _is_fact_ledger_fragment_path(path: str) -> bool:
+        normalized = str(path).lstrip("/").lower()
+        name = Path(normalized).name
+        return normalized.startswith("shared/") and name.startswith("fact_ledger_") and name.endswith(".json")
+
+    @staticmethod
+    def _merge_fact_ledger_fragments_into_result(result: dict | Any) -> bool:
+        """Merge per-researcher fact-ledger fragments into /shared/fact_ledger.json."""
+        files = dict(DeepResearcherAgent._extract_files(result))
+        if not files:
+            return False
+
+        fragments = [
+            DeepResearcherAgent._coerce_file_content(value).strip()
+            for path, value in files.items()
+            if DeepResearcherAgent._is_fact_ledger_fragment_path(str(path))
+        ]
+        fragments = [content for content in fragments if content]
+        if not fragments:
+            return False
+
+        ledger, errors = merge_fact_ledgers_json(fragments)
+        if ledger is None:
+            logger.warning("Unable to merge fact-ledger fragments: %s", "; ".join(errors))
+            return False
+        if errors:
+            ledger.model_extra["merge_errors"] = errors
+        entry = DeepResearcherAgent._file_state_entry(ledger.model_dump_json(indent=2))
+        files["/shared/fact_ledger.json"] = entry
+        files["shared/fact_ledger.json"] = entry
+        DeepResearcherAgent._set_files(result, files)
+        logger.info(
+            "Merged %d fact-ledger fragment(s) into /shared/fact_ledger.json (%d entries)",
+            len(fragments),
+            len(ledger.entries),
+        )
+        return True
+
+    def _merge_structured_research_artifacts_into_result(self, result: dict | Any) -> None:
+        """Build deterministic shared artifacts from researcher fragments."""
+        self._merge_claim_fragments_into_result(result, job_id=self.job_id)
+        self._merge_fact_ledger_fragments_into_result(result)
+        self._build_evidence_packet_into_result(result)
+
+    @staticmethod
+    def _is_extract_fragment_path(path: str) -> bool:
+        normalized = str(path).lstrip("/").lower()
+        name = Path(normalized).name
+        return (normalized.startswith("shared/extracts/") and name.endswith(".json")) or (
+            normalized.startswith("shared/") and name.startswith("extracts_") and name.endswith(".json")
+        )
+
+    def _build_evidence_packet_into_result(self, result: dict | Any) -> bool:
+        """Assemble `/shared/evidence_packet.json` for the M3 synthesis pass."""
+        files = dict(self._extract_files(result))
+        if not files:
+            return False
+
+        claim_table_content = ""
+        extract_contents: list[str] = []
+        for path, value in files.items():
+            normalized = str(path).lstrip("/").lower()
+            if normalized in {"shared/claim_table.json", "claim_table.json"}:
+                claim_table_content = self._coerce_file_content(value).strip()
+                continue
+            if self._is_extract_fragment_path(str(path)):
+                content = self._coerce_file_content(value).strip()
+                if content:
+                    extract_contents.append(content)
+
+        if not (claim_table_content or extract_contents):
+            return False
+        registry_sources = self.source_registry_middleware._get_registry().all_sources()
+
+        packet = build_evidence_packet(
+            job_id=self.job_id,
+            claim_table_content=claim_table_content or None,
+            extract_contents=extract_contents,
+            registry_sources=registry_sources,
+        )
+        content = packet.model_dump_json(indent=2)
+        entry = self._file_state_entry(content)
+        files["/shared/evidence_packet.json"] = entry
+        files["shared/evidence_packet.json"] = entry
+        self._set_files(result, files)
+        logger.info(
+            "Built /shared/evidence_packet.json with %d ranked source(s), %d claim(s)",
+            packet.source_count,
+            packet.claim_count,
+        )
+        return True
+
+    @staticmethod
+    def _claim_table_quality_reason(result: dict | Any) -> str | None:
+        """Return a failure reason when present claim-table artifacts are invalid."""
+        files = DeepResearcherAgent._extract_files(result)
+        claim_contents: list[tuple[str, str]] = []
+        for path, value in files.items():
+            normalized = str(path).lstrip("/").lower()
+            name = Path(normalized).name
+            if normalized in {"shared/claim_table.json", "claim_table.json"} or (
+                normalized.startswith("shared/") and name.startswith("claims_") and name.endswith(".json")
+            ):
+                content = DeepResearcherAgent._coerce_file_content(value).strip()
+                if content:
+                    claim_contents.append((str(path), content))
+
+        if not claim_contents:
+            return None
+
+        total = 0
+        supported = 0
+        invalid_paths = []
+        for path, content in claim_contents:
+            table, errors = validate_claim_table_json(content)
+            if table is None:
+                invalid_paths.append(f"{path}: {'; '.join(errors)[:240]}")
+                continue
+            claims = table.all_claims()
+            total += len(claims)
+            supported += sum(1 for entry in claims if entry.status in {"verified", "partially_verified"})
+
+        if invalid_paths:
+            return f"invalid_claim_table ({invalid_paths[0]})"
+        if total == 0:
+            return "empty_claim_table"
+        if supported == 0:
+            return "claim_table_has_no_supported_claims"
+        if total >= 4 and supported / total < 0.25:
+            return f"claim_table_mostly_unverified ({supported}/{total} supported)"
+        return None
+
+    @staticmethod
+    def _merge_files_for_report_compiler(*states_or_results: Any) -> dict[str, Any]:
+        """Merge any available DeepAgents file state for final report compilation."""
+        merged: dict[str, Any] = {}
+        for item in states_or_results:
+            merged.update(DeepResearcherAgent._extract_files(item))
+        return merged
+
+    @staticmethod
+    def _display_shared_path(path: str) -> str:
+        """Return the user-visible path for files stored in the /shared route backend."""
+        normalized = str(path).strip() or "research_notes.md"
+        if normalized.startswith("/shared/") or normalized == "/shared":
+            return normalized
+        if normalized.startswith("shared/"):
+            return f"/{normalized}"
+        if not normalized.startswith("/"):
+            normalized = f"/{normalized}"
+        if normalized in {"/report.md", "/request.md"}:
+            return normalized
+        return f"/shared{normalized}"
+
+    @staticmethod
+    def _truncate_artifact(content: str, limit: int = _REPORT_COMPILER_MAX_ARTIFACT_CHARS) -> str:
+        content = content.strip()
+        if len(content) <= limit:
+            return content
+        head = content[: int(limit * 0.7)].rstrip()
+        tail = content[-int(limit * 0.3) :].lstrip()
+        return f"{head}\n\n[... middle truncated from {len(content)} characters ...]\n\n{tail}"
+
+    @staticmethod
+    def _is_unavailable_source_context(content: str) -> bool:
+        lowered = content.lower()
+        return (
+            lowered.strip().startswith("error:")
+            or "is unavailable because" in lowered
+            or "api_key is not set" in lowered
+            or "api key is not set" in lowered
+            or "all web search queries returned zero results" in lowered
+        )
+
+    @staticmethod
+    def _title_from_request(request_text: str) -> str:
+        first_line = next((line.strip() for line in request_text.splitlines() if line.strip()), "Research Report")
+        first_line = re.sub(r"^#+\s*", "", first_line)
+        first_line = re.sub(r"^you are\s+.*?deep research.*?\.\s*", "", first_line, flags=re.IGNORECASE)
+        if len(first_line) > 90:
+            first_line = first_line[:87].rstrip() + "..."
+        return first_line or "Research Report"
+
+    def _seed_source_registry_from_text(self, content: str, *, tool_name: str = "artifact") -> int:
+        if not content or self._is_unavailable_source_context(content):
+            return 0
+        registry = self.source_registry_middleware._get_registry()
+        seeded = 0
+        for url in re.findall(r"https?://[^\s<>'\")\]}]+", content):
+            url = url.rstrip(".,;:!?)'\"}>")
+            if not url or url in {"https://exa.ai/", "https://exa.ai"}:
+                continue
+            registry.add(SourceEntry(url=url, source_type="artifact", tool_name=tool_name))
+            seeded += 1
+        return seeded
+
+    def _collect_report_compiler_artifacts(self, *states_or_results: Any) -> list[tuple[str, str]]:
+        """Return bounded, relevant artifact text for deterministic report compilation."""
+        files = self._merge_files_for_report_compiler(*states_or_results)
+        artifacts: list[tuple[int, str, str]] = []
+        ignored_names = ("plan.json", "resume_sources", "resume_instructions", "skill.md")
+        for path, value in files.items():
+            normalized = str(path).lstrip("/")
+            name_lower = normalized.lower()
+            if any(part in name_lower for part in ignored_names):
+                continue
+            if not (name_lower.endswith(".txt") or name_lower.endswith(".md")):
+                continue
+            content = self._coerce_file_content(value).strip()
+            if len(content) < 200 or self._looks_like_provider_payload(content):
+                continue
+            if self._is_unavailable_source_context(content):
+                priority = 0
+            elif "consolidated_findings" in name_lower:
+                priority = 3
+            elif name_lower.endswith("report.md"):
+                priority = 2
+            else:
+                priority = 1
+            artifacts.append((priority, self._display_shared_path(normalized), content))
+
+        artifacts.sort(key=lambda item: (-item[0], item[1]))
+        return [(path, content) for _priority, path, content in artifacts]
+
+    def _source_inventory_text(self, *, limit: int = 80) -> str:
+        sources = self.source_registry_middleware._get_registry().all_sources()
+        seen: set[str] = set()
+        lines: list[str] = []
+        for source in sources:
+            url = source.url
+            if not url:
+                continue
+            normalized = url.rstrip("/")
+            if normalized in seen or normalized in {"https://exa.ai", "https://exa.ai/"}:
+                continue
+            seen.add(normalized)
+            title = source.title or url
+            lines.append(f"[{len(lines) + 1}] {title}: {url}")
+            if len(lines) >= limit:
+                break
+        return "\n".join(lines)
+
+    @staticmethod
+    def _coerce_llm_report_text(message: Any) -> str:
+        raw = getattr(message, "content", message)
+        if isinstance(raw, list):
+            parts = [
+                part.get("text", "")
+                for part in raw
+                if isinstance(part, dict) and part.get("type") in {"text", "output_text"} and part.get("text")
+            ]
+            return "\n".join(parts).strip()
+        return raw.strip() if isinstance(raw, str) else str(raw).strip()
+
+    def _deterministic_compiled_report(
+        self,
+        request_text: str,
+        artifacts: list[tuple[str, str]],
+        source_inventory: str,
+    ) -> str:
+        title = self._title_from_request(request_text)
+        sections = []
+        for path, content in artifacts[:8]:
+            clean_name = Path(path).name.replace("_", " ").replace("-", " ")
+            sections.append(f"## {clean_name}\n\n{self._truncate_artifact(content, 18000)}")
+
+        source_section = source_inventory or (
+            "No validated source URLs were captured. Treat this report as an evidence-limited synthesis."
+        )
+        limitations = (
+            "This report was compiled from persisted research artifacts after the final report writer "
+            "did not emit a usable report. Claims should be treated with extra caution where the source "
+            "inventory is sparse."
+        )
+        return (
+            f"# {title}\n\n"
+            "## Synthesis Status\n\n"
+            f"{limitations}\n\n" + "\n\n".join(sections) + "\n\n## Sources\n\n" + source_section + "\n"
+        )
+
+    async def _compile_report_from_artifacts(self, state: DeepResearchAgentState, result: dict | Any) -> str:
+        """Compile a final report from persisted artifacts when the agent final turn is reasoning-only."""
+        artifacts = self._collect_report_compiler_artifacts(state, result)
+        if not artifacts:
+            return self._build_report_from_research_notes(result)
+
+        for _path, content in artifacts:
+            self._seed_source_registry_from_text(content)
+        source_inventory = self._source_inventory_text()
+        request_text = self._query_without_context(self._latest_user_text(state))
+
+        evidence_blocks: list[str] = []
+        remaining = _REPORT_COMPILER_MAX_INPUT_CHARS
+        for path, content in artifacts:
+            block = f"--- ARTIFACT: {path} ---\n{self._truncate_artifact(content)}"
+            if len(block) > remaining:
+                block = block[:remaining].rstrip()
+            evidence_blocks.append(block)
+            remaining -= len(block)
+            if remaining <= 0:
+                break
+
+        prompt = (
+            "Write a publication-ready markdown research report from the persisted evidence below.\n"
+            "Return markdown prose only. Do not mention internal tools, agents, file paths, retries, or artifacts.\n"
+            "Use only claims supported by the evidence. If evidence is thin, state the limitation plainly.\n"
+            "Include a Sources section using only the supplied source inventory. Do not invent URLs.\n\n"
+            f"Original request:\n{request_text}\n\n"
+            f"Source inventory:\n{source_inventory or 'No validated source URLs captured.'}\n\n"
+            f"Evidence:\n{chr(10).join(evidence_blocks)}"
+        )
+
+        try:
+            llm = self.llm_provider.get(LLMRole.ORCHESTRATOR)
+            response = await llm.ainvoke(
+                [
+                    SystemMessage(content="You are a careful report compiler. Output only final markdown."),
+                    HumanMessage(content=prompt),
+                ]
+            )
+            compiled = self._coerce_llm_report_text(response)
+            if (
+                len(compiled) >= _MIN_REPORT_LENGTH
+                and not self._looks_like_provider_payload(compiled)
+                and "## " in compiled
+            ):
+                logger.warning(
+                    "Compiled final report from persisted artifacts after reasoning-only finalizer output (%d chars)",
+                    len(compiled),
+                )
+                return compiled
+        except Exception as exc:
+            logger.warning("LLM report compiler failed; using deterministic artifact compiler: %s", exc)
+
+        compiled = self._deterministic_compiled_report(request_text, artifacts, source_inventory)
+        logger.warning("Using deterministic artifact compiler for final report (%d chars)", len(compiled))
+        return compiled
+
+    @staticmethod
     def _extract_report_content(messages: list) -> str:
         """Extract report content from the last message, falling back to write_file tool calls if text is too short."""
         if not messages:
@@ -305,9 +1934,15 @@ class DeepResearcherAgent:
         last_msg = messages[-1]
         raw = last_msg.content or ""
         if isinstance(raw, list):
-            content = " ".join(p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text")
+            content = " ".join(
+                p.get("text", "")
+                for p in raw
+                if isinstance(p, dict) and p.get("type") in {"text", "output_text"} and p.get("text")
+            )
         else:
             content = raw if isinstance(raw, str) else str(raw)
+        if DeepResearcherAgent._looks_like_provider_payload(content):
+            content = ""
         if len(content) >= _MIN_REPORT_LENGTH:
             return content
         # If the last message is an AIMessage with a write_file tool call,
@@ -320,6 +1955,24 @@ class DeepResearcherAgent:
                         content = file_content
         return content
 
+    @staticmethod
+    def _extract_report_content_from_result(result: dict | Any) -> str:
+        """Extract the most substantive report from messages or /report.md state."""
+        if isinstance(result, dict):
+            messages = result.get("messages", [])
+        else:
+            messages = getattr(result, "messages", [])
+
+        message_content = DeepResearcherAgent._extract_report_content(messages)
+        file_content = DeepResearcherAgent._extract_report_file_content(result)
+        if is_model_failure_report(file_content) or DeepResearcherAgent._looks_like_provider_payload(file_content):
+            file_content = ""
+        if DeepResearcherAgent._looks_like_provider_payload(message_content):
+            message_content = ""
+        if len(file_content) > len(message_content):
+            return file_content
+        return message_content
+
     def _is_report_complete(self, result: dict | Any) -> tuple[bool, str]:
         """
         Check if the agent produced a complete report using tool calls or heuristics.
@@ -331,7 +1984,10 @@ class DeepResearcherAgent:
         if not messages:
             return False, "no_messages"
 
-        content = self._extract_report_content(messages)
+        content = self._extract_report_content_from_result(result)
+
+        if is_model_failure_report(content):
+            return False, "model_call_failed"
 
         if len(content) < _MIN_REPORT_LENGTH:
             return False, f"too_short ({len(content)} chars)"
@@ -393,16 +2049,37 @@ class DeepResearcherAgent:
             if pattern in content_lower:
                 return False, f"agent_gave_up (detected: '{pattern}')"
 
+        registry = self.source_registry_middleware._get_registry()
+        if registry.all_sources():
+            source_quality = evaluate_report_source_quality(content, registry)
+            if not source_quality.passed:
+                logger.warning("Deep research report has source-quality warning: %s", source_quality.reason)
+
+        claim_quality_reason = self._claim_table_quality_reason(result)
+        if claim_quality_reason:
+            logger.warning("Deep research report has claim-table warning: %s", claim_quality_reason)
+
         return True, "complete_via_heuristic"
 
     async def run(self, state: DeepResearchAgentState) -> DeepResearchAgentState:
         """
         Execute deep research with multi-phase workflow.
         """
+        state = state.model_copy(update={"files": self._normalize_files_state(state.files)})
+        self._seed_source_registry_from_files(state.files)
+        state = self._inject_approved_plan_if_available(state)
         state = self.deepagents_runtime.prepare_state(state)
         agent = self._build_orchestrator_agent(state)
+        tool_counts_token = set_session_tool_counts({})
+        tool_limits_token = set_session_tool_limits(self._tool_limits_for_state(state))
+        exhausted_tools_token = set_session_exhausted_tools(set())
+        parallel_tool_limits_token = set_session_parallel_tool_limits(self._parallel_tool_limits_for_state(state))
+        plan_validation_failures_token = set_session_plan_validation_failures(0)
+        planner_model_turns_token = set_session_planner_model_turns(0)
+        recent_artifact_writes_token = set_session_recent_artifact_writes({})
 
         messages = state.messages
+        scope_request = self._query_without_context(self._latest_user_text(state))
         if messages:
             query_content = messages[-1].content
             query = query_content if isinstance(query_content, str) else str(query_content)
@@ -414,13 +2091,14 @@ class DeepResearcherAgent:
         result = None
         last_error = None
         try:
-            max_retries = 5
+            max_retries = 2
             for attempt in range(max_retries):
                 try:
                     result = await agent.ainvoke(
                         state,
                         config={"callbacks": self.callbacks} if self.callbacks else None,
                     )
+                    self._merge_structured_research_artifacts_into_result(result)
                     last_error = None
                 except Exception as ex:
                     logger.error("Deep Research attempt %d failed: %s", attempt + 1, ex, exc_info=True)
@@ -440,11 +2118,25 @@ class DeepResearcherAgent:
 
                 logger.warning("Report incomplete (attempt %d/%d): %s", attempt + 1, max_retries, reason)
 
+                has_captured_sources = bool(self.source_registry_middleware._get_registry().all_sources())
                 feedback_msg = f"Your report is not yet complete. Reason: {reason}. "
                 if "missing_sources_section" in reason:
-                    feedback_msg += "You must include a '## Sources' section listing all URLs."
+                    if has_captured_sources:
+                        feedback_msg += "You must include a '## Sources' section listing all URLs."
+                    else:
+                        feedback_msg += (
+                            "You answered without capturing any search/tool sources. "
+                            "This is invalid for deep research. Run the actual workflow now: "
+                            "use write_todos, call planner-agent if /shared/plan.json does not exist, "
+                            "delegate to researcher-agent, and have the researcher use the configured search tools. "
+                            "Only cite URLs returned by tools."
+                        )
                 elif "too_short" in reason:
-                    feedback_msg += "The report is too short. Expand your analysis and add more detail."
+                    feedback_msg += (
+                        "The report is too short or contained only provider reasoning blocks. "
+                        "Expand your analysis and write the actual final report now, using write_file "
+                        "with file_path='/report.md', then return the report prose."
+                    )
                 elif "missing_section_headers" in reason:
                     feedback_msg += "Use markdown headers (##) to structure the report."
                 elif "no_valid_citations" in reason:
@@ -457,13 +2149,40 @@ class DeepResearcherAgent:
                     source_list = self.source_registry_middleware.get_source_list_text()
                     if source_list:
                         feedback_msg += "\n\n" + source_list
+                elif "source_quality_failed" in reason:
+                    feedback_msg += (
+                        "The report uses sources too narrowly or relies on weak derivative sources. "
+                        "Repair the report without restarting research: call get_verified_sources, "
+                        "spread body citations across at least four distinct domains when available, "
+                        "avoid letting one domain support most claims, and verify numeric claims "
+                        "with primary or authoritative sources. If a statistic is only found in a blog, "
+                        "mark it as reported by that blog rather than established fact."
+                    )
+                    source_list = self.source_registry_middleware.get_source_list_text()
+                    if source_list:
+                        feedback_msg += "\n\n" + source_list
+                elif "claim_table" in reason:
+                    feedback_msg += (
+                        "The claim-resolution artifact is missing usable support or contains invalid JSON. "
+                        "Do not restart the whole workflow. Read /shared/plan.json and all researcher notes, "
+                        "then repair or create /shared/claim_table.json with entries that resolve the report's "
+                        "important claims as verified, partially_verified, or unverified. The final report must "
+                        "state verified claims confidently, hedge partially verified claims, and omit or clearly "
+                        "label unverified claims."
+                    )
 
-                feedback_msg += (
-                    " IMPORTANT: Do NOT restart the research from scratch."
-                    " First check if /report.md already exists using read_file."
-                    " If it does, use that content as your report — just fix the specific issue above"
-                    " and return the corrected report in your final message."
-                )
+                if has_captured_sources:
+                    feedback_msg += (
+                        " IMPORTANT: Do NOT restart the research from scratch."
+                        " First check if /report.md already exists using read_file."
+                        " If it does, use that content as your report — just fix the specific issue above"
+                        " and return the corrected report in your final message."
+                    )
+                else:
+                    feedback_msg += (
+                        " IMPORTANT: You must restart from the planning/research step because no sources were captured."
+                        " Do not return a final report until researcher-agent has produced source-backed notes."
+                    )
 
                 if isinstance(result, dict):
                     next_state = {**result}
@@ -478,6 +2197,7 @@ class DeepResearcherAgent:
                         next_state,
                         config={"callbacks": self.callbacks} if self.callbacks else None,
                     )
+                    self._merge_structured_research_artifacts_into_result(result)
                     last_error = None
                 except Exception as ex:
                     logger.error("Deep Research feedback retry %d failed: %s", attempt + 1, ex, exc_info=True)
@@ -502,8 +2222,39 @@ class DeepResearcherAgent:
                 raise last_error
 
             final_message = "Research failed to produce a report."
-            if result and result.get("messages"):
-                final_message = self._extract_report_content(result["messages"])
+            if result:
+                self._merge_structured_research_artifacts_into_result(result)
+                final_message = self._extract_report_content_from_result(result)
+                if len(final_message) < _MIN_REPORT_LENGTH:
+                    compiled_report = await self._compile_report_from_artifacts(state, result)
+                    if len(compiled_report) > len(final_message):
+                        logger.warning(
+                            "Final report was too short (%d chars); using compiled artifact report (%d chars)",
+                            len(final_message),
+                            len(compiled_report),
+                        )
+                        final_message = compiled_report
+
+            if result and len(final_message) >= _MIN_REPORT_LENGTH:
+                files = dict(self._extract_files(result))
+                files["/report.md"] = self._file_state_entry(final_message)
+                files["report.md"] = self._file_state_entry(final_message)
+                if isinstance(result, dict):
+                    result["files"] = files
+                elif hasattr(result, "files"):
+                    result.files = files
+
+            if is_model_failure_report(final_message) or len(final_message) < _MIN_REPORT_LENGTH:
+                failure_detail = final_message.strip() or "empty final report"
+                if last_error is not None:
+                    raise RuntimeError(
+                        f"Deep research failed before producing a report: {failure_detail}"
+                    ) from last_error
+                raise RuntimeError(f"Deep research failed before producing a report: {failure_detail}")
+
+            scope_ok, scope_reason = report_matches_request_scope(final_message, scope_request)
+            if not scope_ok:
+                raise RuntimeError(f"Deep research report drifted from the requested topic: {scope_reason}")
 
             # Post-process: verify citations against source registry
             if self.source_registry_middleware._get_registry().all_sources():
@@ -551,19 +2302,38 @@ class DeepResearcherAgent:
                     cb.emit_final_report(final_message)
                     break
 
-            if result and result.get("messages"):
-                last_msg = result["messages"][-1]
+            result_messages = self._result_messages(result)
+            if result_messages:
+                last_msg = result_messages[-1]
                 if hasattr(last_msg, "model_copy"):
-                    result["messages"][-1] = last_msg.model_copy(update={"content": final_message})
+                    result_messages[-1] = last_msg.model_copy(update={"content": final_message})
                 else:
-                    result["messages"][-1] = type(last_msg)(content=final_message)
+                    result_messages[-1] = type(last_msg)(content=final_message)
+                if isinstance(result, dict):
+                    result["messages"] = result_messages
+                elif hasattr(result, "messages"):
+                    result.messages = result_messages
 
             logger.info("=" * 80)
             logger.info("Deep Research Subagent: Workflow complete")
             logger.info("Final report length: %d characters", len(final_message))
             logger.info("=" * 80)
-            return DeepResearchAgentState.model_validate(result)
+            normalized_result = result
+            if not isinstance(result, dict):
+                if hasattr(result, "model_dump"):
+                    normalized_result = result.model_dump()
+                elif hasattr(result, "__dict__"):
+                    normalized_result = dict(result.__dict__)
+            return DeepResearchAgentState.model_validate(normalized_result)
 
         except Exception as ex:
             logger.error("Deep Research Subagent failed: %s", ex, exc_info=True)
             raise
+        finally:
+            reset_session_tool_counts(tool_counts_token)
+            reset_session_tool_limits(tool_limits_token)
+            reset_session_exhausted_tools(exhausted_tools_token)
+            reset_session_parallel_tool_limits(parallel_tool_limits_token)
+            reset_session_plan_validation_failures(plan_validation_failures_token)
+            reset_session_planner_model_turns(planner_model_turns_token)
+            reset_session_recent_artifact_writes(recent_artifact_writes_token)

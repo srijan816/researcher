@@ -65,7 +65,7 @@ export interface SessionHookParams {
  * - requiredEnvVars: Additional env vars to check in validateAuthEnv()
  */
 export interface AuthProviderConfig {
-  provider: Record<string, unknown> | null
+  provider: unknown | null
   providerId: string
   refreshToken: (refreshToken: string) => Promise<TokenRefreshResult>
 

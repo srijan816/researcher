@@ -23,6 +23,8 @@ import { DeleteAllSessionsConfirmationModal } from './DeleteAllSessionsConfirmat
 interface Session {
   id: string
   title: string
+  userId?: string
+  ownerDisplayName?: string
   date: Date
   hasActiveDeepResearch?: boolean
 }
@@ -61,7 +63,6 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
   const setSessionsPanelOpen = useLayoutStore((s) => s.setSessionsPanelOpen)
 
   const isSessionBusy = useChatStore((s) => s.isSessionBusy)
-  const anySessionBusy = useChatStore((s) => s.hasAnyBusySession())
   const pruneExpiredSessions = useChatStore((s) => s.pruneExpiredSessions)
   // Navigation-specific busy check: only shallow thinking (WebSocket) and HITL prompts
   // block session switching. Deep research runs server-side and can be reconnected,
@@ -75,6 +76,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false)
   const [sessionToDelete, setSessionToDelete] = useState<string | null>(null)
+  const [collapsedOwnerIds, setCollapsedOwnerIds] = useState<Set<string>>(() => new Set())
 
   // Storage usage percentage — refreshes only when the panel opens
   const [storagePercent, setStoragePercent] = useState<number>(0)
@@ -87,6 +89,10 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
       setStoragePercent(Math.round(percentUsed))
     }
   }, [isSessionsPanelOpen, pruneExpiredSessions])
+
+  // Deep research runs server-side, so local deletion should remain available.
+  // Shallow streaming and HITL still block destructive actions in the active UI.
+  const isDeleteBlocked = isNavigationBlocked
 
   const handleDeleteClick = useCallback((sessionId: string) => {
     setSessionToDelete(sessionId)
@@ -138,11 +144,23 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
     return sessions.filter((s) => s.title.toLowerCase().includes(query))
   }, [sessions, searchQuery])
 
-  const groupedSessions = useMemo(() => groupSessionsByDate(filteredSessions), [filteredSessions])
+  const ownerGroups = useMemo(() => groupSessionsByOwner(filteredSessions), [filteredSessions])
+  const showOwnerGroups = Object.keys(ownerGroups).length > 1
+  const toggleOwner = useCallback((ownerId: string) => {
+    setCollapsedOwnerIds((current) => {
+      const next = new Set(current)
+      if (next.has(ownerId)) {
+        next.delete(ownerId)
+      } else {
+        next.add(ownerId)
+      }
+      return next
+    })
+  }, [])
 
   return (
     <SidePanel
-      className="bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[406px] rounded-r-2xl"
+      className="bg-surface-base top-[var(--header-height)] h-[calc(100dvh-var(--header-height))] w-screen max-w-none rounded-none sm:max-w-[406px] sm:rounded-r-2xl"
       open={isSessionsPanelOpen}
       onOpenChange={handleOpenChange}
       side="left"
@@ -158,7 +176,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
       slotFooter={
         <Flex direction="col" gap="1">
           <Text kind="body/regular/xs" className="text-subtle">
-            Using {storagePercent}% of browser storage quota
+            Synced to the local app database. Browser cache: {storagePercent}% used.
           </Text>
           <Text kind="body/regular/xs" className="text-subtle">
             Note: Sessions and files are saved for a limited time before automatic deletion.
@@ -173,9 +191,10 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
           size="small"
           color="danger"
           onClick={handleDeleteAllClick}
-          disabled={anySessionBusy}
-          aria-label={anySessionBusy ? "Delete all sessions (disabled)" : "Delete all sessions"}
-          title={anySessionBusy ? "Cannot delete while operations are in progress" : "Delete all sessions"}
+          disabled={isDeleteBlocked}
+          aria-label={isDeleteBlocked ? "Delete all sessions (disabled)" : "Delete all sessions"}
+          title={isDeleteBlocked ? "Cannot delete while operations are in progress" : "Delete all sessions"}
+          className="min-h-10"
         >
           <Flex align="center" gap="1">
             <Trash className="h-4 w-4" />
@@ -186,17 +205,9 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
           kind="tertiary"
           size="small"
           onClick={handleNewSession}
-          disabled={isNavigationBlocked}
-          aria-label={
-            isNavigationBlocked
-              ? 'Start new session (disabled during active operations)'
-              : 'Start new session'
-          }
-          title={
-            isNavigationBlocked
-              ? 'Cannot create new session while current session is active'
-              : 'Start new session'
-          }
+          aria-label="Start new session"
+          title="Start new session"
+          className="min-h-10"
         >
           <Flex align="center" gap="1">
             <Plus className="h-4 w-4" />
@@ -213,32 +224,55 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search sessions..."
-          className="bg-surface-base border-base text-primary placeholder:text-subtle h-9 w-full rounded-md border pl-8 pr-3 text-sm outline-none focus:border-accent-primary"
+          className="bg-surface-base border-base text-primary placeholder:text-subtle h-11 w-full rounded-md border pl-8 pr-3 text-base outline-none focus:border-accent-primary sm:h-9 sm:text-sm"
           aria-label="Search sessions"
         />
       </div>
 
       {/* Session List */}
       <Flex direction="col" className="flex-1 overflow-y-auto">
-        {Object.entries(groupedSessions).map(([dateLabel, dateSessions]) => (
-          <Flex key={dateLabel} direction="col" gap="2" className="mb-4">
-            <Text kind="label/semibold/xs" className="text-subtle uppercase">
-              {dateLabel}
-            </Text>
-            {dateSessions.map((session) => (
-              <SessionItem
-                key={session.id}
-                session={session}
-                isSelected={selectedSessionId === session.id}
-                isBusy={isNavigationBlocked}
-                isSessionActive={isSessionBusy(session.id)}
-                onSelect={handleSessionClick}
-                onDelete={handleDeleteClick}
-                onRename={onRenameSession}
-              />
-            ))}
-          </Flex>
-        ))}
+        {showOwnerGroups
+          ? Object.entries(ownerGroups).map(([ownerId, ownerSessions]) => {
+              const collapsed = collapsedOwnerIds.has(ownerId)
+              const ownerLabel = ownerSessions[0]?.ownerDisplayName || ownerId
+              return (
+                <Flex key={ownerId} direction="col" gap="2" className="mb-4">
+                  <button
+                    type="button"
+                    onClick={() => toggleOwner(ownerId)}
+                    className="text-subtle hover:text-primary flex w-full items-center justify-between rounded-md px-1 py-1 text-left"
+                    aria-expanded={!collapsed}
+                  >
+                    <Text kind="label/semibold/xs" className="uppercase">
+                      {ownerLabel}
+                    </Text>
+                    <Text kind="body/regular/xs">
+                      {collapsed ? 'Show' : 'Hide'} {ownerSessions.length}
+                    </Text>
+                  </button>
+                  {!collapsed && (
+                    <SessionDateGroups
+                      sessions={ownerSessions}
+                      selectedSessionId={selectedSessionId}
+                      isNavigationBlocked={isNavigationBlocked}
+                      isSessionBusy={isSessionBusy}
+                      onSelect={handleSessionClick}
+                      onDelete={handleDeleteClick}
+                      onRename={onRenameSession}
+                    />
+                  )}
+                </Flex>
+              )
+            })
+          : <SessionDateGroups
+              sessions={filteredSessions}
+              selectedSessionId={selectedSessionId}
+              isNavigationBlocked={isNavigationBlocked}
+              isSessionBusy={isSessionBusy}
+              onSelect={handleSessionClick}
+              onDelete={handleDeleteClick}
+              onRename={onRenameSession}
+            />}
 
         {filteredSessions.length === 0 && (
           <Flex direction="col" align="center" justify="center" className="flex-1 py-8">
@@ -268,6 +302,51 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
     </SidePanel>
   )
 })
+
+interface SessionDateGroupsProps {
+  sessions: Session[]
+  selectedSessionId?: string
+  isNavigationBlocked: boolean
+  isSessionBusy: (sessionId: string) => boolean
+  onSelect: (sessionId: string) => void
+  onDelete: (sessionId: string) => void
+  onRename?: (sessionId: string, newTitle: string) => void
+}
+
+const SessionDateGroups: FC<SessionDateGroupsProps> = ({
+  sessions,
+  selectedSessionId,
+  isNavigationBlocked,
+  isSessionBusy,
+  onSelect,
+  onDelete,
+  onRename,
+}) => {
+  const groupedSessions = useMemo(() => groupSessionsByDate(sessions), [sessions])
+  return (
+    <>
+      {Object.entries(groupedSessions).map(([dateLabel, dateSessions]) => (
+        <Flex key={dateLabel} direction="col" gap="2" className="mb-4">
+          <Text kind="label/semibold/xs" className="text-subtle uppercase">
+            {dateLabel}
+          </Text>
+          {dateSessions.map((session) => (
+            <SessionItem
+              key={session.id}
+              session={session}
+              isSelected={selectedSessionId === session.id}
+              isBusy={isNavigationBlocked}
+              isSessionActive={isSessionBusy(session.id)}
+              onSelect={onSelect}
+              onDelete={onDelete}
+              onRename={onRename}
+            />
+          ))}
+        </Flex>
+      ))}
+    </>
+  )
+}
 
 /**
  * SessionItem Component
@@ -375,9 +454,10 @@ const SessionItem: FC<SessionItemProps> = ({
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       className={`
-        group flex h-10 w-full items-center gap-2 rounded-md
+        group flex min-h-12 w-full items-center gap-2 rounded-md
         border p-2 text-left transition-colors
         outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand
+        sm:min-h-10
         ${isBusy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}
         ${
           isSelected
@@ -418,7 +498,7 @@ const SessionItem: FC<SessionItemProps> = ({
           </Text>
 
           {/* Action icons - shown on hover */}
-          {isHovered && (
+          {(isHovered || isSelected) && (
             <Flex align="center" gap="1" className="shrink-0">
               <Button
                 kind="tertiary"
@@ -427,6 +507,7 @@ const SessionItem: FC<SessionItemProps> = ({
                 disabled={isBusy || isSessionActive}
                 aria-label={isBusy || isSessionActive ? "Rename session (disabled)" : "Rename session"}
                 title={isBusy || isSessionActive ? "Cannot rename while operations are in progress" : "Rename session"}
+                className="min-h-8 min-w-8"
               >
                 <Edit height={16} width={16} />
               </Button>
@@ -435,9 +516,10 @@ const SessionItem: FC<SessionItemProps> = ({
                 size="tiny"
                 color="danger"
                 onClick={handleDeleteClick}
-                disabled={isBusy || isSessionActive}
-                aria-label={isBusy || isSessionActive ? "Delete session (disabled)" : "Delete session"}
-                title={isBusy || isSessionActive ? "Cannot delete while operations are in progress" : "Delete session"}
+                disabled={isBusy}
+                aria-label={isBusy ? "Delete session (disabled)" : "Delete session"}
+                title={isBusy ? "Cannot delete while operations are in progress" : "Delete session"}
+                className="min-h-8 min-w-8"
               >
                 <Trash height={16} width={16} />
               </Button>
@@ -480,6 +562,18 @@ const groupSessionsByDate = (sessions: Session[]): Record<string, Session[]> => 
     groups[label].push(session)
   }
 
+  return groups
+}
+
+const groupSessionsByOwner = (sessions: Session[]): Record<string, Session[]> => {
+  const groups: Record<string, Session[]> = {}
+  for (const session of sessions) {
+    const ownerId = session.userId || 'unknown'
+    if (!groups[ownerId]) {
+      groups[ownerId] = []
+    }
+    groups[ownerId].push(session)
+  }
   return groups
 }
 

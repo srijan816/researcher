@@ -21,7 +21,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 UI_DIR="$PROJECT_ROOT/frontends/ui"
 
 # Default config file
-CONFIG_FILE="configs/config_web_default_llamaindex.yml"
+CONFIG_FILE="configs/config_cli_minimax_ddgs.yml"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -92,9 +92,9 @@ check_env() {
     # Suppress Python warnings unless overridden by .env
     export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore}"
 
-    # For local E2E, backend always runs on localhost:8000
-    export BACKEND_URL="http://localhost:8000"
-    export NEXT_PUBLIC_BACKEND_URL="http://localhost:8000"
+    # For local E2E, backend runs on localhost:9000
+    export BACKEND_URL="http://localhost:9000"
+    export NEXT_PUBLIC_BACKEND_URL="http://localhost:9000"
     echo "Backend URL for e2e: $BACKEND_URL"
 }
 
@@ -148,7 +148,7 @@ start_backend() {
     echo "Config: $CONFIG_FILE"
     echo ""
 
-    nat serve --config_file "$CONFIG_FILE" --host 0.0.0.0 --port 8000 &
+    nat serve --config_file "$CONFIG_FILE" --host 0.0.0.0 --port 9000 &
     BACKEND_PID=$!
     echo "Backend PID: $BACKEND_PID"
 }
@@ -159,8 +159,8 @@ wait_for_backend() {
     local attempt=1
 
     while [ $attempt -le $max_attempts ]; do
-        if curl -s -f http://localhost:8000/health > /dev/null 2>&1 || \
-           curl -s -f http://localhost:8000/docs > /dev/null 2>&1; then
+        if curl -s -f http://localhost:9000/health > /dev/null 2>&1 || \
+           curl -s -f http://localhost:9000/docs > /dev/null 2>&1; then
             echo "Backend is ready!"
             return 0
         fi
@@ -230,7 +230,7 @@ main() {
     echo "Services Started"
     echo "================================================"
     echo ""
-    echo "Backend: http://localhost:8000"
+    echo "Backend: http://localhost:9000"
     if [ "$HAS_UI" = true ]; then
         echo "Frontend: http://localhost:3000"
     else

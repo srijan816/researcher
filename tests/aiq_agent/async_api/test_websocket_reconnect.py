@@ -589,8 +589,8 @@ async def test_handler_run_processes_user_message(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_handler_run_cancels_workflow_on_disconnect(monkeypatch) -> None:
-    """When the socket disconnects, in-flight workflow tasks are cancelled."""
+async def test_handler_run_keeps_workflow_alive_on_disconnect(monkeypatch) -> None:
+    """When the socket disconnects, in-flight workflow tasks stay alive for reconnect."""
     dummy_socket = DummySocket()  # no messages → immediate WebSocketDisconnect
     handler = ReconnectableWebSocketMessageHandler(
         socket=dummy_socket,
@@ -609,9 +609,12 @@ async def test_handler_run_cancels_workflow_on_disconnect(monkeypatch) -> None:
 
     await handler.run()
 
-    # Let the event loop process the cancellation
     await asyncio.sleep(0)
-    assert workflow_task.cancelled()
+    assert not workflow_task.cancelled()
+
+    workflow_task.cancel()
+    await asyncio.gather(workflow_task, return_exceptions=True)
+    await websocket_reconnect._registry.cancel_workflow_task("conv-1")
 
 
 @pytest.mark.asyncio

@@ -78,11 +78,14 @@ RUN uv pip install --no-deps -e . \
     && uv pip install --no-deps -e ./sources/google_scholar_paper_search \
     && uv pip install --no-deps -e ./sources/tavily_web_search \
     && uv pip install --no-deps -e ./sources/exa_web_search \
+    && uv pip install -e ./sources/searxng_jina_web_search \
+    && uv pip install --no-deps -e ./sources/debate_transcript_search \
+    && uv pip install --no-deps -e ./sources/stooq_stock_quote \
     && uv pip install --no-deps -e "./sources/knowledge_layer[all]" \
     && uv pip install --no-deps -e ./frontends/aiq_api \
     && uv pip install "psycopg[binary]>=3.0.0"
 
-RUN /app/.venv/bin/python -c "import aiq_api; import knowledge_layer; print('✓ Base packages installed')"
+RUN /app/.venv/bin/python -c "import aiq_api; import knowledge_layer; import debate_transcript_search; print('✓ Base packages installed')"
 
 RUN chmod +x /app/deploy/start_web.py \
     && mkdir -p /app/data \

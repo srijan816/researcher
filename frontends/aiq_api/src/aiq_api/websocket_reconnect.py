@@ -61,6 +61,7 @@ _require_auth = False
 _external_hostnames: set[str] | None = None
 WS_POLICY_VIOLATION = 1008
 SESSION_COOKIE_NAME = "nat-session"
+HITL_RESPONSE_TIMEOUT_SECONDS = 300
 
 
 def configure_websocket_auth(
@@ -244,11 +245,18 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
                                 "No pending HITL interaction to resume for conversation %s",
                                 validated_message.conversation_id,
                             )
-            except (asyncio.CancelledError, WebSocketDisconnect):
+            except WebSocketDisconnect:
+                await _registry.clear_socket(self._conversation_id, self._socket)
+                logger.info(
+                    "WebSocket disconnected for conversation %s; keeping workflow task alive for reconnect",
+                    self._conversation_id,
+                )
+                break
+            except asyncio.CancelledError:
                 await _registry.clear_socket(self._conversation_id, self._socket)
                 await _registry.cancel_workflow_task(self._conversation_id)
                 self._cancel_running_workflow()
-                break
+                raise
             except ValidationError as exc:
                 logger.warning("Invalid websocket message payload: %s", str(exc))
 
@@ -306,6 +314,7 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
 
             if issubclass(message_schema, WebSocketSystemResponseTokenMessage):
                 message = await self._message_validator.create_system_response_token_message(
+                    message_type=message_type,
                     message_id=message_id,
                     parent_id=self._message_parent_id,
                     conversation_id=self._conversation_id,
@@ -391,7 +400,18 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
             if isinstance(prompt.content, HumanPromptNotification):
                 return HumanResponseNotification()
 
-            text_content: TextContent = await human_response_future
+            try:
+                text_content: TextContent = await asyncio.wait_for(
+                    human_response_future,
+                    timeout=HITL_RESPONSE_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.info(
+                    "HITL response timed out after %ds for conversation %s; proceeding with skip",
+                    HITL_RESPONSE_TIMEOUT_SECONDS,
+                    self._conversation_id,
+                )
+                text_content = TextContent(text="skip")
             interaction_response: HumanResponse = await self._message_validator.convert_text_content_to_human_response(
                 text_content, prompt.content
             )

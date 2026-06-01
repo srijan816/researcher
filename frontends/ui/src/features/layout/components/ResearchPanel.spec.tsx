@@ -39,25 +39,27 @@ let mockDeepResearchJobId: string | null = null
 let mockDeepResearchStreamLoaded = false
 const mockImportJobStream = vi.fn()
 
-const mockCancelCurrentJob = vi.fn()
+const mockCancelDeepResearchJob = vi.fn()
 
 vi.mock('@/features/chat', () => ({
-  useChatStore: (selector: (state: {
-    isDeepResearchStreaming: boolean
-    deepResearchJobId: string | null
-    deepResearchStreamLoaded: boolean
-  }) => unknown) =>
+  useChatStore: (selector: (state: Record<string, unknown>) => unknown) =>
     selector({
       isDeepResearchStreaming: mockIsDeepResearchStreaming,
       deepResearchJobId: mockDeepResearchJobId,
       deepResearchStreamLoaded: mockDeepResearchStreamLoaded,
+      deepResearchStatus: mockIsDeepResearchStreaming ? 'running' : null,
+      deepResearchActivity: null,
+      deepResearchAgents: [],
+      deepResearchToolCalls: [],
+      deepResearchFiles: [],
     }),
   useLoadJobData: () => ({
     importStreamOnly: mockImportJobStream,
     isLoading: false,
   }),
-  useDeepResearch: () => ({
-    cancelCurrentJob: mockCancelCurrentJob,
+  useCancelDeepResearchJob: () => ({
+    cancelDeepResearchJob: mockCancelDeepResearchJob,
+    isCancelling: false,
   }),
 }))
 
@@ -195,6 +197,18 @@ describe('ResearchPanel', () => {
       render(<ResearchPanel isAuthenticated={true} />)
 
       expect(screen.getByTestId('research-panel-stop')).not.toBeDisabled()
+    })
+
+    test('cancels the active job when clicked', async () => {
+      const user = userEvent.setup()
+      mockIsDeepResearchStreaming = true
+      mockDeepResearchJobId = 'job-456'
+
+      render(<ResearchPanel isAuthenticated={true} />)
+
+      await user.click(screen.getByTestId('research-panel-stop'))
+
+      expect(mockCancelDeepResearchJob).toHaveBeenCalledWith('job-456')
     })
   })
 

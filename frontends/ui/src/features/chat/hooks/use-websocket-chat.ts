@@ -157,6 +157,8 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
   const currentThinkingStepIdRef = useRef<string | null>(null)
   // Ref to track the current status for detecting status changes
   const currentStatusRef = useRef<StatusType | null>(null)
+  // Prevent double-submitting the same approval/clarification prompt.
+  const interactionResponseInFlightRef = useRef<string | null>(null)
 
   const { user, authRequired, error: authError } = useAuth()
 
@@ -255,6 +257,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
 
     return {
       onResponse: (content: string, status: string, isFinal: boolean, parentId?: string) => {
+        interactionResponseInFlightRef.current = null
         if (isStaleMessage(parentId)) {
           console.warn('Dropping stale system_response (parent_id mismatch)', { parentId, active: wsClientRef.current?.activeParentId })
           return
@@ -462,6 +465,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       },
 
       onHumanPrompt: (promptId: string, parentId: string, prompt: NATHumanPrompt) => {
+        interactionResponseInFlightRef.current = null
         // Store the pending interaction for the UI to handle
         const inputType = prompt.input_type as PendingInteraction['inputType']
         const interaction: PendingInteraction = {
@@ -491,6 +495,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       },
 
       onError: async (errorContent: NATErrorContent) => {
+        interactionResponseInFlightRef.current = null
         // Connection errors (all retries exhausted) -- gate with health check
         if (errorContent.code === 'CONNECTION_FAILED') {
           const backendUp = await checkBackendHealthCached()
@@ -557,6 +562,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           }
 
           // Reset streaming/loading state if connection dropped mid-request
+          interactionResponseInFlightRef.current = null
           setStreaming(false)
           setLoading(false)
           clearPendingInteraction()
@@ -622,7 +628,9 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
 
       // Collect metadata about data sources and files before adding user message
       const layoutState = useLayoutStore.getState()
-      const enabledDataSources = layoutState.enabledDataSourceIds
+      const enabledDataSources =
+        layoutState.enabledDataSourceIds.length > 0 ? layoutState.enabledDataSourceIds : ['web_search']
+      const researchDepth = layoutState.researchDepth
 
       // Get session files
       const sessionId = useChatStore.getState().currentConversation?.id
@@ -673,7 +681,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       // Helper to actually send the message
       const doSend = () => {
         if (wsClientRef.current?.isConnected()) {
-          wsClientRef.current.sendMessage(content, dataSourcesForMessage)
+          wsClientRef.current.sendMessage(content, dataSourcesForMessage, researchDepth)
           setLoading(false)
         } else {
           addErrorCard('connection.failed', 'WebSocket connection failed')
@@ -728,12 +736,39 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
    */
   const respondToInteraction = useCallback(
     (response: string) => {
-      if (!pendingInteraction) {
+      const activeInteraction = useChatStore.getState().pendingInteraction ?? pendingInteraction
+      if (!activeInteraction) {
         console.warn('No pending interaction to respond to')
         return
       }
 
-      // Update prompt in store
+      if (interactionResponseInFlightRef.current === activeInteraction.id) {
+        return
+      }
+
+      if (!wsClientRef.current?.isConnected()) {
+        addErrorCard('connection.failed', 'WebSocket not connected')
+        return
+      }
+
+      interactionResponseInFlightRef.current = activeInteraction.id
+
+      try {
+        wsClientRef.current.sendInteractionResponse(
+          activeInteraction.id,
+          activeInteraction.parentId,
+          response
+        )
+      } catch (error) {
+        interactionResponseInFlightRef.current = null
+        addErrorCard(
+          'connection.failed',
+          error instanceof Error ? error.message : 'Unable to send response'
+        )
+        return
+      }
+
+      // Update prompt in store after the response is accepted by the socket.
       // Find the last prompt message and mark it as responded
       const messages = currentConversation?.messages ?? []
       const lastPrompt = [...messages]
@@ -752,19 +787,9 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         }
       }
 
-      // Send response via WebSocket
-      if (wsClientRef.current?.isConnected()) {
-        wsClientRef.current.sendInteractionResponse(
-          pendingInteraction.id,
-          pendingInteraction.parentId,
-          response
-        )
-        // Resume streaming
-        setStreaming(true)
-        setLoading(true)
-      } else {
-        addErrorCard('connection.failed', 'WebSocket not connected')
-      }
+      // Resume streaming
+      setStreaming(true)
+      setLoading(true)
     },
     [
       pendingInteraction,

@@ -40,12 +40,28 @@ services:
     environment:
       - APP_ENV=${APP_ENV:-production}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - REQUIRE_AUTH=${REQUIRE_AUTH:-false}
+      - AIQ_LOCAL_AUTH_ENABLED=${AIQ_LOCAL_AUTH_ENABLED:-false}
+      - AIQ_AUTH_TOKEN_SECRET=${AIQ_AUTH_TOKEN_SECRET:-}
+      - AIQ_AUTH_DB_URL=${AIQ_AUTH_DB_URL:-}
+      - AIQ_LOCAL_USERS=${AIQ_LOCAL_USERS:-}
+      - AIQ_LOCAL_ADMIN_USERS=${AIQ_LOCAL_ADMIN_USERS:-}
+      - AIQ_AUTH_TOKEN_TTL_SECONDS=${AIQ_AUTH_TOKEN_TTL_SECONDS:-}
+      - AIQ_API_KEYS=${AIQ_API_KEYS:-}
+      - AIQ_API_KEY_DB_URL=${AIQ_API_KEY_DB_URL:-}
       # Database config (with Docker defaults)
       - NAT_JOB_STORE_DB_URL=${NAT_JOB_STORE_DB_URL:-postgresql+asyncpg://aiq:aiq_dev@postgres:5432/aiq_jobs}
       - AIQ_CHECKPOINT_DB=${AIQ_CHECKPOINT_DB:-postgresql://aiq:aiq_dev@postgres:5432/aiq_checkpoints}
       - AIQ_SUMMARY_DB=${AIQ_SUMMARY_DB:-postgresql+psycopg://aiq:aiq_dev@postgres:5432/aiq_jobs}
       # LlamaIndex persistence (used by config_web_default_llamaindex.yml)
       - AIQ_CHROMA_DIR=${AIQ_CHROMA_DIR:-/app/data/chroma_data}
+      # Self-hosted metasearch used by config_cli_minimax_ddgs.yml
+      - SEARXNG_URL=${SEARXNG_URL:-http://searxng:8080}
+      # NotebookLM source harvesting. Keep auth state on the persistent writable data volume.
+      - NOTEBOOKLM_HOME=${NOTEBOOKLM_HOME:-/app/data/notebooklm}
+      - NOTEBOOKLM_HARVEST_WORK_DIR=${NOTEBOOKLM_HARVEST_WORK_DIR:-/tmp/aiq-notebooklm-harvest}
+      - NOTEBOOKLM_PYTHON=${NOTEBOOKLM_PYTHON:-python}
+      - SHALLOW_NOTEBOOKLM_PARALLEL_WAIT_SECONDS=${SHALLOW_NOTEBOOKLM_PARALLEL_WAIT_SECONDS:-7200}
       # Server config
       # LlamaIndex (default)
       - CONFIG_FILE=${BACKEND_CONFIG:-/app/configs/config_web_default_llamaindex.yml}
@@ -73,6 +89,27 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      searxng:
+        condition: service_healthy
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: aiq-searxng
+    environment:
+      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL:-http://localhost:8080/}
+    ports:
+      - "${SEARXNG_PORT:-8080}:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+      - searxng-cache:/var/cache/searxng
+    networks:
+      - aiq-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://localhost:8080/search?q=health&format=json' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
 
   frontend:
@@ -83,7 +120,11 @@ services:
     container_name: aiq-blueprint-ui
     environment:
       - REQUIRE_AUTH=${REQUIRE_AUTH:-false}
+      - AIQ_LOCAL_AUTH_ENABLED=${AIQ_LOCAL_AUTH_ENABLED:-false}
       - BACKEND_URL=${BACKEND_URL:-http://aiq-agent:8000}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-}
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
+      - SECURE_COOKIES=${SECURE_COOKIES:-}
       - FILE_UPLOAD_ACCEPTED_TYPES=${FILE_UPLOAD_ACCEPTED_TYPES:-.pdf,.docx,.txt,.md}
       - FILE_UPLOAD_MAX_SIZE_MB=${FILE_UPLOAD_MAX_SIZE_MB:-}
       - FILE_UPLOAD_MAX_FILE_COUNT=${FILE_UPLOAD_MAX_FILE_COUNT:-}
@@ -139,6 +180,8 @@ volumes:
   aiq-data:
     driver: local
   postgres-data:
+    driver: local
+  searxng-cache:
     driver: local
 
 networks:

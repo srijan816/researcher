@@ -10,7 +10,7 @@
  */
 
 import { trackAuthEvent } from '@/shared/utils/rum'
-import { getWebSocketUrl } from './config'
+import { apiConfig, getWebSocketUrl } from './config'
 import {
   // NAT protocol types
   type NATIncomingMessage,
@@ -26,6 +26,7 @@ import {
 } from './schemas'
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
+type ResearchDepth = 'shallow' | 'deeper' | 'deep'
 
 /** Context passed with connection status changes */
 export interface ConnectionChangeContext {
@@ -132,12 +133,18 @@ export class NATWebSocketClient {
    * Send a user chat message
    * @param content - The message text content (query)
    * @param enabledDataSources - Optional array of enabled data source IDs to include in the query
+   * @param researchDepth - Optional source/depth tier for deep research
    */
-  sendMessage = (content: string, enabledDataSources?: string[]): void => {
+  sendMessage = (content: string, enabledDataSources?: string[], researchDepth: ResearchDepth = 'deeper'): void => {
+    const forceDeepResearch = apiConfig.forceDeepResearch || researchDepth === 'deeper' || researchDepth === 'deep'
+    const dataSources = enabledDataSources && enabledDataSources.length > 0 ? enabledDataSources : ['web_search']
+
     // Format the text content as JSON with query and data_sources
     const textContent = JSON.stringify({
       query: content,
-      data_sources: enabledDataSources ?? [],
+      data_sources: dataSources,
+      research_depth: researchDepth,
+      force_deep_research: forceDeepResearch,
     })
 
     const messageId = this.generateMessageId()

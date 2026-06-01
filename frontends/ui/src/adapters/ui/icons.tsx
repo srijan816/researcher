@@ -112,6 +112,10 @@ export const Download = createIcon('download')
 export const Upload = createIcon('upload')
 export const Share = createIcon('share')
 export const Refresh = createIcon('refresh')
+export const Play = createIcon('play')
+export const Pause = createIcon('pause')
+export const Stop = createIcon('stop')
+export const Volume = createIcon('speaker')
 
 // ---------------------------------------------------------------------------
 // Communication icons
@@ -210,7 +214,7 @@ export const Generate: FC<IconProps> = ({ className }) => {
       data-src={`${CDN_BASE}/line/generate.svg`}
       width="24"
       height="24"
-      fill="#76B900"
+      fill="#20808d"
       className={`nv-icon-green ${className ?? ''}`}
       aria-hidden="true"
     />

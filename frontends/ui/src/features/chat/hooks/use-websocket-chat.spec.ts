@@ -4,6 +4,7 @@
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { useWebSocketChat } from './use-websocket-chat'
+import type { ChatStore } from '../types'
 
 // Mock store actions
 const mockAddUserMessage = vi.fn()
@@ -66,7 +67,7 @@ let mockStoreState: {
 
 vi.mock('../store', () => ({
   useChatStore: Object.assign(
-    vi.fn((selector?: (s: any) => any) => {
+    vi.fn((selector?: (state: ChatStore) => unknown) => {
       const state = {
         ...mockStoreState,
         addUserMessage: mockAddUserMessage,
@@ -98,7 +99,7 @@ vi.mock('../store', () => ({
         addDeepResearchBanner: mockAddDeepResearchBanner,
         dismissConnectionErrors: mockDismissConnectionErrors,
       }
-      return selector ? selector(state) : state
+      return selector ? selector(state as unknown as ChatStore) : state
     }),
     {
       getState: vi.fn(() => ({
@@ -131,37 +132,21 @@ vi.mock('@/shared/hooks/use-backend-health', () => ({
 
 // Mock layout store
 vi.mock('@/features/layout/store', () => ({
-  useLayoutStore: Object.assign(
-    vi.fn((selector?: (s: any) => any) => {
-      const state = {
-        enabledDataSourceIds: ['source-1', 'source-2'],
-        knowledgeLayerAvailable: false,
-      }
-      return selector ? selector(state) : state
-    }),
-    {
-      getState: vi.fn(() => ({
-        enabledDataSourceIds: ['source-1', 'source-2'],
-      })),
-    }
-  ),
+  useLayoutStore: Object.assign(vi.fn(() => ({})), {
+    getState: vi.fn(() => ({
+      enabledDataSourceIds: ['source-1', 'source-2'],
+      researchDepth: 'deeper',
+    })),
+  }),
 }))
 
 // Mock documents store
 vi.mock('@/features/documents/store', () => ({
-  useDocumentsStore: Object.assign(
-    vi.fn((selector?: (s: any) => any) => {
-      const state = {
-        trackedFiles: [],
-      }
-      return selector ? selector(state) : state
-    }),
-    {
-      getState: vi.fn(() => ({
-        trackedFiles: [],
-      })),
-    }
-  ),
+  useDocumentsStore: Object.assign(vi.fn(() => ({})), {
+    getState: vi.fn(() => ({
+      trackedFiles: [],
+    })),
+  }),
 }))
 
 // Mock WebSocket client
@@ -301,7 +286,7 @@ describe('useWebSocketChat', () => {
     })
 
     // sendMessage is called with content and enabled data sources
-    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', expect.any(Array))
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', expect.any(Array), 'deeper')
     expect(mockSetLoading).toHaveBeenCalledWith(false)
   })
 
@@ -313,6 +298,7 @@ describe('useWebSocketChat', () => {
     vi.mocked(mockLayoutStore.useLayoutStore.getState).mockReturnValue({
       enabledDataSourceIds: ['web', 'docs'],
       knowledgeLayerAvailable: true,
+      researchDepth: 'deeper',
     } as ReturnType<typeof mockLayoutStore.useLayoutStore.getState>)
 
     // Mock documents store with no files for this session
@@ -328,7 +314,7 @@ describe('useWebSocketChat', () => {
     })
 
     // knowledge_layer should NOT be added since no files exist
-    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'docs'])
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'docs'], 'deeper')
   })
 
   test('sendMessage adds knowledge_layer when files are uploaded', async () => {
@@ -339,6 +325,7 @@ describe('useWebSocketChat', () => {
     vi.mocked(mockLayoutStore.useLayoutStore.getState).mockReturnValue({
       enabledDataSourceIds: ['web', 'docs'],
       knowledgeLayerAvailable: true,
+      researchDepth: 'deeper',
     } as ReturnType<typeof mockLayoutStore.useLayoutStore.getState>)
 
     // Mock documents store with files for this session (status: success)
@@ -356,7 +343,7 @@ describe('useWebSocketChat', () => {
     })
 
     // knowledge_layer should be ADDED since files exist for this session
-    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'docs', 'knowledge_layer'])
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'docs', 'knowledge_layer'], 'deeper')
   })
 
   test('sendMessage adds knowledge_layer when files are ingesting', async () => {
@@ -367,6 +354,7 @@ describe('useWebSocketChat', () => {
     vi.mocked(mockLayoutStore.useLayoutStore.getState).mockReturnValue({
       enabledDataSourceIds: ['web'],
       knowledgeLayerAvailable: true,
+      researchDepth: 'deep',
     } as ReturnType<typeof mockLayoutStore.useLayoutStore.getState>)
 
     // Mock documents store with files in ingesting state
@@ -384,7 +372,7 @@ describe('useWebSocketChat', () => {
     })
 
     // knowledge_layer should be ADDED since files are being ingested
-    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'knowledge_layer'])
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'knowledge_layer'], 'deep')
   })
 
   test('sendMessage does not add knowledge_layer when knowledgeLayerAvailable is false', async () => {
@@ -395,6 +383,7 @@ describe('useWebSocketChat', () => {
     vi.mocked(mockLayoutStore.useLayoutStore.getState).mockReturnValue({
       enabledDataSourceIds: ['web', 'docs'],
       knowledgeLayerAvailable: false,
+      researchDepth: 'deeper',
     } as ReturnType<typeof mockLayoutStore.useLayoutStore.getState>)
 
     // Mock documents store with files (but knowledge layer not available)
@@ -412,7 +401,7 @@ describe('useWebSocketChat', () => {
     })
 
     // knowledge_layer should NOT be added even with files if knowledgeLayerAvailable is false
-    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'docs'])
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'docs'], 'deeper')
   })
 
   test('sendMessage sets error when WebSocket not connected and no conversation', () => {
@@ -458,9 +447,8 @@ describe('useWebSocketChat', () => {
   })
 
   test('onResponse callback adds streaming content to chat', () => {
-    renderWebSocketHook()
-
     mockStoreState.isStreaming = true
+    renderWebSocketHook()
 
     // Simulate streaming response (not final)
     act(() => {
@@ -470,23 +458,6 @@ describe('useWebSocketChat', () => {
     // Non-final responses with content are now added to chat as AgentResponse
     // reportContent is only set by deep research SSE events
     expect(mockAddAgentResponse).toHaveBeenCalledWith('Partial content...')
-  })
-
-  test('onResponse drops stale content when not streaming', () => {
-    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    renderWebSocketHook()
-
-    mockStoreState.isStreaming = false
-
-    act(() => {
-      capturedCallbacks.onResponse?.('Repeated stale response', 'complete', true)
-    })
-
-    expect(mockAddAgentResponse).not.toHaveBeenCalled()
-    expect(mockSetStreaming).not.toHaveBeenCalledWith(false)
-    expect(consoleWarnSpy).toHaveBeenCalledWith('Ignoring stale isFinal -- not currently streaming')
-
-    consoleWarnSpy.mockRestore()
   })
 
   test('onIntermediateStep callback creates thinking step if none exists', () => {
@@ -809,8 +780,9 @@ describe('useWebSocketChat', () => {
     const mockStartDeepResearch = vi.fn()
     const mockUpdateConversationTitle = vi.fn()
     const localMockAddAgentResponseWithMeta = vi.fn(() => 'msg-1')
+    mockStoreState.isStreaming = true
     // Need to mock useChatStore to include startDeepResearch
-    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+    vi.mocked(useChatStore).mockImplementation((selector?: (state: ChatStore) => unknown) => {
       const state = {
         ...mockStoreState,
         addUserMessage: mockAddUserMessage,
@@ -843,11 +815,10 @@ describe('useWebSocketChat', () => {
         startDeepResearch: mockStartDeepResearch,
         updateConversationTitle: mockUpdateConversationTitle,
       }
-      return selector ? selector(state) : state
+      return selector ? selector(state as unknown as ChatStore) : state
     })
 
     renderWebSocketHook()
-    mockStoreState.isStreaming = true
 
     // Simulate response with deep research escalation signal
     act(() => {

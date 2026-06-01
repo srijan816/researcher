@@ -109,4 +109,16 @@ describe('AgentPrompt', () => {
 
     expect(screen.getByText(/\d{1,2}:\d{2}/)).toBeInTheDocument()
   })
+
+  test('shows copy prompt action', () => {
+    render(
+      <AgentPrompt
+        id="prompt-1"
+        type="plan_approval"
+        content="Research Plan Preview"
+      />
+    )
+
+    expect(screen.getByRole('button', { name: 'Copy prompt' })).toBeInTheDocument()
+  })
 })

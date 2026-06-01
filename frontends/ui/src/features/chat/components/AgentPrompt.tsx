@@ -13,10 +13,10 @@
 
 'use client'
 
-import { type FC, useCallback } from 'react'
+import { type FC, useCallback, useEffect, useRef, useState } from 'react'
 import { Flex, Text, Button } from '@/adapters/ui'
 import { formatTime } from '@/shared/utils/format-time'
-import { Chat } from '@/adapters/ui/icons'
+import { Chat, Copy } from '@/adapters/ui/icons'
 import { MarkdownRenderer } from '@/shared/components/MarkdownRenderer'
 import { useChatStore } from '../store'
 import type { PromptType } from '../types'
@@ -25,6 +25,22 @@ export type { PromptType }
 
 const APPROVAL_PROMPT_RE =
   /Reply\s+\*{0,2}approve\*{0,2}\s+to proceed,\s+\*{0,2}reject\*{0,2}\s+to cancel/i
+
+const copyText = async (value: string): Promise<void> => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
+}
 
 export interface AgentPromptProps {
   /** Unique identifier for this prompt */
@@ -55,6 +71,7 @@ export interface AgentPromptProps {
  * are rendered inline so the user can respond with a single click.
  */
 export const AgentPrompt: FC<AgentPromptProps> = ({
+  id,
   type: _type,
   content,
   options = [],
@@ -63,16 +80,37 @@ export const AgentPrompt: FC<AgentPromptProps> = ({
   timestamp,
 }) => {
   const respondToInteractionFn = useChatStore((state) => state.respondToInteractionFn)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isCopied, setIsCopied] = useState(false)
+  const submittedRef = useRef(false)
   const isApprovalPrompt = APPROVAL_PROMPT_RE.test(content)
   const showApprovalButtons = isApprovalPrompt && !isResponded && !!respondToInteractionFn
 
+  useEffect(() => {
+    submittedRef.current = false
+    setIsSubmitting(false)
+  }, [id, isResponded])
+
   const handleApprove = useCallback(() => {
+    if (submittedRef.current) return
+    submittedRef.current = true
+    setIsSubmitting(true)
     respondToInteractionFn?.('approve')
   }, [respondToInteractionFn])
 
   const handleReject = useCallback(() => {
+    if (submittedRef.current) return
+    submittedRef.current = true
+    setIsSubmitting(true)
     respondToInteractionFn?.('reject')
   }, [respondToInteractionFn])
+
+  const handleCopyPrompt = useCallback(async () => {
+    if (!content.trim()) return
+    await copyText(content)
+    setIsCopied(true)
+    window.setTimeout(() => setIsCopied(false), 1400)
+  }, [content])
 
   return (
     <Flex justify="start" className="w-full">
@@ -106,6 +144,7 @@ export const AgentPrompt: FC<AgentPromptProps> = ({
                 size="small"
                 color="danger"
                 onClick={handleReject}
+                disabled={isSubmitting}
                 aria-label="Reject plan"
               >
                 Reject
@@ -114,9 +153,25 @@ export const AgentPrompt: FC<AgentPromptProps> = ({
                 kind="secondary"
                 size="small"
                 onClick={handleApprove}
-                aria-label="Approve plan"
+                disabled={isSubmitting}
+                aria-label={isSubmitting ? 'Approving plan' : 'Approve plan'}
               >
-                Approve
+                {isSubmitting ? 'Approving...' : 'Approve'}
+              </Button>
+            </Flex>
+          )}
+
+          {content.trim() && (
+            <Flex justify="end">
+              <Button
+                type="button"
+                kind="tertiary"
+                size="tiny"
+                onClick={handleCopyPrompt}
+                aria-label={isCopied ? 'Prompt copied' : 'Copy prompt'}
+                title={isCopied ? 'Copied' : 'Copy prompt'}
+              >
+                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
             </Flex>
           )}

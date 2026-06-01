@@ -353,28 +353,24 @@ describe('SessionsPanel - New Session Button', () => {
     })
   })
 
-  test('disables new session button when shallow streaming is active', () => {
+  test('enables new session button when shallow streaming is active', () => {
     setupChatStoreMock({ isStreaming: true })
 
     render(<SessionsPanel sessions={mockSessions} />)
 
-    const newSessionBtn = screen.getByRole('button', {
-      name: /start new session \(disabled during active operations\)/i,
-    })
-    expect(newSessionBtn).toBeDisabled()
+    const newSessionBtn = screen.getByRole('button', { name: /^start new session$/i })
+    expect(newSessionBtn).not.toBeDisabled()
   })
 
-  test('disables new session button when HITL interaction is pending', () => {
+  test('enables new session button when HITL interaction is pending', () => {
     setupChatStoreMock({
       pendingInteraction: { id: 'p1', type: 'approval', content: 'Approve?' },
     })
 
     render(<SessionsPanel sessions={mockSessions} />)
 
-    const newSessionBtn = screen.getByRole('button', {
-      name: /start new session \(disabled during active operations\)/i,
-    })
-    expect(newSessionBtn).toBeDisabled()
+    const newSessionBtn = screen.getByRole('button', { name: /^start new session$/i })
+    expect(newSessionBtn).not.toBeDisabled()
   })
 
   test('enables new session button during active deep research (server-side)', () => {
@@ -420,7 +416,7 @@ describe('SessionsPanel - Delete Button States', () => {
     })
   })
 
-  test('disables individual delete button when session has active deep research', async () => {
+  test('enables individual delete button when session only has active deep research', async () => {
     // Session-1 has active deep research (per-session busy)
     setupChatStoreMock({
       isSessionBusy: (sessionId: string) => sessionId === 'session-1',
@@ -436,9 +432,8 @@ describe('SessionsPanel - Delete Button States', () => {
     const firstSession = screen.getByRole('button', { name: /session: first session/i })
     await user.hover(firstSession)
 
-    // Delete button for session with active deep research should be disabled
-    const deleteButton = screen.getByRole('button', { name: /delete session \(disabled\)/i })
-    expect(deleteButton).toBeDisabled()
+    const deleteButton = screen.getByRole('button', { name: /^delete session$/i })
+    expect(deleteButton).not.toBeDisabled()
   })
 
   test('disables individual delete button when shallow streaming is active (global block)', async () => {
@@ -479,7 +474,7 @@ describe('SessionsPanel - Delete Button States', () => {
     expect(deleteButton).not.toBeDisabled()
   })
 
-  test('disables "Delete All" button when any session is busy', () => {
+  test('enables "Delete All" button when only deep research sessions are busy', () => {
     setupChatStoreMock({
       isSessionBusy: () => false,
       hasAnyBusySession: () => true,
@@ -489,8 +484,8 @@ describe('SessionsPanel - Delete Button States', () => {
 
     render(<SessionsPanel sessions={mockSessions} />)
 
-    const deleteAllButton = screen.getByRole('button', { name: /delete all sessions \(disabled\)/i })
-    expect(deleteAllButton).toBeDisabled()
+    const deleteAllButton = screen.getByRole('button', { name: /^delete all sessions$/i })
+    expect(deleteAllButton).not.toBeDisabled()
   })
 
   test('enables "Delete All" button when no sessions are busy', () => {
@@ -507,7 +502,7 @@ describe('SessionsPanel - Delete Button States', () => {
     expect(deleteAllButton).not.toBeDisabled()
   })
 
-  test('has appropriate title attribute on disabled delete button for active session', async () => {
+  test('has normal title attribute on delete button for active deep research session', async () => {
     setupChatStoreMock({
       isSessionBusy: (sessionId: string) => sessionId === 'session-1',
       hasAnyBusySession: () => true,
@@ -522,8 +517,7 @@ describe('SessionsPanel - Delete Button States', () => {
     const firstSession = screen.getByRole('button', { name: /session: first session/i })
     await user.hover(firstSession)
 
-    // Check that delete button has appropriate title attribute
-    const deleteButton = screen.getByRole('button', { name: /delete session \(disabled\)/i })
-    expect(deleteButton).toHaveAttribute('title', 'Cannot delete while operations are in progress')
+    const deleteButton = screen.getByRole('button', { name: /^delete session$/i })
+    expect(deleteButton).toHaveAttribute('title', 'Delete session')
   })
 })

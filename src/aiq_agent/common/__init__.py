@@ -43,6 +43,14 @@ from .citation_verification import reset_session_registry
 from .citation_verification import sanitize_report
 from .citation_verification import set_session_registry
 from .citation_verification import verify_citations
+from .claim_table import AtomicClaim
+from .claim_table import ClaimEvidence
+from .claim_table import ClaimProfile
+from .claim_table import ClaimResolution
+from .claim_table import ClaimTable
+from .claim_table import merge_claim_tables_json
+from .claim_table import summarize_claim_table
+from .claim_table import validate_claim_table_json
 from .data_source_registry import get_all_tool_refs
 from .data_source_registry import get_source_id_for_tool
 from .data_sources import DEFAULT_DATA_SOURCES
@@ -50,12 +58,29 @@ from .data_sources import extract_messages_and_sources
 from .data_sources import filter_tools_by_sources
 from .data_sources import format_data_source_tools
 from .data_sources import parse_data_sources
+from .evidence_packet import EvidenceExtract
+from .evidence_packet import EvidencePacket
+from .evidence_packet import EvidencePacketSource
+from .evidence_packet import build_evidence_packet
 from .json_utils import extract_json
+from .llm_json import parse_with_repair
 from .llm_provider import LLMProvider
 from .llm_provider import LLMRole
 from .message_utils import get_latest_user_query
 from .prompt_utils import load_prompt
 from .prompt_utils import render_prompt_template
+from .report_quality import evaluate_report_source_quality
+from .report_quality import is_model_failure_report
+from .report_quality import report_matches_request_scope
+from .research_depth import DEFAULT_RESEARCH_DEPTH
+from .research_depth import RESEARCH_DEPTH_CONFIGS
+from .research_depth import ResearchDepthConfig
+from .research_depth import ResearchDepthTier
+from .research_depth import get_research_depth_config
+from .research_depth import normalize_research_depth
+from .source_quality_gates import SourceQualityReport
+from .source_quality_gates import evaluate_source_quality
+from .time_context import current_datetime_context
 from .tool_validation import format_tool_unavailability_error
 from .tool_validation import format_user_facing_tool_error
 from .tool_validation import validate_tool_availability
@@ -68,10 +93,27 @@ _postgres_pools: dict[str, AsyncConnectionPool] = {}
 
 __all__ = [
     "DEFAULT_DATA_SOURCES",
+    "DEFAULT_RESEARCH_DEPTH",
     "LLMProvider",
     "LLMRole",
+    "RESEARCH_DEPTH_CONFIGS",
+    "ClaimResolution",
+    "AtomicClaim",
+    "ClaimEvidence",
+    "ClaimProfile",
+    "ClaimTable",
+    "ResearchDepthConfig",
+    "ResearchDepthTier",
     "SourceRegistry",
+    "SourceQualityReport",
     "VerboseTraceCallback",
+    "EvidenceExtract",
+    "EvidencePacket",
+    "EvidencePacketSource",
+    "build_evidence_packet",
+    "current_datetime_context",
+    "evaluate_report_source_quality",
+    "evaluate_source_quality",
     "extract_json",
     "extract_messages_and_sources",
     "filter_tools_by_sources",
@@ -81,18 +123,26 @@ __all__ = [
     "get_all_tool_refs",
     "get_checkpointer",
     "get_or_create_session_registry",
+    "get_research_depth_config",
     "get_source_id_for_tool",
     "get_session_registry",
     "get_latest_user_query",
     "is_postgres_dsn",
+    "is_model_failure_report",
     "load_prompt",
+    "merge_claim_tables_json",
+    "normalize_research_depth",
     "parse_data_sources",
+    "parse_with_repair",
     "register_source_parser",
     "render_prompt_template",
     "reset_session_registry",
     "sanitize_report",
+    "report_matches_request_scope",
     "set_session_registry",
+    "summarize_claim_table",
     "validate_tool_availability",
+    "validate_claim_table_json",
     "verify_citations",
 ]
 

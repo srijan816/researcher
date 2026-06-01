@@ -23,6 +23,8 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 from pydantic import Field
 
+from aiq_agent.common import DEFAULT_RESEARCH_DEPTH
+from aiq_agent.common import ResearchDepthTier
 from aiq_agent.knowledge import AvailableDocument
 
 
@@ -47,6 +49,7 @@ class DeepResearchAgentState(BaseModel):
     Attributes:
         messages: Conversation history with LangGraph message reducer.
         data_sources: List of data sources selected by the user.
+        research_depth: User-selected source/depth tier for deep research.
         user_info: Optional user information.
         tools_info: Information about available tools.
         todos: Todo list managed by TodoListMiddleware.
@@ -59,6 +62,7 @@ class DeepResearchAgentState(BaseModel):
 
     messages: Annotated[list[AnyMessage], add_messages]
     data_sources: list[str] | None = None
+    research_depth: ResearchDepthTier = DEFAULT_RESEARCH_DEPTH
     user_info: dict[str, Any] | None = None
     tools_info: list[dict[str, Any]] | None = None
     todos: list[dict[str, Any]] = Field(default_factory=list)

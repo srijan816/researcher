@@ -101,6 +101,7 @@ class Principal(BaseModel):
     sub: str
     email: str | None = None
     name: str | None = None
+    role: str | None = None
 
 
 def decode_unverified_jwt_payload(token: str) -> dict:
@@ -230,6 +231,7 @@ def get_current_principal() -> Principal | None:
         sub=str(sub),
         email=current_user.get("email"),
         name=current_user.get("name"),
+        role=current_user.get("role"),
     )
 
 

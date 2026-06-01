@@ -26,6 +26,7 @@
  */
 
 import type { AuthProviderConfig } from './types'
+import { LocalUsersProvider, refreshLocalUserToken } from './local-users'
 
 export type { AuthProviderConfig, TokenRefreshResult, SignInHookParams, SessionHookParams } from './types'
 
@@ -33,10 +34,25 @@ export type { AuthProviderConfig, TokenRefreshResult, SignInHookParams, SessionH
  * Returns the active auth provider configuration.
  * Default: null provider (authentication disabled).
  */
-export const getAuthProviderConfig = (): AuthProviderConfig => ({
-  provider: null,
-  providerId: 'disabled-auth',
-  refreshToken: async () => {
-    throw new Error('No auth provider configured')
-  },
-})
+export const getAuthProviderConfig = (): AuthProviderConfig => {
+  const localPasswordAuthEnabled =
+    process.env.AIQ_LOCAL_AUTH_ENABLED === 'true' ||
+    process.env.LOCAL_PASSWORD_AUTH === 'true' // pragma: allowlist secret
+
+  return {
+    ...(localPasswordAuthEnabled
+      ? {
+          provider: LocalUsersProvider,
+          providerId: 'local-users',
+          refreshToken: refreshLocalUserToken,
+          requiredEnvVars: ['BACKEND_URL'],
+        }
+      : {
+          provider: null,
+          providerId: 'disabled-auth',
+          refreshToken: async () => {
+            throw new Error('No auth provider configured')
+          },
+        }),
+  }
+}

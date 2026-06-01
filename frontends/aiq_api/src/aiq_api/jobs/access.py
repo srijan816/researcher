@@ -173,6 +173,8 @@ async def authorize_job_access(job_store: Any, db_url: str, job_id: str, princip
 
 
 def _principal_matches_access(principal: Principal, access: Mapping[str, Any]) -> bool:
+    if principal.role == "admin":
+        return True
     return principal.type == access.get("owner_auth_type") and principal.sub == access.get("owner_subject")
 
 

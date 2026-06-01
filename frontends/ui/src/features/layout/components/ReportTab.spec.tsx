@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { render, screen } from '@/test-utils'
-import { vi, describe, test, expect } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@/test-utils'
+import { vi, describe, test, expect, afterEach } from 'vitest'
 import { ReportTab } from './ReportTab'
 
 // Mock the chat store
@@ -10,6 +10,7 @@ vi.mock('@/features/chat', () => ({
   useChatStore: vi.fn((selector?: (s: any) => any) => {
     const state = {
       reportContent: '',
+      reportContentCategory: null,
       isStreaming: false,
       currentStatus: null,
     }
@@ -35,6 +36,10 @@ vi.mock('./ExportFooter', () => ({
 import { useChatStore } from '@/features/chat'
 
 describe('ReportTab', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   test('displays empty state when no report content', () => {
     render(<ReportTab />)
 
@@ -47,6 +52,7 @@ describe('ReportTab', () => {
     vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
       const state = {
         reportContent: '# Report Title\n\nReport content here',
+        reportContentCategory: 'final_report',
         isStreaming: false,
         currentStatus: null,
       }
@@ -62,6 +68,7 @@ describe('ReportTab', () => {
     vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
       const state = {
         reportContent: 'Some content',
+        reportContentCategory: 'final_report',
         isStreaming: false,
         currentStatus: null,
       }
@@ -77,6 +84,7 @@ describe('ReportTab', () => {
     vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
       const state = {
         reportContent: 'Partial content...',
+        reportContentCategory: 'final_report',
         isStreaming: true,
         currentStatus: 'writing',
       }
@@ -105,5 +113,43 @@ describe('ReportTab', () => {
     render(<ReportTab />)
 
     expect(screen.getByTestId('export-footer')).toBeInTheDocument()
+  })
+
+  test('prepares Kokoro narration in the native audio element', async () => {
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        reportContent: '# Report Title\n\nReport content here',
+        reportContentCategory: 'final_report',
+        isStreaming: false,
+        currentStatus: null,
+      }
+      return selector ? selector(state) : state
+    })
+    const play = vi.fn().mockResolvedValue(undefined)
+    vi.spyOn(window.HTMLMediaElement.prototype, 'play').mockImplementation(play)
+    vi.spyOn(window.HTMLMediaElement.prototype, 'pause').mockImplementation(vi.fn())
+    vi.spyOn(window.HTMLMediaElement.prototype, 'load').mockImplementation(vi.fn())
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Blob(['audio']), { status: 200 })))
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: vi.fn(() => 'blob:test-audio'),
+      revokeObjectURL: vi.fn(),
+    })
+
+    render(<ReportTab />)
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Kokoro narration audio')).toHaveAttribute('src', 'blob:test-audio')
+    )
+    fireEvent.click(screen.getByLabelText('Prepare or play narration'))
+    await waitFor(() => expect(play).toHaveBeenCalled())
+    expect(screen.getByRole('button', { name: 'Play Part 1/1' })).toBeInTheDocument()
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/tts/kokoro',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"voice":"onyx"'),
+      })
+    )
   })
 })

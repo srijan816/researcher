@@ -6,6 +6,7 @@ import { useChatStore } from './store'
 import type { Conversation, PendingInteraction, FileCardData } from './types'
 
 const STORAGE_KEY = 'aiq-chat-store'
+const DELETED_RESEARCH_JOBS_KEY = 'deep-research-deleted-job-ids'
 const mockLayoutState = vi.hoisted(() => ({
   closeRightPanel: vi.fn(),
   enabledDataSourceIds: ['web_search'],
@@ -58,6 +59,7 @@ describe('useChatStore', () => {
   afterEach(() => {
     // Clean up localStorage after each test
     localStorage.removeItem(STORAGE_KEY)
+    localStorage.removeItem(DELETED_RESEARCH_JOBS_KEY)
   })
 
   describe('initial state', () => {
@@ -887,6 +889,47 @@ describe('useChatStore', () => {
     })
   })
 
+  describe('research history sync', () => {
+    test('restores an active backend job even if its old local conversation was deleted', () => {
+      localStorage.setItem(DELETED_RESEARCH_JOBS_KEY, JSON.stringify(['job-running', 'job-success']))
+      useChatStore.setState({
+        currentUserId: 'srijan',
+        currentConversation: null,
+        conversations: [],
+      })
+
+      useChatStore.getState().syncResearchHistory([
+        {
+          job_id: 'job-running',
+          status: 'running',
+          owner_subject: 'srijan',
+          owner_display_name: 'srijan@local',
+          input: 'Active research should be visible',
+          title: 'Active Research',
+          created_at: '2026-06-01T12:45:24Z',
+          updated_at: '2026-06-01T13:05:00Z',
+          has_report: false,
+        },
+        {
+          job_id: 'job-success',
+          status: 'success',
+          owner_subject: 'srijan',
+          input: 'Deleted finished research stays hidden',
+          title: 'Hidden Research',
+          created_at: '2026-06-01T11:00:00Z',
+          updated_at: '2026-06-01T11:30:00Z',
+          has_report: true,
+        },
+      ])
+
+      const conversations = useChatStore.getState().conversations
+      expect(conversations).toHaveLength(1)
+      expect(conversations[0].title).toBe('Active Research')
+      expect(conversations[0].messages[1].deepResearchJobId).toBe('job-running')
+      expect(conversations[0].messages[1].isDeepResearchActive).toBe(true)
+    })
+  })
+
   describe('thinking steps', () => {
     // Helper to set up a user message context for thinking steps tests
     const setupUserMessageContext = () => {
@@ -1116,6 +1159,36 @@ describe('useChatStore', () => {
       useChatStore.getState().clearReportContent()
 
       expect(useChatStore.getState().reportContent).toBe('')
+    })
+
+    test('mergeServerConversations does not clear active report content for the selected conversation', () => {
+      const conversation: Conversation = {
+        id: 'conv-1',
+        userId: 'user-1',
+        title: 'Research report',
+        messages: [],
+        createdAt: new Date('2026-05-21T10:00:00Z'),
+        updatedAt: new Date('2026-05-21T10:00:00Z'),
+      }
+      const serverConversation: Conversation = {
+        ...conversation,
+        updatedAt: new Date('2026-05-21T10:05:00Z'),
+      }
+
+      useChatStore.setState({
+        currentUserId: 'user-1',
+        currentConversation: conversation,
+        conversations: [conversation],
+        reportContent: '# Loaded report\n\nThis must stay visible while sync runs.',
+        reportContentCategory: 'final_report',
+      })
+
+      useChatStore.getState().mergeServerConversations([serverConversation])
+
+      const state = useChatStore.getState()
+      expect(state.currentConversation?.id).toBe('conv-1')
+      expect(state.reportContent).toBe('# Loaded report\n\nThis must stay visible while sync runs.')
+      expect(state.reportContentCategory).toBe('final_report')
     })
   })
 

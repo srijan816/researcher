@@ -52,6 +52,8 @@ class ClarifierAgentState(BaseModel):
 
     Attributes:
         messages: Conversation history with LangGraph message reducer.
+        original_query: The user's original research request before clarification
+            replies, approvals, or plan feedback were appended to the conversation.
         data_sources: Optional list of data sources to scope tools.
         available_documents: User-uploaded documents (file_name, summary) that are
             ingested; the user may refer to these.
@@ -66,6 +68,7 @@ class ClarifierAgentState(BaseModel):
     """
 
     messages: Annotated[list[AnyMessage], add_messages]
+    original_query: str | None = Field(default=None)
     data_sources: list[str] | None = Field(default=None)
     available_documents: list[dict[str, Any]] | None = Field(
         default=None,

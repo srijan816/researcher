@@ -10,9 +10,12 @@ import { AppBar } from './AppBar'
 const mockToggleSessionsPanel = vi.fn()
 const mockOpenRightPanel = vi.fn()
 const mockCloseRightPanel = vi.fn()
+const mockSetSessionsPanelOpen = vi.fn()
 
 const mockState = () => ({
   toggleSessionsPanel: mockToggleSessionsPanel,
+  isSessionsPanelOpen: false,
+  setSessionsPanelOpen: mockSetSessionsPanelOpen,
   rightPanel: null as string | null,
   openRightPanel: mockOpenRightPanel,
   closeRightPanel: mockCloseRightPanel,
@@ -36,13 +39,14 @@ describe('AppBar', () => {
   test('renders logo and title', () => {
     render(<AppBar />)
 
-    expect(screen.getByText('AI-Q')).toBeInTheDocument()
+    expect(screen.getByText('Deep Research')).toBeInTheDocument()
   })
 
   test('renders sessions label beside the menu button', () => {
     render(<AppBar isAuthenticated={true} />)
 
     expect(screen.getByText('Sessions')).toBeInTheDocument()
+    expect(screen.getByText('History')).toBeInTheDocument()
   })
 
   test('shows Sign In button when not authenticated', () => {
@@ -97,11 +101,16 @@ describe('AppBar', () => {
     expect(onNewSession).toHaveBeenCalledOnce()
   })
 
-  test('disables new session button when shallow navigation is blocked', () => {
-    render(<AppBar isAuthenticated={true} isNewSessionDisabled={true} />)
+  test('keeps new session button enabled when another operation is active', async () => {
+    const user = userEvent.setup()
+    const onNewSession = vi.fn()
 
-    expect(screen.getByRole('button', { name: /create new session/i })).toBeDisabled()
-    // Other action buttons remain enabled.
+    render(<AppBar isAuthenticated={true} onNewSession={onNewSession} />)
+
+    const newSessionButton = screen.getByRole('button', { name: /create new session/i })
+    expect(newSessionButton).not.toBeDisabled()
+    await user.click(newSessionButton)
+    expect(onNewSession).toHaveBeenCalledOnce()
     expect(screen.getByRole('button', { name: /toggle sessions sidebar/i })).not.toBeDisabled()
   })
 

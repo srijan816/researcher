@@ -1,0 +1,20 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools >= 64", "setuptools-scm>=8"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["notebooklm_source_harvest"]
+
+[project]
+name = "notebooklm-source-harvest"
+version = "0.1.0"
+description = "NotebookLM deep-research source harvester for AI-Q"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "nvidia-nat-core>=1.6.0,<2",
+    "notebooklm-py[markdown]>=0.5.0,<0.6",
+]
+
+[project.entry-points."nat.plugins"]
+notebooklm_source_harvest = "notebooklm_source_harvest"

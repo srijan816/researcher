@@ -164,6 +164,50 @@ export const getDisplayName = (functionName: string): string => {
 }
 
 /**
+ * Extract the function input (usually JSON) from the raw payload
+ */
+export const extractFunctionInput = (payload?: string): string | null => {
+  if (!payload) return null
+
+  const inputMatch = payload.match(/\*\*Function Input:\*\*\s*([\s\S]*?)(?:\*\*Function Output:\*\*|$)/i)
+  if (inputMatch && inputMatch[1]) {
+    let input = inputMatch[1].trim()
+    // Remove code block markers for json
+    input = input.replace(/```(?:json)?\n?/gi, '')
+    input = input.replace(/```/g, '')
+
+    // Attempt to parse as JSON to extract the "query" if it exists
+    try {
+      const parsed = JSON.parse(input)
+      if (parsed.query && typeof parsed.query === 'string') {
+        return parsed.query
+      }
+      return input // Return the raw (but cleaned) string if not specifically a query
+    } catch {
+      return input
+    }
+  }
+  return null
+}
+
+/**
+ * Extract the function output from the raw payload
+ */
+export const extractFunctionOutput = (payload?: string): string | null => {
+  if (!payload) return null
+
+  const outputMatch = payload.match(/\*\*Function Output:\*\*\s*([\s\S]*?)$/i)
+  if (outputMatch && outputMatch[1]) {
+    let output = outputMatch[1].trim()
+    // Remove code block markers
+    output = output.replace(/```(?:json|python|text)?\n?/gi, '')
+    output = output.replace(/```/g, '')
+    return output
+  }
+  return null
+}
+
+/**
  * Clean up and format the payload content for storage/display.
  * Removes excessive markdown formatting and Python repr noise.
  *

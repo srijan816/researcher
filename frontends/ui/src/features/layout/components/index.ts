@@ -12,6 +12,7 @@ export { SessionsPanel } from './SessionsPanel'
 export { ChatArea } from './ChatArea'
 export { InputArea } from './InputArea'
 export { SettingsPanel } from './SettingsPanel'
+export { DocsPanel } from './DocsPanel'
 
 // Research panel and tabs
 export { ResearchPanel } from './ResearchPanel'

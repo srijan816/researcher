@@ -4,5 +4,6 @@
 export { useChat } from './use-chat'
 export { useWebSocketChat } from './use-websocket-chat'
 export { useDeepResearch } from './use-deep-research'
+export { useCancelDeepResearchJob } from './use-cancel-deep-research'
 export { useIsCurrentSessionBusy } from './use-current-session-busy'
 export { useLoadJobData, type LoadJobDataOptions, type UseLoadJobDataReturn } from './use-load-job-data'

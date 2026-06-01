@@ -43,6 +43,11 @@ class TestClarifierAgentState:
         state = ClarifierAgentState(messages=[])
         assert state.data_sources is None
 
+    def test_original_query(self):
+        """Test pinned original query."""
+        state = ClarifierAgentState(messages=[], original_query="Research AI applications")
+        assert state.original_query == "Research AI applications"
+
     def test_custom_data_sources(self):
         """Test custom data_sources."""
         state = ClarifierAgentState(messages=[], data_sources=["web_search"])

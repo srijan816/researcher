@@ -21,7 +21,6 @@ import logging
 import os
 import re
 from collections.abc import Sequence
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +34,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt import tools_condition
 
+from aiq_agent.common import current_datetime_context
 from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
@@ -48,10 +48,10 @@ from aiq_agent.common.citation_verification import verify_citations
 
 from ...common import LLMProvider
 from ...common import LLMRole
+from ..chat_researcher.utils import coerce_content_text
 from .models import ShallowResearchAgentState
 
 logger = logging.getLogger(__name__)
-
 
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
@@ -186,6 +186,29 @@ class ShallowResearcherAgent:
         """Get the LLM for shallow research."""
         return self.llm_provider.get(LLMRole.RESEARCHER)
 
+    @staticmethod
+    def _latest_user_text(state: ShallowResearchAgentState) -> str:
+        """Return the latest human message content for direct tool orchestration."""
+        for message in reversed(state.messages):
+            if isinstance(message, HumanMessage):
+                return coerce_content_text(message.content).strip()
+        return ""
+
+    @staticmethod
+    def _state_with_latest_user_text(
+        state: ShallowResearchAgentState,
+        content: str,
+    ) -> ShallowResearchAgentState:
+        """Return a state copy with the latest user message replaced."""
+        messages = list(state.messages)
+        for index in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[index], HumanMessage):
+                messages[index] = HumanMessage(content=content)
+                break
+        else:
+            messages.append(HumanMessage(content=content))
+        return state.model_copy(update={"messages": messages})
+
     def _build_graph(self) -> CompiledStateGraph:
         """Build the LangGraph StateGraph."""
 
@@ -208,7 +231,7 @@ class ShallowResearcherAgent:
                 logger.debug("ShallowResearcher received no available documents")
 
             # Render system prompt with current datetime and available documents
-            current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            current_datetime = current_datetime_context()
             rendered_system_prompt = render_prompt_template(
                 self.system_prompt,
                 tools=tools_info,
@@ -349,18 +372,33 @@ class ShallowResearcherAgent:
             self.source_registry.clear()
             registry = self.source_registry
 
+        return await self._run_graph_and_finalize(state, registry)
+
+    async def _run_graph_and_finalize(
+        self,
+        state: ShallowResearchAgentState,
+        registry: SourceRegistry,
+    ) -> ShallowResearchAgentState:
+        """Execute the regular shallow graph and run citation finalization."""
         recursion_limit = (self.max_llm_turns * 2) + 10
         config = {"recursion_limit": recursion_limit}
         if self.callbacks:
             config["callbacks"] = self.callbacks
         result = await self._graph.ainvoke(state, config=config)
+        return await self._finalize_result(ShallowResearchAgentState.model_validate(result), registry)
 
-        # Post-process: verify citations against source registry
-        validated_result = dict(result)
+    async def _finalize_result(
+        self,
+        result: ShallowResearchAgentState,
+        registry: SourceRegistry,
+    ) -> ShallowResearchAgentState:
+        """Verify citations, sanitize the report, and emit the final shallow answer."""
+        validated_result = result.model_dump(exclude={"messages"})
+        validated_result["messages"] = list(result.messages)
         if validated_result.get("messages"):
             last_msg = validated_result["messages"][-1]
             if hasattr(last_msg, "content") and last_msg.content:
-                content = str(last_msg.content)
+                content = coerce_content_text(last_msg.content)
 
                 # Step 1: verify citations against registry
                 if registry.all_sources():

@@ -36,10 +36,15 @@ from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.responses import Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+
+from aiq_agent.common import DEFAULT_RESEARCH_DEPTH
+from aiq_agent.common import ResearchDepthTier
 
 from ..registry import AGENT_REGISTRY
 from ..registry import get_agent_config
@@ -60,6 +65,7 @@ class JobSubmitRequest(BaseModel):
                 {
                     "agent_type": "deep_researcher",
                     "input": "What are the latest advances in quantum computing?",
+                    "research_depth": "deeper",
                     "job_id": None,
                     "expiry_seconds": 86400,
                 }
@@ -69,6 +75,17 @@ class JobSubmitRequest(BaseModel):
 
     agent_type: str = Field(..., description="Agent type (e.g., 'deep_researcher')")
     input: str = Field(..., min_length=1, description="Input query for the agent")
+    data_sources: list[str] | None = Field(
+        None,
+        description="Optional data source IDs to pass to the agent.",
+    )
+    research_depth: ResearchDepthTier = Field(
+        DEFAULT_RESEARCH_DEPTH,
+        description=(
+            "Depth/source tier for research jobs: shallow targets 5-10 sources, "
+            "deeper targets 20-40, deep targets 60-100+."
+        ),
+    )
     job_id: str | None = Field(
         None,
         pattern=r"^[a-zA-Z0-9_-]+$",
@@ -95,6 +112,16 @@ class JobStatusResponse(BaseModel):
                     "agent_type": "deep_researcher",
                     "error": None,
                     "created_at": "2026-02-12T10:30:00Z",
+                    "updated_at": "2026-02-12T10:42:00Z",
+                    "has_report": True,
+                    "report_ready": True,
+                    "terminal": True,
+                    "poll_after_seconds": None,
+                    "message": "Final report is ready.",
+                    "status_url": "/v1/jobs/async/job/abc123",
+                    "report_url": "/v1/jobs/async/job/abc123/report",
+                    "state_url": "/v1/jobs/async/job/abc123/state",
+                    "stream_url": "/v1/jobs/async/job/abc123/stream",
                 }
             ]
         }
@@ -108,6 +135,51 @@ class JobStatusResponse(BaseModel):
     agent_type: str | None = Field(None, description="Agent type used for this job")
     error: str | None = Field(None, description="Error message if job failed")
     created_at: str | None = Field(None, description="Creation timestamp (ISO format)")
+    updated_at: str | None = Field(None, description="Last update timestamp (ISO format)")
+    has_report: bool = Field(False, description="Whether a usable final report is available")
+    report_ready: bool = Field(False, description="Alias for has_report for polling clients")
+    terminal: bool = Field(False, description="Whether the job is in a terminal status")
+    poll_after_seconds: int | None = Field(None, description="Suggested polling delay while job is active")
+    message: str | None = Field(None, description="Human-readable state and next-action hint")
+    status_url: str | None = Field(None, description="Relative URL for this job status endpoint")
+    report_url: str | None = Field(None, description="Relative URL for the final report endpoint")
+    state_url: str | None = Field(None, description="Relative URL for artifacts/source state")
+    stream_url: str | None = Field(None, description="Relative URL for SSE progress events")
+    quality_status: str | None = Field(None, description="Quality audit status when available")
+    quality_warnings: list[str] = Field(default_factory=list, description="Non-fatal quality warnings")
+
+
+class JobHistoryItem(BaseModel):
+    """A persisted async research job for history/sync views."""
+
+    job_id: str
+    status: str
+    owner_auth_type: str | None = None
+    owner_subject: str | None = None
+    owner_display_name: str | None = None
+    agent_type: str | None = None
+    input: str | None = None
+    title: str | None = None
+    error: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    has_report: bool = False
+    report_ready: bool = False
+    terminal: bool = False
+    poll_after_seconds: int | None = None
+    message: str | None = None
+    status_url: str | None = None
+    report_url: str | None = None
+    state_url: str | None = None
+    stream_url: str | None = None
+    quality_status: str | None = None
+    quality_warnings: list[str] = Field(default_factory=list)
+
+
+class JobHistoryResponse(BaseModel):
+    """List of persisted async jobs visible to the caller."""
+
+    jobs: list[JobHistoryItem]
 
 
 class JobStateResponse(BaseModel):
@@ -125,6 +197,24 @@ class JobReportResponse(BaseModel):
     job_id: str = Field(..., description="Unique job identifier")
     has_report: bool = Field(..., description="Whether the final report is available")
     report: str | None = Field(None, description="Final research report from the agent")
+    report_markdown: str | None = Field(None, description="Alias for report, for explicit API clients")
+    content_type: str = Field("text/markdown", description="MIME type of report/report_markdown when present")
+    status: str | None = Field(None, description="Current job status")
+    report_ready: bool = Field(False, description="Alias for has_report for polling clients")
+    terminal: bool = Field(False, description="Whether the job is in a terminal status")
+    poll_after_seconds: int | None = Field(None, description="Suggested polling delay while job is active")
+    message: str | None = Field(None, description="Human-readable state and next-action hint")
+    error: str | None = Field(None, description="Error message if the job failed")
+    status_url: str | None = Field(None, description="Relative URL for this job status endpoint")
+    report_url: str | None = Field(None, description="Relative URL for this report endpoint")
+    state_url: str | None = Field(None, description="Relative URL for artifacts/source state")
+    stream_url: str | None = Field(None, description="Relative URL for SSE progress events")
+    sources_found: int | None = Field(None, description="Number of distinct source URLs collected")
+    sources_cited: int | None = Field(None, description="Number of distinct source URLs cited")
+    found_urls: list[str] | None = Field(None, description="Distinct collected source URLs")
+    cited_urls: list[str] | None = Field(None, description="Distinct cited source URLs")
+    quality_status: str | None = Field(None, description="Quality audit status when available")
+    quality_warnings: list[str] = Field(default_factory=list, description="Non-fatal quality warnings")
 
 
 class AgentInfo(BaseModel):
@@ -146,6 +236,7 @@ class DataSource(BaseModel):
     id: str = Field(..., description="Unique identifier for the data source")
     name: str = Field(..., description="Display name")
     description: str | None = Field(default=None, description="Human-readable description")
+    default_enabled: bool = Field(default=True, description="Whether the source is enabled by default")
     requires_auth: bool = Field(default=False, description="Whether user authentication is required")
 
 
@@ -166,6 +257,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     from ..jobs.access import ensure_job_access_table
     from ..jobs.access import require_verified_principal
     from ..jobs.event_store import EventStore
+    from ..jobs.runner import _recover_report_from_events
+    from ..jobs.submit import resume_agent_job as resume_authorized_job
     from ..jobs.submit import submit_agent_job as submit_authorized_job
 
     if not get_all_sources():
@@ -203,6 +296,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 id=source.id,
                 name=source.name,
                 description=source.description,
+                default_enabled=source.default_enabled,
                 requires_auth=source.requires_auth,
             )
             for source in get_all_sources()
@@ -240,6 +334,21 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         default_expiry_seconds,
     )
     await asyncio.get_running_loop().run_in_executor(None, ensure_job_access_table, db_url)
+
+    @app.get(
+        "/v1/jobs/async/jobs",
+        response_model=JobHistoryResponse,
+        tags=["async jobs"],
+        summary="List async research jobs",
+        description="List persisted async jobs visible to the caller for cross-origin research history.",
+    )
+    async def list_jobs(limit: int = 50) -> JobHistoryResponse:
+        """List jobs from the backend store so localhost and VPS UI can sync history."""
+        principal = require_verified_principal()
+        safe_limit = max(1, min(limit, 200))
+        loop = asyncio.get_running_loop()
+        rows = await loop.run_in_executor(None, _list_job_history_rows, db_url, principal, safe_limit)
+        return JobHistoryResponse(jobs=[_row_to_history_item(row) for row in rows])
 
     @app.get("/health", tags=["health"], summary="Health check")
     async def health_check():
@@ -305,6 +414,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 job_id=req.job_id,
                 expiry_seconds=expiry,
                 auth_token=auth_token,
+                data_sources=req.data_sources,
+                research_depth=req.research_depth,
             )
         except RuntimeError as e:
             raise HTTPException(403, str(e))
@@ -324,6 +435,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             job_id=job_id,
             status=JobStatus.SUBMITTED.value,
             agent_type=req.agent_type,
+            **_job_progress_fields(JobStatus.SUBMITTED.value, has_report=False, error=None),
+            **_job_resource_links(job_id),
         )
 
     @app.get(
@@ -342,8 +455,13 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         return JobStatusResponse(
             job_id=job_id,
             status=job.status,
+            agent_type=_agent_type_from_events(db_url, job_id),
             error=job.error,
             created_at=job.created_at.isoformat() if job.created_at else None,
+            updated_at=job.updated_at.isoformat() if getattr(job, "updated_at", None) else None,
+            **_job_progress_fields(job.status, has_report=_job_has_final_report(job, db_url, job_id), error=job.error),
+            **_job_resource_links(job_id),
+            **_job_quality_fields(job),
         )
 
     @app.get(
@@ -419,6 +537,120 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
         return {"job_id": job_id, "status": JobStatus.INTERRUPTED.value, "task_cancelled": task_cancelled}
 
+    @app.post(
+        "/v1/jobs/async/job/{job_id}/resume",
+        response_model=JobStatusResponse,
+        tags=["async jobs"],
+        summary="Resume a failed async job",
+        description=(
+            "Resume a failed/interrupted job using persisted artifacts. If a usable report is already present, "
+            "the job is recovered without another model call."
+        ),
+        responses={
+            400: {"description": "Job cannot be resumed from its current state"},
+            404: {"description": "Job not found"},
+        },
+    )
+    async def resume_job(job_id: str) -> JobStatusResponse:
+        """Resume a failed/interrupted job without discarding persisted research artifacts."""
+        principal = require_verified_principal()
+        job = await authorize_job_access(job_store, db_url, job_id, principal)
+
+        if job.status in (JobStatus.SUBMITTED.value, JobStatus.RUNNING.value):
+            has_report = _job_has_final_report(job, db_url, job_id)
+            return JobStatusResponse(
+                job_id=job_id,
+                status=job.status,
+                error=job.error,
+                created_at=job.created_at.isoformat() if job.created_at else None,
+                updated_at=job.updated_at.isoformat() if getattr(job, "updated_at", None) else None,
+                **_job_progress_fields(job.status, has_report=has_report, error=job.error),
+                **_job_resource_links(job_id),
+                **_job_quality_fields(job),
+            )
+        if job.status == JobStatus.SUCCESS.value:
+            has_report = _job_has_final_report(job, db_url, job_id)
+            return JobStatusResponse(
+                job_id=job_id,
+                status=job.status,
+                error=job.error,
+                created_at=job.created_at.isoformat() if job.created_at else None,
+                updated_at=job.updated_at.isoformat() if getattr(job, "updated_at", None) else None,
+                **_job_progress_fields(job.status, has_report=has_report, error=job.error),
+                **_job_resource_links(job_id),
+                **_job_quality_fields(job),
+            )
+        if job.status not in (JobStatus.FAILURE.value, JobStatus.INTERRUPTED.value):
+            raise HTTPException(400, f"Job cannot be resumed from status: {job.status}")
+
+        recovered_report = _recover_report_from_events(db_url, job_id)
+        if recovered_report:
+            await job_store.update_status(
+                job_id,
+                JobStatus.SUCCESS,
+                output={
+                    "report": recovered_report,
+                    "recovered_from_status": job.status,
+                    "quality_status": "warning",
+                    "quality_warnings": ["Recovered a usable report from persisted job artifacts."],
+                },
+            )
+            EventStore(db_url, job_id).store(
+                {
+                    "type": "job.recovered",
+                    "data": {"reason": "Recovered a usable report from persisted job artifacts."},
+                }
+            )
+            return JobStatusResponse(
+                job_id=job_id,
+                status=JobStatus.SUCCESS.value,
+                error=None,
+                created_at=job.created_at.isoformat() if job.created_at else None,
+                updated_at=job.updated_at.isoformat() if getattr(job, "updated_at", None) else None,
+                **_job_progress_fields(JobStatus.SUCCESS.value, has_report=True, error=None),
+                **_job_resource_links(job_id),
+                quality_status="warning",
+                quality_warnings=["Recovered a usable report from persisted job artifacts."],
+            )
+
+        submit_data = _get_submit_data_from_events(db_url, job_id)
+        if not submit_data:
+            raise HTTPException(400, "Job has no submission metadata to resume")
+
+        agent_type = submit_data.get("agent_type") if isinstance(submit_data.get("agent_type"), str) else None
+        input_text = submit_data.get("input") if isinstance(submit_data.get("input"), str) else None
+        if not agent_type or not input_text:
+            raise HTTPException(400, "Job submission metadata is incomplete")
+
+        from aiq_agent.auth import get_auth_token
+
+        owner = principal.email or principal.sub
+        resume_files = _build_resume_files_from_events(db_url, job_id)
+        resume_input = _format_resume_input(input_text, resume_files)
+        await resume_authorized_job(
+            job_id=job_id,
+            agent_type=agent_type,
+            input_text=resume_input,
+            owner=owner,
+            principal=principal,
+            expiry_seconds=job.expiry_seconds or default_expiry_seconds,
+            data_sources=submit_data.get("data_sources"),
+            research_depth=submit_data.get("research_depth") or DEFAULT_RESEARCH_DEPTH,
+            auth_token=get_auth_token(),
+            resume_files=resume_files,
+        )
+
+        return JobStatusResponse(
+            job_id=job_id,
+            status=JobStatus.RUNNING.value,
+            error=None,
+            created_at=job.created_at.isoformat() if job.created_at else None,
+            updated_at=job.updated_at.isoformat() if getattr(job, "updated_at", None) else None,
+            **_job_progress_fields(JobStatus.RUNNING.value, has_report=False, error=None),
+            **_job_resource_links(job_id),
+            **_job_quality_fields(job),
+        )
+
     @app.get(
         "/v1/jobs/async/job/{job_id}/state",
         response_model=JobStateResponse,
@@ -448,28 +680,62 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         description="Get the final research report from a completed job.",
         responses={404: {"description": "Job not found"}},
     )
-    async def get_job_report(job_id: str) -> JobReportResponse:
+    async def get_job_report(job_id: str, format: str | None = None) -> JobReportResponse | Response:
         """Get the final report from a completed job."""
         principal = require_verified_principal()
         job = await authorize_job_access(job_store, db_url, job_id, principal)
 
-        report = None
-        if job.output:
-            try:
-                output = json.loads(job.output) if isinstance(job.output, str) else job.output
-                report = output.get("report")
-            except (json.JSONDecodeError, AttributeError):
-                pass
+        report = _get_final_report_for_job(job, db_url, job_id)
+        progress = _job_progress_fields(job.status, has_report=bool(report), error=job.error)
 
-        return JobReportResponse(job_id=job_id, has_report=bool(report), report=report)
+        if (format or "").lower() in {"md", "markdown", "raw", "text"}:
+            if not report:
+                return JSONResponse(
+                    status_code=202 if not progress["terminal"] else 200,
+                    content={
+                        "job_id": job_id,
+                        "has_report": False,
+                        "report_ready": False,
+                        "status": job.status,
+                        "error": job.error,
+                        **progress,
+                        **_job_resource_links(job_id),
+                        **_job_quality_fields(job),
+                    },
+                    headers={"Cache-Control": "no-store"},
+                )
+            return Response(
+                content=report,
+                media_type="text/markdown; charset=utf-8",
+                headers={"Cache-Control": "no-store"},
+            )
+
+        artifacts = await _get_job_artifacts(db_url, job_id)
+        source_summary = artifacts.get("sources", {}) if isinstance(artifacts, dict) else {}
+        return JobReportResponse(
+            job_id=job_id,
+            report=report,
+            report_markdown=report,
+            status=job.status,
+            error=job.error,
+            **progress,
+            **_job_resource_links(job_id),
+            sources_found=source_summary.get("found") if isinstance(source_summary, dict) else None,
+            sources_cited=source_summary.get("cited") if isinstance(source_summary, dict) else None,
+            found_urls=source_summary.get("found_urls") if isinstance(source_summary, dict) else None,
+            cited_urls=source_summary.get("cited_urls") if isinstance(source_summary, dict) else None,
+            **_job_quality_fields(job),
+        )
 
     logger.info("Registered async job routes at /v1/jobs/async")
 
-    # Ensure job_events table exists before reaper runs (reaper queries it via raw SQL;
-    # table is otherwise created lazily on first EventStore write).
+    # Ensure job_events table exists before lifecycle recovery/reaper runs (both
+    # query it via raw SQL; table is otherwise created lazily on first write).
     EventStore._ensure_table_exists(db_url)
 
-    # Start the ghost job reaper background task
+    await _interrupt_orphaned_startup_jobs(job_store, db_url)
+
+    # Start the ghost job reaper background task.
     asyncio.create_task(_reap_ghost_jobs(job_store, db_url))
 
     # Start periodic cleanup of expired jobs (NAT's job_info table) and old events (job_events table).
@@ -525,13 +791,423 @@ def _find_stale_jobs(db_url: str, running_status: str) -> list[str]:
         return [row[0] for row in result]
 
 
+def _find_jobs_by_status(db_url: str, statuses: list[str]) -> list[dict]:
+    """Return non-expired jobs that currently have one of the provided statuses."""
+    from sqlalchemy import inspect
+    from sqlalchemy import text
+
+    from ..jobs.event_store import EventStore
+
+    if not statuses:
+        return []
+
+    EventStore._ensure_table_exists(db_url)
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    inspector = inspect(engine)
+    if not inspector.has_table("job_info"):
+        return []
+
+    params = {f"status_{idx}": status for idx, status in enumerate(statuses)}
+    placeholders = ", ".join(f":status_{idx}" for idx in range(len(statuses)))
+    sql = text(
+        "SELECT job_id, status, error, created_at, updated_at "
+        "FROM job_info "
+        f"WHERE status IN ({placeholders}) "
+        "AND (is_expired IS NOT TRUE OR is_expired IS NULL)"
+    )
+
+    with engine.connect() as conn:
+        return [dict(row) for row in conn.execute(sql, params).mappings().all()]
+
+
+def _list_job_history_rows(db_url: str, principal, limit: int) -> list[dict]:
+    """Return job metadata rows with the submit event attached when available."""
+    import os
+
+    from sqlalchemy import text
+
+    from ..jobs.event_store import EventStore
+
+    EventStore._ensure_table_exists(db_url)
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    auth_enabled = os.environ.get("REQUIRE_AUTH", "false").lower() == "true"
+
+    if auth_enabled:
+        where_clause = "WHERE ji.is_expired IS NOT TRUE"
+        params = {"limit": limit}
+        if getattr(principal, "role", None) != "admin":
+            where_clause += " AND ja.owner_auth_type = :owner_auth_type AND ja.owner_subject = :owner_subject"
+            params.update(
+                {
+                    "owner_auth_type": principal.type,
+                    "owner_subject": principal.sub,
+                }
+            )
+        sql = text(
+            "SELECT ji.job_id, ji.status, ji.error, ji.output, ji.created_at, ji.updated_at, "
+            "ja.owner_auth_type, ja.owner_subject, "
+            "COALESCE(ja.owner_email, ja.owner_subject) AS owner_display_name, "
+            "je.event_data AS submitted_event "
+            "FROM job_info ji "
+            "INNER JOIN job_access ja ON ja.job_id = ji.job_id "
+            "LEFT JOIN job_events je ON je.id = ("
+            "  SELECT MIN(id) FROM job_events "
+            "  WHERE job_id = ji.job_id AND event_type = 'job.submitted'"
+            ") "
+            f"{where_clause} "
+            "ORDER BY ji.created_at DESC "
+            "LIMIT :limit"
+        )
+    else:
+        sql = text(
+            "SELECT ji.job_id, ji.status, ji.error, ji.output, ji.created_at, ji.updated_at, "
+            "NULL AS owner_auth_type, NULL AS owner_subject, NULL AS owner_display_name, "
+            "je.event_data AS submitted_event "
+            "FROM job_info ji "
+            "LEFT JOIN job_events je ON je.id = ("
+            "  SELECT MIN(id) FROM job_events "
+            "  WHERE job_id = ji.job_id AND event_type = 'job.submitted'"
+            ") "
+            "WHERE ji.is_expired IS NOT TRUE "
+            "ORDER BY ji.created_at DESC "
+            "LIMIT :limit"
+        )
+        params = {"limit": limit}
+
+    with engine.connect() as conn:
+        return [dict(row) for row in conn.execute(sql, params).mappings().all()]
+
+
+def _row_to_history_item(row: dict) -> JobHistoryItem:
+    submitted = _parse_event_data(row.get("submitted_event"))
+    submitted_data = submitted.get("data") if isinstance(submitted.get("data"), dict) else {}
+    input_text = submitted_data.get("input") if isinstance(submitted_data.get("input"), str) else None
+    agent_type = submitted_data.get("agent_type") if isinstance(submitted_data.get("agent_type"), str) else None
+    title = _title_from_input(input_text) if input_text else None
+    output = _parse_json_maybe(row.get("output"))
+    has_report = bool(isinstance(output, dict) and output.get("report"))
+    status = str(row.get("status"))
+    links = _job_resource_links(str(row.get("job_id")))
+    quality_warnings = _quality_warnings_from_output(output) if isinstance(output, dict) else []
+    quality_status = output.get("quality_status") if isinstance(output, dict) else None
+    if not isinstance(quality_status, str):
+        quality_status = "warning" if quality_warnings else None
+
+    return JobHistoryItem(
+        job_id=str(row.get("job_id")),
+        status=status,
+        owner_auth_type=row.get("owner_auth_type"),
+        owner_subject=row.get("owner_subject"),
+        owner_display_name=row.get("owner_display_name"),
+        agent_type=agent_type,
+        input=input_text,
+        title=title,
+        error=row.get("error"),
+        created_at=_iso_or_none(row.get("created_at")),
+        updated_at=_iso_or_none(row.get("updated_at")),
+        **_job_progress_fields(status, has_report=has_report, error=row.get("error")),
+        **links,
+        quality_status=quality_status,
+        quality_warnings=quality_warnings,
+    )
+
+
+TERMINAL_JOB_STATUSES = {"success", "failure", "failed", "interrupted", "cancelled", "not_found"}
+ACTIVE_JOB_STATUSES = {"submitted", "running", "queued", "pending"}
+DEFAULT_POLL_AFTER_SECONDS = 10
+
+
+def _job_resource_links(job_id: str) -> dict[str, str]:
+    base = f"/v1/jobs/async/job/{job_id}"
+    return {
+        "status_url": base,
+        "report_url": f"{base}/report",
+        "state_url": f"{base}/state",
+        "stream_url": f"{base}/stream",
+    }
+
+
+def _is_terminal_status(status: str | None) -> bool:
+    return str(status or "").lower() in TERMINAL_JOB_STATUSES
+
+
+def _job_progress_fields(status: str | None, *, has_report: bool, error: str | None) -> dict[str, object]:
+    status_text = str(status or "")
+    status_lower = status_text.lower()
+    terminal = _is_terminal_status(status_text)
+    poll_after = None if terminal or has_report else DEFAULT_POLL_AFTER_SECONDS
+    if has_report:
+        message = "Final report is ready."
+    elif status_lower in ACTIVE_JOB_STATUSES:
+        message = "Research is still running. Poll the status_url or report_url again."
+    elif terminal and error:
+        message = "Research finished without a final report. See error and state_url for artifacts."
+    elif terminal:
+        message = "Research finished without a final report. See state_url for artifacts."
+    else:
+        message = "Report is not ready yet."
+
+    return {
+        "has_report": has_report,
+        "report_ready": has_report,
+        "terminal": terminal,
+        "poll_after_seconds": poll_after,
+        "message": message,
+    }
+
+
+def _job_output_dict(job) -> dict:
+    if not getattr(job, "output", None):
+        return {}
+    output = _parse_json_maybe(job.output)
+    return output if isinstance(output, dict) else {}
+
+
+def _quality_warnings_from_output(output: dict) -> list[str]:
+    warnings = output.get("quality_warnings")
+    if not isinstance(warnings, list):
+        return []
+    return [str(item) for item in warnings if str(item).strip()]
+
+
+def _job_quality_fields(job) -> dict[str, object]:
+    output = _job_output_dict(job)
+    warnings = _quality_warnings_from_output(output)
+    quality_status = output.get("quality_status")
+    if not isinstance(quality_status, str):
+        quality_status = "warning" if warnings else None
+    return {
+        "quality_status": quality_status,
+        "quality_warnings": warnings,
+    }
+
+
+def _extract_report_from_job_output(job) -> str | None:
+    output = _job_output_dict(job)
+    report = output.get("report")
+    return report if isinstance(report, str) else None
+
+
+def _is_recovered_intermediate_report(report: str | None) -> bool:
+    """Detect recovery banners that wrap intermediate notes rather than final synthesis."""
+    if not isinstance(report, str):
+        return False
+    text = report.lstrip()
+    return text.startswith("# Recovered Research Report") and (
+        "persisted intermediate research files" in text
+        or "persisted research notes" in text
+        or "## Recovered Findings" in text
+    )
+
+
+def _get_final_report_for_job(job, db_url: str, job_id: str) -> str | None:
+    from aiq_agent.common.report_quality import report_matches_request_scope
+
+    from ..jobs.runner import _is_usable_report
+    from ..jobs.runner import _recover_report_from_events
+
+    submit_data = _get_submit_data_from_events(db_url, job_id)
+    request_text = submit_data.get("input")
+    agent_type = submit_data.get("agent_type")
+    is_deep_research_job = isinstance(agent_type, str) and "deep_researcher" in agent_type.lower()
+    report = _extract_report_from_job_output(job)
+    if _is_usable_report(report):
+        if is_deep_research_job and _is_recovered_intermediate_report(report):
+            logger.warning("Ignoring recovered intermediate report stored in job output for %s", job_id)
+        elif report_matches_request_scope(report, request_text)[0]:
+            return report
+    if _is_terminal_status(getattr(job, "status", None)):
+        recovered_report = _recover_report_from_events(db_url, job_id)
+        if (
+            _is_usable_report(recovered_report)
+            and not (is_deep_research_job and _is_recovered_intermediate_report(recovered_report))
+            and report_matches_request_scope(recovered_report, request_text)[0]
+        ):
+            return recovered_report
+    return None
+
+
+def _job_has_final_report(job, db_url: str, job_id: str) -> bool:
+    return bool(_get_final_report_for_job(job, db_url, job_id))
+
+
+def _agent_type_from_events(db_url: str, job_id: str) -> str | None:
+    submit_data = _get_submit_data_from_events(db_url, job_id)
+    agent_type = submit_data.get("agent_type")
+    return agent_type if isinstance(agent_type, str) else None
+
+
+def _parse_event_data(raw: object) -> dict:
+    parsed = _parse_json_maybe(raw)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _parse_json_maybe(raw: object) -> object:
+    if raw is None:
+        return None
+    if isinstance(raw, (dict, list)):
+        return raw
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+
+
+def _title_from_input(input_text: str) -> str:
+    compact = " ".join(input_text.split())
+    return compact if len(compact) <= 80 else compact[:77] + "..."
+
+
+def _iso_or_none(value: object) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _get_submit_data_from_events(db_url: str, job_id: str) -> dict:
+    """Return the original job.submitted payload for a job."""
+    from ..jobs.event_store import EventStore
+
+    events = EventStore.get_events(db_url, job_id, 0, 10000)
+    for event in events:
+        if event.get("type") != "job.submitted":
+            continue
+        data = event.get("data")
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _file_entry(content: str | list[str]) -> dict:
+    """Create a deepagents-compatible virtual file entry for resume state."""
+    from datetime import UTC
+    from datetime import datetime
+
+    now = datetime.now(UTC).isoformat()
+    lines = content.splitlines() if isinstance(content, str) else [str(line) for line in content]
+    return {"content": lines, "created_at": now, "modified_at": now}
+
+
+def _slug_for_resume_path(value: object, fallback: str) -> str:
+    import re
+
+    text = str(value or fallback).strip().lower()
+    text = re.sub(r"[^a-z0-9._-]+", "-", text).strip("-")
+    if not text:
+        text = fallback
+    return text[:80]
+
+
+def _clean_resume_url(url: str) -> str:
+    import html
+
+    clean = html.unescape(str(url)).replace("\\n", "\n").splitlines()[0].strip()
+    return clean.rstrip(".,;:!?)'\"]}>")
+
+
+def _resume_state_path(raw_path: object, fallback: str) -> str:
+    """Convert persisted artifact paths into DeepAgents state keys.
+
+    `/shared/...` is a routed virtual filesystem path. DeepAgents strips that
+    route before looking inside the routed StateBackend, so preloaded resume
+    files must be stored as `/...` or they appear to the model as
+    `/shared/shared/...` and reads of `/shared/...` fail.
+    """
+    path = str(raw_path or fallback).strip()
+    if not path:
+        path = fallback
+    if not path.startswith("/"):
+        path = f"/{path}"
+    if path.startswith("/shared/"):
+        path = path.removeprefix("/shared")
+    return path or "/resume_file.md"
+
+
+def _display_resume_path(state_path: str) -> str:
+    """Return the path the resumed agent should use with read_file."""
+    if state_path.startswith("/shared/"):
+        return state_path
+    if state_path.startswith("/resume_outputs/"):
+        return f"/shared{state_path}"
+    if state_path in {"/resume_sources.md", "/resume_instructions.md"}:
+        return f"/shared{state_path}"
+    if state_path.startswith("/") and state_path not in {"/report.md"}:
+        return f"/shared{state_path}"
+    return state_path
+
+
+def _build_resume_files_from_events(db_url: str, job_id: str) -> dict[str, dict]:
+    """Build a virtual filesystem snapshot from persisted artifact events."""
+    from ..jobs.event_store import EventStore
+
+    events = EventStore.get_events(db_url, job_id, 0, 10000)
+    files: dict[str, dict] = {}
+    sources: list[str] = []
+    seen_sources: set[str] = set()
+    output_index = 0
+
+    for event in events:
+        if event.get("type") != "artifact.update":
+            continue
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        artifact_type = data.get("type")
+        content = data.get("content")
+
+        if artifact_type == "citation_source":
+            url = data.get("url") or content
+            if isinstance(url, str):
+                clean_url = _clean_resume_url(url)
+                if clean_url and clean_url.startswith(("http://", "https://")) and clean_url not in seen_sources:
+                    seen_sources.add(clean_url)
+                    sources.append(clean_url)
+            continue
+
+        if artifact_type == "file" and content:
+            raw_path = data.get("file_path") or data.get("path") or data.get("filename") or event.get("name")
+            path = _resume_state_path(raw_path, f"/resume_file_{len(files) + 1}.md")
+            files[path] = _file_entry(content if isinstance(content, str) else str(content))
+            continue
+
+        if artifact_type == "output" and isinstance(content, str) and len(content.strip()) >= 200:
+            output_index += 1
+            category = data.get("output_category") or "output"
+            name = _slug_for_resume_path(event.get("name") or category, f"output-{output_index}")
+            files[f"/resume_outputs/{output_index:02d}-{name}.md"] = _file_entry(content)
+
+    if sources:
+        files["/resume_sources.md"] = _file_entry("\n".join(f"- {url}" for url in sources))
+
+    files["/resume_instructions.md"] = _file_entry(
+        "This job is being resumed after a failed/interrupted attempt. Reuse the existing notes, files, "
+        "and sources in /shared before doing new searches. Fill only evidence gaps, then synthesize the final report."
+    )
+    return files
+
+
+def _format_resume_input(input_text: str, resume_files: dict[str, dict]) -> str:
+    """Append concise resume instructions while preserving the user's original question."""
+    paths = "\n".join(f"- {_display_resume_path(path)}" for path in sorted(resume_files))
+    return (
+        f"{input_text}\n\n"
+        "## Resume Context\n"
+        "This is a continuation of a previous failed/interrupted deep research job. "
+        "Do not restart from scratch. First inspect the virtual files listed below, reuse their evidence, "
+        "and only perform additional searches where the existing artifacts are insufficient.\n\n"
+        f"{paths}"
+    )
+
+
 async def _reap_ghost_jobs(job_store, db_url: str) -> None:
     """
-    Background task that periodically marks stale RUNNING jobs as FAILURE.
+    Background task that periodically marks stale RUNNING jobs as INTERRUPTED.
 
     A job is considered "ghost" if it has been RUNNING for over
     GHOST_JOB_TIMEOUT_SECONDS with no new events in the job_events table.
     This catches Dask worker crashes and OOM kills that bypass Python exception handling.
+    We keep these jobs resumable because their persisted artifacts are often still useful.
     """
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
@@ -552,31 +1228,83 @@ async def _reap_ghost_jobs(job_store, db_url: str) -> None:
             stale_job_ids = await loop.run_in_executor(None, _find_stale_jobs, db_url, JobStatus.RUNNING.value)
 
             for stale_job_id in stale_job_ids:
-                logger.warning("Reaping ghost job %s (no events for %ds)", stale_job_id, GHOST_JOB_TIMEOUT_SECONDS)
+                logger.warning(
+                    "Interrupting ghost job %s (no events for %ds)",
+                    stale_job_id,
+                    GHOST_JOB_TIMEOUT_SECONDS,
+                )
                 try:
                     await job_store.update_status(
                         stale_job_id,
-                        JobStatus.FAILURE,
-                        error="Job timed out (no heartbeat received from worker)",
+                        JobStatus.INTERRUPTED,
+                        error="Job lost its worker heartbeat; resume is available",
                     )
                     event_store = EventStore(db_url, stale_job_id)
                     event_store.store(
                         {
-                            "type": "job.error",
+                            "type": "job.interrupted",
                             "data": {
-                                "error": "Job timed out (no heartbeat received from worker)",
+                                "error": "Job lost its worker heartbeat; resume is available",
                                 "error_type": "GhostJobTimeout",
+                                "recoverable": True,
                             },
                         }
                     )
                 except Exception as e:
-                    logger.warning("Failed to reap ghost job %s: %s", stale_job_id, e)
+                    logger.warning("Failed to interrupt ghost job %s: %s", stale_job_id, e)
 
         except asyncio.CancelledError:
             logger.info("Ghost job reaper stopped")
             break
         except Exception as e:
             logger.warning("Ghost job reaper error: %s", e)
+
+
+async def _interrupt_orphaned_startup_jobs(job_store, db_url: str) -> None:
+    """
+    Convert pre-existing active jobs to INTERRUPTED when this backend starts.
+
+    The local backend owns the Dask scheduler/workers for these jobs. If the
+    process starts while jobs are still marked submitted/running, their workers
+    are gone and the safest recovery state is an explicit resumable interruption.
+    """
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+    from ..jobs.event_store import EventStore
+
+    loop = asyncio.get_running_loop()
+    active_rows = await loop.run_in_executor(
+        None,
+        _find_jobs_by_status,
+        db_url,
+        [JobStatus.SUBMITTED.value, JobStatus.RUNNING.value],
+    )
+    if not active_rows:
+        return
+
+    logger.warning("Marking %d orphaned active job(s) as interrupted after backend startup", len(active_rows))
+    for row in active_rows:
+        job_id = str(row.get("job_id"))
+        previous_status = str(row.get("status"))
+        try:
+            await job_store.update_status(
+                job_id,
+                JobStatus.INTERRUPTED,
+                error="Backend restarted while the job was active; resume is available",
+            )
+            EventStore(db_url, job_id).store(
+                {
+                    "type": "job.interrupted",
+                    "data": {
+                        "error": "Backend restarted while the job was active; resume is available",
+                        "error_type": "BackendRestartInterrupted",
+                        "previous_status": previous_status,
+                        "recoverable": True,
+                    },
+                }
+            )
+        except Exception as e:
+            logger.warning("Failed to mark orphaned startup job %s as interrupted: %s", job_id, e)
 
 
 _cleanup_task: asyncio.Task | None = None

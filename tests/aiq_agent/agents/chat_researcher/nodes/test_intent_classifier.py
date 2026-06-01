@@ -136,6 +136,25 @@ class TestIntentClassifier:
         mock_llm.ainvoke.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_run_fast_paths_obvious_long_deep_research_prompt(self, mock_llm):
+        """Long explicit research prompts should skip classifier LLM timeout risk."""
+        classifier = IntentClassifier(llm=mock_llm)
+        prompt = (
+            "You are Deep Research operating in full autonomous agent mode. "
+            "Conduct the deepest possible research and create a detailed research plan. "
+            "Search/browse extensively, cross-verify claims, inspect competitor landscape, "
+            "and produce a comprehensive market validation report. "
+        ) * 8
+        state = ChatResearcherState(messages=[HumanMessage(content=prompt)])
+
+        result = await classifier.run(state)
+
+        assert result["user_intent"].intent == "research"
+        assert result["depth_decision"].decision == "deep"
+        assert "Obvious research instruction" in result["depth_decision"].raw_reasoning
+        mock_llm.ainvoke.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_run_handles_llm_error(self, mock_llm):
         """Test run() on LLM error returns meta + error message so flow ends (no clarifier)."""
         mock_llm.ainvoke = AsyncMock(side_effect=Exception("LLM error"))
@@ -220,6 +239,20 @@ class TestIntentClassifier:
 
         assert result["user_intent"].intent == "research"
         assert result["depth_decision"].decision == "shallow"
+
+    @pytest.mark.asyncio
+    async def test_run_bare_approval_reply_returns_meta_notice(self, mock_llm):
+        """Bare approve/reject replies should not launch a new research job."""
+        classifier = IntentClassifier(llm=mock_llm)
+        state = ChatResearcherState(messages=[HumanMessage(content="approve")])
+
+        result = await classifier.run(state)
+
+        assert result["user_intent"].intent == "meta"
+        assert "messages" in result
+        assert isinstance(result["messages"][0], AIMessage)
+        assert "no active plan approval" in result["messages"][0].content.lower()
+        mock_llm.ainvoke.assert_not_called()
 
     def test_load_default_prompt_fallback(self, mock_llm):
         """Test _load_default_prompt returns fallback when not found."""

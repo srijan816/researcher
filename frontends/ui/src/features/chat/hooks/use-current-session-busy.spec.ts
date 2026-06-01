@@ -35,6 +35,7 @@ const idleState = {
   isStreaming: false,
   isDeepResearchStreaming: false,
   deepResearchStatus: null,
+  deepResearchOwnerConversationId: 'conv-1',
   currentConversation: { id: 'conv-1', messages: [] },
   pendingInteraction: null,
 }
@@ -92,6 +93,20 @@ describe('useIsCurrentSessionBusy', () => {
 
     const { result } = renderHook(() => useIsCurrentSessionBusy())
     expect(result.current).toBe(true)
+  })
+
+  it('returns false when active deep research belongs to another session', () => {
+    mockUseChatStore.mockImplementation((selector: (state: any) => any) =>
+      selector({
+        ...idleState,
+        isDeepResearchStreaming: true,
+        deepResearchStatus: 'running',
+        deepResearchOwnerConversationId: 'conv-2',
+      })
+    )
+
+    const { result } = renderHook(() => useIsCurrentSessionBusy())
+    expect(result.current).toBe(false)
   })
 
   it('returns false when deep research status is "success" (terminal state)', () => {

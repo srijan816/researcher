@@ -24,13 +24,23 @@ import { TaskCard } from './TaskCard'
  * Uses deepResearchTodos from the store (populated by SSE artifact.update events).
  */
 export const TasksTab: FC = () => {
-  const { deepResearchTodos, deepResearchJobId, currentStatus, isDeepResearchStreaming } =
+  const state =
     useChatStore(useShallow((s) => ({
       deepResearchTodos: s.deepResearchTodos,
       deepResearchJobId: s.deepResearchJobId,
       currentStatus: s.currentStatus,
       isDeepResearchStreaming: s.isDeepResearchStreaming,
+      deepResearchAgents: s.deepResearchAgents,
+      deepResearchToolCalls: s.deepResearchToolCalls,
+      deepResearchFiles: s.deepResearchFiles,
+      deepResearchActivity: s.deepResearchActivity,
     })))
+
+  const deepResearchTodos = Array.isArray(state.deepResearchTodos) ? state.deepResearchTodos : []
+  const deepResearchAgents = Array.isArray(state.deepResearchAgents) ? state.deepResearchAgents : []
+  const deepResearchToolCalls = Array.isArray(state.deepResearchToolCalls) ? state.deepResearchToolCalls : []
+  const deepResearchFiles = Array.isArray(state.deepResearchFiles) ? state.deepResearchFiles : []
+  const { deepResearchJobId, currentStatus, isDeepResearchStreaming, deepResearchActivity } = state
 
   const isEmpty = deepResearchTodos.length === 0
 
@@ -39,6 +49,14 @@ export const TasksTab: FC = () => {
   const totalCount = deepResearchTodos.length
   const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0
   const isWritingReport = isDeepResearchStreaming && currentStatus === 'writing'
+  const runningAgents = deepResearchAgents.filter((agent) => agent.status === 'running').length
+  const completedAgents = deepResearchAgents.filter((agent) => agent.status === 'complete').length
+  const runningTools = deepResearchToolCalls.filter((tool) => tool.status === 'running').length
+  const completedTools = deepResearchToolCalls.filter((tool) => tool.status === 'complete').length
+  const latestFile = deepResearchFiles[deepResearchFiles.length - 1]
+  const showLiveProgress =
+    isDeepResearchStreaming &&
+    (deepResearchAgents.length > 0 || deepResearchToolCalls.length > 0 || deepResearchFiles.length > 0)
 
   return (
     <Flex direction="col" gap="4" className="h-full min-h-0">
@@ -94,6 +112,34 @@ export const TasksTab: FC = () => {
               <Text kind="body/regular/sm" className="text-blue-700 dark:text-blue-300">
                 Writing final report... This may take a few minutes.
               </Text>
+            </Flex>
+          )}
+
+          {showLiveProgress && (
+            <Flex direction="col" gap="1" className="shrink-0 rounded-md border border-base bg-surface-raised px-3 py-2">
+              <Flex align="center" gap="2">
+                <div className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+                <Text kind="body/semibold/sm" className="text-primary">
+                  Live research lanes
+                </Text>
+                <Text kind="body/regular/xs" className="text-subtle">
+                  {runningAgents > 0 ? `${runningAgents} running` : `${completedAgents} complete`}
+                  {deepResearchToolCalls.length > 0 &&
+                    ` • ${completedTools}/${deepResearchToolCalls.length} tools`}
+                  {runningTools > 0 && ` • ${runningTools} active`}
+                </Text>
+              </Flex>
+              {deepResearchActivity && (
+                <Text kind="body/regular/xs" className="text-subtle line-clamp-2">
+                  {deepResearchActivity.message}
+                  {deepResearchActivity.detail ? `: ${deepResearchActivity.detail}` : ''}
+                </Text>
+              )}
+              {latestFile && (
+                <Text kind="body/regular/xs" className="text-tertiary">
+                  Latest artifact: {latestFile.filename}
+                </Text>
+              )}
             </Flex>
           )}
 

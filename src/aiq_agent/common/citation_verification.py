@@ -43,6 +43,9 @@ from urllib.parse import unquote
 from urllib.parse import urlparse
 from urllib.parse import urlunparse
 
+from .source_classification import SourceClass
+from .source_classification import classify_source
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -59,6 +62,7 @@ class SourceEntry:
     citation_key: str | None = None
     source_type: str = ""
     tool_name: str = ""
+    source_class: SourceClass = "unknown"
 
 
 @dataclass
@@ -183,6 +187,8 @@ class SourceRegistry:
         and matching. Both raw and normalized are stored as keys to the same
         entry so we never have duplicate entries and lookups find the tool URL.
         """
+        if entry.url and entry.source_class == "unknown":
+            entry.source_class = classify_source(entry.url)
         added = False
         if entry.url:
             raw = entry.url
@@ -436,16 +442,29 @@ def extract_sources_from_tool_result(
     :func:`aiq_agent.common.data_source_registry.get_source_id_for_tool`,
     but it does not gate the fallback.
     """
+    stripped = content.strip()
+    lowered = stripped.lower()
+    if (
+        not stripped
+        or lowered.startswith("error:")
+        or lowered.startswith("no results found")
+        or lowered.startswith("search returned no results")
+        or "is unavailable because" in lowered
+        or "api_key is not set" in lowered
+        or "api key is not set" in lowered
+    ):
+        return []
+
     name_lower = tool_name.lower()
     for match_fn, parser_fn in _PARSER_REGISTRY:
         if match_fn(name_lower):
             try:
-                return parser_fn(content, tool_name)
+                return _classify_entries(parser_fn(content, tool_name))
             except Exception:
                 logger.warning("Parser failed for tool %s, falling back to generic", tool_name, exc_info=True)
                 break
     # Generic fallback: extract all URLs from content
-    entries = _parse_generic_urls(content, tool_name)
+    entries = _classify_entries(_parse_generic_urls(content, tool_name))
     if entries:
         return entries
 
@@ -453,10 +472,17 @@ def extract_sources_from_tool_result(
     # the tool produced non-empty output. The caller has already decided
     # this tool is eligible to contribute sources (typically by limiting
     # capture to the agent's loaded tool set).
-    if content.strip():
+    if content.strip() and source_id:
         return [SourceEntry(citation_key=tool_name, source_type="tool_result", tool_name=tool_name)]
 
     return []
+
+
+def _classify_entries(entries: list[SourceEntry]) -> list[SourceEntry]:
+    for entry in entries:
+        if entry.url and entry.source_class == "unknown":
+            entry.source_class = classify_source(entry.url)
+    return entries
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +575,12 @@ def _parse_generic_urls(content: str, tool_name: str) -> list[SourceEntry]:
 # it uses citation keys (e.g., "report.pdf, p.15") instead of URLs.
 _KL_CITATION_RE = re.compile(r"^Citation:\s*(.+)$", re.MULTILINE)
 _KL_SOURCE_RE = re.compile(r"^Source:\s*(.+)$", re.MULTILINE)
+_STOOQ_QUOTE_RE = re.compile(r'<quote\s+symbol="([^"]+)">(.*?)</quote>', re.DOTALL | re.IGNORECASE)
+_STOOQ_SOURCE_URL_RE = re.compile(r"<source_url>\s*(https?://.*?)\s*</source_url>", re.DOTALL | re.IGNORECASE)
+_STOOQ_DATE_RE = re.compile(r"<date>\s*([^<]+)\s*</date>", re.IGNORECASE)
+_SEARXNG_DOCUMENT_RE = re.compile(r"<document\b[^>]*>(.*?)</document>", re.DOTALL | re.IGNORECASE)
+_SEARXNG_TITLE_RE = re.compile(r"<title>\s*(.*?)\s*</title>", re.DOTALL | re.IGNORECASE)
+_SEARXNG_URL_RE = re.compile(r"<url>\s*(https?://.*?)\s*</url>", re.DOTALL | re.IGNORECASE)
 
 
 def _parse_knowledge_layer(content: str, tool_name: str) -> list[SourceEntry]:
@@ -572,9 +604,68 @@ def _parse_knowledge_layer(content: str, tool_name: str) -> list[SourceEntry]:
     return entries
 
 
+def _parse_stooq_quote(content: str, tool_name: str) -> list[SourceEntry]:
+    """Parse Stooq quote-tool output into source URLs.
+
+    Quote lookups are legitimate research sources even though the source is
+    tabular market data rather than an article.  Capturing the Stooq quote URL
+    prevents valid quote-backed answers from being rejected as source-less.
+    """
+    entries: list[SourceEntry] = []
+    for quote_match in _STOOQ_QUOTE_RE.finditer(content):
+        symbol = unescape(quote_match.group(1).strip())
+        block = quote_match.group(2)
+        if not symbol or "<error>" in block.lower():
+            continue
+
+        url_match = _STOOQ_SOURCE_URL_RE.search(block)
+        url = unescape(url_match.group(1).strip()) if url_match else f"https://stooq.com/q/?s={symbol.lower()}"
+        date_match = _STOOQ_DATE_RE.search(block)
+        date = unescape(date_match.group(1).strip()) if date_match else None
+        title = f"{symbol.upper()} Quote - Stooq"
+        if date:
+            title = f"{title} ({date})"
+
+        entries.append(SourceEntry(url=url, title=title, source_type="stock_quote", tool_name=tool_name))
+
+    return entries or _parse_generic_urls(content, tool_name)
+
+
+def _parse_searxng_documents(content: str, tool_name: str) -> list[SourceEntry]:
+    """Parse SearXNG/Jina XML-like result blocks.
+
+    Jina-expanded page content often contains hundreds of navigation URLs.
+    Register only the search-result URL for each ``<document>`` block so the
+    citation registry stays compact and report writing does not get trapped
+    paging through giant source lists.
+    """
+    entries: list[SourceEntry] = []
+    seen: set[str] = set()
+    for doc_match in _SEARXNG_DOCUMENT_RE.finditer(content):
+        block = doc_match.group(1)
+        url_match = _SEARXNG_URL_RE.search(block)
+        if not url_match:
+            continue
+        url = unescape(url_match.group(1).strip()).rstrip(".,;)")
+        normalized = _normalize_url(url)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+
+        title = None
+        title_match = _SEARXNG_TITLE_RE.search(block)
+        if title_match:
+            title = unescape(title_match.group(1).strip()) or None
+        entries.append(SourceEntry(url=url, title=title, source_type="web_search", tool_name=tool_name))
+
+    return entries or _parse_generic_urls(content, tool_name)
+
+
 # Register knowledge layer as the only special-case parser.
 # All other tools (Tavily, paper search, etc.) use the generic URL fallback.
 register_source_parser(lambda name: "knowledge" in name, _parse_knowledge_layer)
+register_source_parser(lambda name: "stooq" in name or "stock_quote" in name, _parse_stooq_quote)
+register_source_parser(lambda name: "searxng" in name or "web_search" in name, _parse_searxng_documents)
 
 # ---------------------------------------------------------------------------
 # Citation verification

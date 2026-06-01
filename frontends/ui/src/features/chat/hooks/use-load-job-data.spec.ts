@@ -24,6 +24,7 @@ const mockPatchConversationMessage = vi.fn()
 const mockAddDeepResearchBanner = vi.fn()
 const mockOpenRightPanel = vi.fn()
 const mockSetResearchPanelTab = vi.fn()
+const mockSetState = vi.fn()
 
 let mockStoreState = {
   currentConversation: {
@@ -82,6 +83,7 @@ vi.mock('../store', () => ({
     }),
     {
       getState: vi.fn(() => mockStoreState),
+      setState: (...args: unknown[]) => mockSetState(...args),
     }
   ),
 }))
@@ -132,6 +134,11 @@ describe('useLoadJobData', () => {
       deepResearchJobId: null,
       deepResearchStreamLoaded: false,
     }
+    mockSetState.mockImplementation((updater: unknown) => {
+      if (typeof updater === 'function') {
+        updater(mockStoreState)
+      }
+    })
   })
 
   test('marks unavailable job as failed when report load hits 404', async () => {
@@ -156,5 +163,62 @@ describe('useLoadJobData', () => {
       'agent.deep_research_load_failed',
       'Failed to get job status: 404'
     )
+  })
+
+  test('opens a partial report when replay ends with a model failure after report.md', async () => {
+    mockGetJobStatus.mockResolvedValue({ job_id: 'job-partial', status: 'failure', error: 'Connection error' })
+    mockCreateDeepResearchClient.mockImplementation(({ callbacks }) => ({
+      connect: () => {
+        callbacks.onFileUpdate('report.md', '# Finished report')
+        callbacks.onJobStatus('failure', 'Model call failed after 2 attempts with APIConnectionError')
+      },
+      disconnect: vi.fn(),
+    }))
+
+    const { result } = renderHook(() => useLoadJobData())
+
+    await act(async () => {
+      await result.current.importJobStream('job-partial')
+    })
+
+    expect(mockSetState).toHaveBeenCalled()
+    expect(mockSetLoadedJobId).toHaveBeenCalledWith('job-partial')
+    expect(mockSetResearchPanelTab).toHaveBeenCalledWith('report')
+    expect(mockOpenRightPanel).toHaveBeenCalledWith('research')
+    expect(mockAddErrorCard).not.toHaveBeenCalled()
+  })
+
+  test('preserves replayed event timestamps instead of stamping everything with refresh time', async () => {
+    mockGetJobStatus.mockResolvedValue({ job_id: 'job-history', status: 'success' })
+    mockCreateDeepResearchClient.mockImplementation(({ callbacks }) => ({
+      connect: () => {
+        callbacks.onWorkflowStart('researcher-agent', 'input', 'workflow-event', 'agent-1', '2026-05-28T10:00:00.000Z')
+        callbacks.onToolStart(
+          'advanced_web_search_tool',
+          { query: 'test query' },
+          'researcher-agent',
+          'tool-event',
+          'agent-1',
+          '2026-05-28T10:01:00.000Z'
+        )
+        callbacks.onFileUpdate('report.md', '# Finished report', '2026-05-28T10:02:00.000Z')
+        callbacks.onJobStatus('success')
+      },
+      disconnect: vi.fn(),
+    }))
+
+    const { result } = renderHook(() => useLoadJobData())
+
+    await act(async () => {
+      await result.current.importJobStream('job-history')
+    })
+
+    const setStateUpdater = mockSetState.mock.calls.find(([arg]) => typeof arg === 'function')?.[0]
+    expect(setStateUpdater).toBeInstanceOf(Function)
+
+    const committed = (setStateUpdater as (state: typeof mockStoreState) => Record<string, unknown>)(mockStoreState)
+    expect((committed.deepResearchAgents as Array<{ startedAt: Date }>)[0].startedAt.toISOString()).toBe('2026-05-28T10:00:00.000Z')
+    expect((committed.deepResearchToolCalls as Array<{ timestamp: Date }>)[0].timestamp.toISOString()).toBe('2026-05-28T10:01:00.000Z')
+    expect((committed.deepResearchFiles as Array<{ timestamp: Date }>)[0].timestamp.toISOString()).toBe('2026-05-28T10:02:00.000Z')
   })
 })

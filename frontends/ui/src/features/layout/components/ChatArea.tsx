@@ -22,20 +22,25 @@ import { Document, Lock } from '@/adapters/ui/icons'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore, AgentPrompt, AgentResponse, ErrorBanner, FileUploadBanner, DeepResearchBanner, UserMessage, ChatThinking } from '@/features/chat'
 import type { ChatMessage } from '@/features/chat'
-import { StarfieldAnimation } from '@/shared/components/StarfieldAnimation'
 
 interface ChatAreaProps {
   /** Whether the user is authenticated */
   isAuthenticated?: boolean
   /** Callback when sign in is clicked */
   onSignIn?: () => void
+  /** Whether the empty state is being rendered as the homepage hero */
+  homeExperience?: boolean
 }
 
 /**
  * Main chat area container with scrollable message list.
  * Shows welcome state when no messages exist.
  */
-export const ChatArea: FC<ChatAreaProps> = memo(function ChatArea({ isAuthenticated = false, onSignIn }) {
+export const ChatArea: FC<ChatAreaProps> = memo(function ChatArea({
+  isAuthenticated = false,
+  onSignIn,
+  homeExperience = false,
+}) {
   const { currentConversation, isStreaming, currentUserMessageId } =
     useChatStore(useShallow((s) => ({
       currentConversation: s.currentConversation,
@@ -118,11 +123,19 @@ export const ChatArea: FC<ChatAreaProps> = memo(function ChatArea({ isAuthentica
   return (
     <Flex
       direction="col"
-      className="scrollbar-hide flex-1 overflow-y-auto"
+      className={
+        homeExperience && isEmpty
+          ? 'scrollbar-hide flex-none overflow-visible'
+          : 'scrollbar-hide flex-1 overflow-y-auto'
+      }
       aria-label="Chat messages"
     >
       {isEmpty ? (
-        <WelcomeState isAuthenticated={isAuthenticated} onSignIn={onSignIn} />
+        <WelcomeState
+          isAuthenticated={isAuthenticated}
+          onSignIn={onSignIn}
+          homeExperience={homeExperience}
+        />
       ) : (
         <Flex direction="col" gap="4" className="mx-auto w-full max-w-3xl px-4 pt-4 pb-24">
           {displayableMessages.map((message, index) => {
@@ -265,6 +278,7 @@ const MessageRenderer: FC<MessageRendererProps> = ({
           jobId={message.deepResearchJobId}
           isDeepResearchActive={message.isDeepResearchActive}
           deepResearchJobStatus={message.deepResearchJobStatus}
+          reportContent={message.reportContent}
         />
       )
 
@@ -349,40 +363,37 @@ const MessageRenderer: FC<MessageRendererProps> = ({
 interface WelcomeStateProps {
   isAuthenticated?: boolean
   onSignIn?: () => void
+  homeExperience?: boolean
 }
 
-const WelcomeState: FC<WelcomeStateProps> = ({ isAuthenticated = false, onSignIn }) => {
+const WelcomeState: FC<WelcomeStateProps> = ({
+  isAuthenticated = false,
+  onSignIn,
+  homeExperience = false,
+}) => {
   if (!isAuthenticated) {
     // Logged out state - prompt to sign in
     return (
       <Flex direction="col" align="center" justify="center" className="relative flex-1 p-8">
-        {/* Starfield background */}
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-30">
-          <div className="h-[500px] w-[500px]">
-            <StarfieldAnimation particleCount={300} maxRadius={220} rotationSpeed={0.0005} />
-          </div>
-        </div>
-
-        {/* Content */}
-        <Flex direction="col" align="center" gap="6" className="relative z-10 max-w-md text-center">
-          <span className="text-6xl text-brand">
+        <Flex direction="col" align="center" gap="5" className="relative z-10 max-w-md text-center">
+          <span className="flex h-12 w-12 items-center justify-center rounded-md border border-base bg-surface-raised text-accent-primary">
             <Lock />
           </span>
           <Text kind="title/lg" className="text-primary">
-            Welcome to AI-Q
+            Deep Research
           </Text>
           <Text kind="body/regular/md" className="text-subtle">
-            Sign in with your account to start your AI-powered research session.
+            Sign in to start a focused research session.
           </Text>
           <Button
             kind="primary"
             size="large"
             onClick={onSignIn}
-            aria-label="Sign in with NVIDIA SSO"
+            aria-label="Sign in"
             className="mt-2"
           >
             <Flex align="center" gap="2">
-              <Text kind="label/semibold/md">Sign In with SSO</Text>
+              <Text kind="label/semibold/md">Sign In</Text>
             </Flex>
           </Button>
         </Flex>
@@ -393,23 +404,46 @@ const WelcomeState: FC<WelcomeStateProps> = ({ isAuthenticated = false, onSignIn
 
   // Logged in state - ready to chat
   return (
-    <Flex direction="col" align="center" justify="center" className="relative flex-1 p-8">
-      {/* Starfield background */}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-30">
-        <div className="h-[500px] w-[500px]">
-          <StarfieldAnimation particleCount={300} maxRadius={220} rotationSpeed={0.001} />
-        </div>
-      </div>
-
-      {/* Content */}
-      <Flex direction="col" align="center" gap="4" className="relative z-10 max-w-md text-center">
-        <Text kind="title/lg" className="text-primary">
-          Welcome to AI-Q
+    <Flex
+      direction="col"
+      align="center"
+      justify={homeExperience ? 'end' : 'center'}
+      className={homeExperience ? 'relative flex-none px-4 pb-5 pt-10 sm:pt-14' : 'relative flex-1 p-8'}
+    >
+      <Flex
+        direction="col"
+        align="center"
+        gap={homeExperience ? '3' : '4'}
+        className={`relative z-10 w-full text-center ${
+          homeExperience ? 'max-w-4xl' : 'max-w-2xl'
+        }`}
+      >
+        <Text
+          kind="title/lg"
+          className={homeExperience ? 'deep-home-heading text-primary' : 'text-primary'}
+        >
+          What should we research?
         </Text>
-        <Text kind="body/regular/md" className="text-subtle">
-          Your AI-powered research companion for exploring technical documentation, market analysis,
-          and more.
+        <Text
+          kind="body/regular/md"
+          className={homeExperience ? 'deep-home-subtitle whitespace-normal px-4 text-subtle' : 'text-subtle'}
+        >
+          Ask a question, compare sources, or turn a messy topic into a cited report.
         </Text>
+        <Flex align="center" justify="center" gap="2" className="mt-2 flex-wrap">
+          {['Market map', 'Technical brief', 'Source-backed answer', 'Long-form report'].map((label) => (
+            <span
+              key={label}
+              className={
+                homeExperience
+                  ? 'rounded-md border border-base bg-surface-raised-30 px-3 py-1 text-sm text-subtle'
+                  : 'rounded-md border border-base bg-surface-raised px-3 py-1 text-sm text-subtle'
+              }
+            >
+              {label}
+            </span>
+          ))}
+        </Flex>
       </Flex>
 
     </Flex>

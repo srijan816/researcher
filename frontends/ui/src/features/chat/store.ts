@@ -30,7 +30,9 @@ import type {
   DeepResearchAgent,
   DeepResearchToolCall,
   DeepResearchFile,
+  DeepResearchActivity,
   DeepResearchBannerType,
+  ResearchHistoryJob,
 } from './types'
 import { getErrorMeta } from './lib/error-registry'
 import {
@@ -57,6 +59,45 @@ const isQuotaExceededError = (error: unknown): boolean => {
   if (!(error instanceof Error)) return false
   if (error.name === 'QuotaExceededError') return true
   return /quota|exceeded|storage/i.test(error.message)
+}
+
+const DELETED_RESEARCH_JOBS_KEY = 'deep-research-deleted-job-ids'
+
+const readDeletedResearchJobIds = (): Set<string> => {
+  if (typeof localStorage === 'undefined') return new Set()
+  try {
+    const raw = localStorage.getItem(DELETED_RESEARCH_JOBS_KEY)
+    const ids = raw ? JSON.parse(raw) : []
+    return new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
+const writeDeletedResearchJobIds = (ids: Set<string>): void => {
+  if (typeof localStorage === 'undefined') return
+  localStorage.setItem(DELETED_RESEARCH_JOBS_KEY, JSON.stringify([...ids]))
+}
+
+const rememberDeletedResearchJobs = (jobIds: Iterable<string | undefined>): void => {
+  const ids = readDeletedResearchJobIds()
+  let changed = false
+
+  for (const jobId of jobIds) {
+    if (jobId && !ids.has(jobId)) {
+      ids.add(jobId)
+      changed = true
+    }
+  }
+
+  if (changed) writeDeletedResearchJobIds(ids)
+}
+
+const getResearchJobIdsFromConversation = (conversation?: Conversation | null): string[] => {
+  if (!conversation) return []
+  return conversation.messages
+    .map((message) => message.deepResearchJobId || message.deepResearchBannerData?.jobId)
+    .filter((jobId): jobId is string => Boolean(jobId))
 }
 
 type PersistedChatState = {
@@ -195,6 +236,7 @@ const initialState: ChatState = {
   deepResearchToolCalls: [],
   deepResearchFiles: [],
   deepResearchStreamLoaded: false,
+  deepResearchActivity: null,
   // State for PlanTab
   planMessages: [],
 }
@@ -224,6 +266,162 @@ const generateTitle = (content: string): string => {
   return trimmed.substring(0, maxLength) + '...'
 }
 
+const getResearchConversationId = (jobId: string): string =>
+  `research_${jobId.replace(/[^a-zA-Z0-9_]/g, '_')}`
+
+const isActiveResearchStatus = (status: DeepResearchJobStatus): boolean =>
+  status === 'submitted' || status === 'running'
+
+const parseJobDate = (value?: string | null): Date => {
+  if (!value) return new Date()
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed
+}
+
+const parseStoredDate = (value: Date | string | unknown, fallback = new Date()): Date => {
+  if (value instanceof Date) return value
+  if (typeof value === 'string') {
+    const parsed = new Date(value)
+    return Number.isNaN(parsed.getTime()) ? fallback : parsed
+  }
+  return fallback
+}
+
+const getDateTime = (value: Date | string | unknown): number => {
+  if (value instanceof Date) return value.getTime()
+  if (typeof value === 'string') {
+    const parsed = new Date(value).getTime()
+    return Number.isNaN(parsed) ? 0 : parsed
+  }
+  return 0
+}
+
+const normalizeConversationSnapshot = (
+  conversation: Conversation,
+  fallbackUserId: string | null
+): Conversation | null => {
+  if (!conversation || typeof conversation.id !== 'string') return null
+  const now = new Date()
+  const userId = typeof conversation.userId === 'string' ? conversation.userId : fallbackUserId
+  if (!userId) return null
+  return {
+    ...conversation,
+    userId,
+    title: typeof conversation.title === 'string' ? conversation.title : 'New Session',
+    messages: Array.isArray(conversation.messages)
+      ? conversation.messages.map((message) => ({
+          ...message,
+          timestamp: parseStoredDate(message.timestamp, now),
+        }))
+      : [],
+    createdAt: parseStoredDate(conversation.createdAt, now),
+    updatedAt: parseStoredDate(conversation.updatedAt, now),
+  }
+}
+
+const getResearchStatusMessage = (job: ResearchHistoryJob): string => {
+  const title = job.title || job.input || `Research ${job.job_id.slice(0, 8)}`
+  if (job.status === 'submitted') return `Research is queued: ${title}`
+  if (job.status === 'running') return `Research is running: ${title}`
+  if (job.status === 'success') return `Research completed: ${title}`
+  if (job.status === 'interrupted') return `Research was interrupted: ${title}`
+  return `Research failed: ${title}`
+}
+
+const getResearchErrorData = (job: ResearchHistoryJob): ChatMessage['errorData'] => {
+  if (!job.error) return undefined
+  return {
+    errorCode: job.status === 'interrupted' ? 'agent.response_interrupted' : 'agent.deep_research_failed',
+    errorMessage: job.error,
+  }
+}
+
+const buildResearchHistoryConversation = (job: ResearchHistoryJob, userId: string): Conversation => {
+  const ownerUserId = job.owner_subject || userId
+  const createdAt = parseJobDate(job.created_at)
+  const updatedAt = parseJobDate(job.updated_at || job.created_at)
+  const title = job.title || generateTitle(job.input || `Research ${job.job_id.slice(0, 8)}`)
+  const active = isActiveResearchStatus(job.status)
+
+  return {
+    id: getResearchConversationId(job.job_id),
+    userId: ownerUserId,
+    ownerDisplayName: job.owner_display_name || ownerUserId,
+    title,
+    createdAt,
+    updatedAt,
+    messages: [
+      {
+        id: uuidv4(),
+        role: 'user',
+        content: job.input || title,
+        timestamp: createdAt,
+        messageType: 'user',
+      },
+      {
+        id: uuidv4(),
+        role: 'assistant',
+        content: getResearchStatusMessage(job),
+        timestamp: updatedAt,
+        messageType: 'agent_response',
+        deepResearchJobId: job.job_id,
+        deepResearchJobStatus: job.status,
+        isDeepResearchActive: active,
+        showViewReport: job.status === 'success' || job.has_report,
+        errorData: getResearchErrorData(job),
+      },
+    ],
+  }
+}
+
+const mergeResearchHistoryConversation = (conversation: Conversation, job: ResearchHistoryJob): Conversation => {
+  const updatedAt = parseJobDate(job.updated_at || job.created_at)
+  const active = isActiveResearchStatus(job.status)
+  const title = job.title || conversation.title
+  let patchedTrackingMessage = false
+
+  const messages = conversation.messages.map((message) => {
+    if (message.messageType !== 'agent_response' || message.deepResearchJobId !== job.job_id) {
+      return message
+    }
+
+    patchedTrackingMessage = true
+    return {
+      ...message,
+      content: getResearchStatusMessage(job),
+      timestamp: updatedAt,
+      deepResearchJobStatus: job.status,
+      isDeepResearchActive: active,
+      showViewReport: job.status === 'success' || job.has_report || message.showViewReport,
+      errorData: getResearchErrorData(job) ?? message.errorData,
+    }
+  })
+
+  if (!patchedTrackingMessage) {
+    messages.push({
+      id: uuidv4(),
+      role: 'assistant',
+      content: getResearchStatusMessage(job),
+      timestamp: updatedAt,
+      messageType: 'agent_response',
+      deepResearchJobId: job.job_id,
+      deepResearchJobStatus: job.status,
+      isDeepResearchActive: active,
+      showViewReport: job.status === 'success' || job.has_report,
+      errorData: getResearchErrorData(job),
+    })
+  }
+
+  return {
+    ...conversation,
+    userId: job.owner_subject || conversation.userId,
+    ownerDisplayName: job.owner_display_name || conversation.ownerDisplayName,
+    title,
+    updatedAt,
+    messages,
+  }
+}
+
 /**
  * Helper to update conversation in list
  */
@@ -238,7 +436,7 @@ const getDefaultEnabledDataSourceIds = (): string[] => {
   const layoutStore = useLayoutStore.getState()
   return (
     layoutStore.availableDataSources
-      ?.filter((source) => !source.requires_auth)
+      ?.filter((source) => !source.requires_auth && (source.default_enabled ?? source.id === 'web_search'))
       .map((source) => source.id) ?? []
   )
 }
@@ -246,11 +444,13 @@ const getDefaultEnabledDataSourceIds = (): string[] => {
 const restoreConversationDataSources = (conversation: Conversation): void => {
   const layoutStore = useLayoutStore.getState()
 
-  if (conversation.enabledDataSourceIds) {
+  if (conversation.enabledDataSourceIds && conversation.enabledDataSourceIds.length > 0) {
     const availableIds = new Set(layoutStore.availableDataSources?.map((source) => source.id) ?? [])
     const validIds = conversation.enabledDataSourceIds.filter((id) => availableIds.has(id))
-    layoutStore.setEnabledDataSources(validIds)
-    return
+    if (validIds.length > 0) {
+      layoutStore.setEnabledDataSources(validIds)
+      return
+    }
   }
 
   const defaultIds = getDefaultEnabledDataSourceIds()
@@ -389,6 +589,9 @@ export const useChatStore = create<ChatStore>()(
           set(
             {
               currentConversation: null,
+              isLoading: false,
+              isStreaming: false,
+              currentUserMessageId: null,
               // Clear all ResearchPanel content for draft session
               thinkingSteps: [],
               activeThinkingStepId: null,
@@ -412,6 +615,7 @@ export const useChatStore = create<ChatStore>()(
               activeDeepResearchMessageId: null,
               // Clear HITL pending interaction
               pendingInteraction: null,
+              respondToInteractionFn: null,
             },
             false,
             'startNewSessionDraft'
@@ -488,7 +692,9 @@ export const useChatStore = create<ChatStore>()(
 
           const conversation = conversations.find((c) => c.id === conversationId)
 
-          if (conversation && conversation.userId === currentUserId) {
+          const isAdmin = currentUserId === 'srijan'
+
+          if (conversation && (conversation.userId === currentUserId || isAdmin)) {
             // Save lastEventId if actively streaming before clearing
             if (
               currentConversation &&
@@ -727,46 +933,15 @@ export const useChatStore = create<ChatStore>()(
         },
 
         deleteConversation: (conversationId: string) => {
-          const { currentConversation, conversations, deepResearchJobId, isDeepResearchStreaming } = get()
-
-          // Find the conversation being deleted
+          const { currentConversation, conversations, isDeepResearchStreaming } = get()
           const conversationToDelete = conversations.find((c) => c.id === conversationId)
 
-          // Check if this conversation has an active deep research job
-          // Either from current ephemeral state (if deleting current conversation)
-          // or from persisted message data
-          let jobIdToCancel: string | null = null
-
-          if (currentConversation?.id === conversationId && isDeepResearchStreaming && deepResearchJobId) {
-            // Deleting current conversation with active streaming
-            jobIdToCancel = deepResearchJobId
-          } else if (conversationToDelete) {
-            // Check if conversation has a job ID in its messages
-            const lastAgentResponse = [...conversationToDelete.messages]
-              .reverse()
-              .find((m) => m.messageType === 'agent_response' && m.deepResearchJobId)
-
-            if (lastAgentResponse?.deepResearchJobId &&
-                lastAgentResponse.deepResearchJobStatus !== 'success' &&
-                lastAgentResponse.deepResearchJobStatus !== 'failure' &&
-                lastAgentResponse.deepResearchJobStatus !== 'interrupted') {
-              // Job might still be running
-              jobIdToCancel = lastAgentResponse.deepResearchJobId
-            }
-          }
-
-          // Cancel the job asynchronously (fire and forget)
-          if (jobIdToCancel) {
-            import('@/adapters/api/deep-research-client').then(({ cancelJob }) => {
-              cancelJob(jobIdToCancel!).catch((err) => {
-                console.warn('Failed to cancel deep research job on session delete:', err)
-              })
-            })
-          }
+          rememberDeletedResearchJobs(getResearchJobIdsFromConversation(conversationToDelete))
 
           const updatedConversations = conversations.filter((c) => c.id !== conversationId)
 
-          // If deleting the current conversation with active streaming, clear deep research state
+          // Deleting a local session only detaches this browser from the stream.
+          // The backend job keeps running and will reappear from backend history sync.
           const isCurrentWithActiveResearch = currentConversation?.id === conversationId && isDeepResearchStreaming
 
           set(
@@ -799,51 +974,12 @@ export const useChatStore = create<ChatStore>()(
         },
 
         deleteAllConversations: () => {
-          const { conversations, currentUserId, currentConversation, isDeepResearchStreaming, deepResearchJobId } = get()
+          const { conversations, currentUserId, currentConversation } = get()
 
           if (!currentUserId) return
 
-          // Get all conversations for the current user
-          const userConversations = conversations.filter((c) => c.userId === currentUserId)
-
-          // Collect job IDs from conversations with potentially active deep research
-          const jobIdsToCancel: string[] = []
-
-          // Add current streaming job if active
-          if (isDeepResearchStreaming && deepResearchJobId) {
-            jobIdsToCancel.push(deepResearchJobId)
-          }
-
-          // Check all user conversations for potentially active jobs
-          for (const conv of userConversations) {
-            const lastAgentResponse = [...conv.messages]
-              .reverse()
-              .find((m) => m.messageType === 'agent_response' && m.deepResearchJobId)
-
-            if (lastAgentResponse?.deepResearchJobId &&
-                lastAgentResponse.deepResearchJobStatus !== 'success' &&
-                lastAgentResponse.deepResearchJobStatus !== 'failure' &&
-                lastAgentResponse.deepResearchJobStatus !== 'interrupted' &&
-                !jobIdsToCancel.includes(lastAgentResponse.deepResearchJobId)) {
-              jobIdsToCancel.push(lastAgentResponse.deepResearchJobId)
-            }
-          }
-
-          // Cancel all jobs asynchronously (fire and forget)
-          if (jobIdsToCancel.length > 0) {
-            import('@/adapters/api/deep-research-client').then(async ({ cancelJob }) => {
-              const results = await Promise.allSettled(jobIdsToCancel.map((jobId) => cancelJob(jobId)))
-
-              results.forEach((result, index) => {
-                if (result.status === 'fulfilled') return
-                console.warn(
-                  'Failed to cancel deep research job on delete all sessions:',
-                  jobIdsToCancel[index],
-                  result.reason
-                )
-              })
-            })
-          }
+          const conversationsToDelete = conversations.filter((c) => c.userId === currentUserId)
+          rememberDeletedResearchJobs(conversationsToDelete.flatMap(getResearchJobIdsFromConversation))
 
           // Clear all deep research session storage
           clearAllDeepResearchSessions()
@@ -984,6 +1120,91 @@ export const useChatStore = create<ChatStore>()(
             false,
             'saveDataSourcesToConversation'
           )
+        },
+
+        syncResearchHistory: (jobs: ResearchHistoryJob[]) => {
+          const { conversations, currentConversation, currentUserId } = get()
+          const userId = currentUserId || 'default-user'
+          const deletedJobIds = readDeletedResearchJobIds()
+          const conversationById = new Map(conversations.map((conversation) => [conversation.id, conversation]))
+          const jobConversationIds = new Map<string, string>()
+
+          conversations.forEach((conversation) => {
+            conversation.messages.forEach((message) => {
+              if (message.deepResearchJobId) {
+                jobConversationIds.set(message.deepResearchJobId, conversation.id)
+              }
+            })
+          })
+
+          jobs.filter((job) => isActiveResearchStatus(job.status) || !deletedJobIds.has(job.job_id)).forEach((job) => {
+            const conversationId = jobConversationIds.get(job.job_id) || getResearchConversationId(job.job_id)
+            const existingConversation = conversationById.get(conversationId)
+
+            conversationById.set(
+              conversationId,
+              existingConversation
+                ? mergeResearchHistoryConversation(existingConversation, job)
+                : buildResearchHistoryConversation(job, job.owner_subject || userId)
+            )
+          })
+
+          const updatedConversations = [...conversationById.values()].sort(
+            (a, b) => getDateTime(b.updatedAt) - getDateTime(a.updatedAt)
+          )
+          const updatedCurrentConversation = currentConversation
+            ? updatedConversations.find((conversation) => conversation.id === currentConversation.id) ?? currentConversation
+            : null
+
+          set(
+            {
+              conversations: updatedConversations,
+              currentConversation: updatedCurrentConversation,
+            },
+            false,
+            'syncResearchHistory'
+          )
+        },
+
+        mergeServerConversations: (serverConversations: Conversation[]) => {
+          const { conversations, currentConversation, currentUserId } = get()
+          const isAdmin = currentUserId === 'srijan'
+          const normalized = serverConversations
+            .map((conversation) => normalizeConversationSnapshot(conversation, currentUserId))
+            .filter((conversation): conversation is Conversation => Boolean(conversation))
+            .filter((conversation) => isAdmin || !currentUserId || conversation.userId === currentUserId)
+
+          if (normalized.length === 0) return
+
+          const conversationById = new Map(conversations.map((conversation) => [conversation.id, conversation]))
+          for (const serverConversation of normalized) {
+            const existing = conversationById.get(serverConversation.id)
+            if (!existing || getDateTime(serverConversation.updatedAt) >= getDateTime(existing.updatedAt)) {
+              conversationById.set(serverConversation.id, serverConversation)
+            }
+          }
+
+          const updatedConversations = [...conversationById.values()].sort(
+            (a, b) => getDateTime(b.updatedAt) - getDateTime(a.updatedAt)
+          )
+          const updatedCurrentConversation = currentConversation
+            ? updatedConversations.find((conversation) => conversation.id === currentConversation.id) ?? currentConversation
+            : null
+          const didCurrentConversationChange = updatedCurrentConversation?.id !== currentConversation?.id
+
+          set(
+            {
+              conversations: updatedConversations,
+              currentConversation: updatedCurrentConversation,
+            },
+            false,
+            'mergeServerConversations'
+          )
+
+          if (updatedCurrentConversation && didCurrentConversationChange) {
+            get().restoreSessionState(updatedCurrentConversation)
+            restoreConversationDataSources(updatedCurrentConversation)
+          }
         },
 
         // ============================================================
@@ -1854,6 +2075,7 @@ export const useChatStore = create<ChatStore>()(
               deepResearchToolCalls: [],
               deepResearchFiles: [],
               deepResearchStreamLoaded: false,
+              deepResearchActivity: null,
             },
             false,
             'startDeepResearch'
@@ -2008,14 +2230,15 @@ export const useChatStore = create<ChatStore>()(
               deepResearchTodos: [],
               deepResearchLLMSteps: [],
               deepResearchAgents: [],
-              deepResearchToolCalls: [],
-              deepResearchFiles: [],
-              deepResearchStreamLoaded: false,
-            },
-            false,
-            'clearDeepResearch'
-          )
-        },
+            deepResearchToolCalls: [],
+            deepResearchFiles: [],
+            deepResearchStreamLoaded: false,
+            deepResearchActivity: null,
+          },
+          false,
+          'clearDeepResearch'
+        )
+      },
 
         setLoadedJobId: (jobId: string) => {
           set({ deepResearchJobId: jobId }, false, 'setLoadedJobId')
@@ -2023,6 +2246,35 @@ export const useChatStore = create<ChatStore>()(
 
         setStreamLoaded: (loaded: boolean) => {
           set({ deepResearchStreamLoaded: loaded }, false, 'setStreamLoaded')
+        },
+
+        setDeepResearchActivity: (
+          activity: Omit<DeepResearchActivity, 'timestamp'> | null,
+          options?: { preserveMessage?: boolean }
+        ) => {
+          if (!activity) {
+            set({ deepResearchActivity: null }, false, 'setDeepResearchActivity:clear')
+            return
+          }
+
+          set(
+            (state) => {
+              const previous = state.deepResearchActivity
+              const next =
+                options?.preserveMessage && previous
+                  ? {
+                      ...previous,
+                      timestamp: new Date(),
+                    }
+                  : {
+                      ...activity,
+                      timestamp: new Date(),
+                    }
+              return { deepResearchActivity: next }
+            },
+            false,
+            'setDeepResearchActivity'
+          )
         },
 
         setDeepResearchLastEventId: (eventId: string | null) => {
@@ -2112,9 +2364,9 @@ export const useChatStore = create<ChatStore>()(
             if (get().isDeepResearchStreaming) return
 
             if (currentStatus === 'running' || currentStatus === 'submitted') {
-              // Start with empty arrays and null lastEventId to force a full SSE
-              // replay from the beginning. The catch-up buffer collects all events
-              // and flushes them to the store in a single setState call.
+              // Page/session restoration clears heavy research arrays to keep persisted chat lean.
+              // Replay from the beginning so Tasks/Agents/Tools history is complete after refresh.
+              // In-tab transport reconnects still use deepResearchLastEventId directly from store.
               set(
                 {
                   deepResearchJobId: jobId,
@@ -2312,13 +2564,14 @@ export const useChatStore = create<ChatStore>()(
         // ============================================================
 
         addDeepResearchLLMStep: (
-          step: Omit<DeepResearchLLMStep, 'id' | 'timestamp' | 'isComplete'>
+          step: Omit<DeepResearchLLMStep, 'id' | 'timestamp' | 'isComplete'> & { timestamp?: Date }
         ) => {
           const stepId = uuidv4()
+          const { timestamp, ...stepData } = step
           const newStep: DeepResearchLLMStep = {
-            ...step,
+            ...stepData,
             id: stepId,
-            timestamp: new Date(),
+            timestamp: timestamp ?? new Date(),
             isComplete: false,
           }
 
@@ -2364,13 +2617,14 @@ export const useChatStore = create<ChatStore>()(
         },
 
         addDeepResearchAgent: (
-          agent: Omit<DeepResearchAgent, 'id' | 'startedAt' | 'status'>
+          agent: Omit<DeepResearchAgent, 'id' | 'startedAt' | 'status'> & { startedAt?: Date }
         ) => {
           const agentId = uuidv4()
+          const { startedAt, ...agentData } = agent
           const newAgent: DeepResearchAgent = {
-            ...agent,
+            ...agentData,
             id: agentId,
-            startedAt: new Date(),
+            startedAt: startedAt ?? new Date(),
             status: 'running',
           }
 
@@ -2387,7 +2641,7 @@ export const useChatStore = create<ChatStore>()(
 
         addDeepResearchAgentWithId: (
           id: string,
-          agent: Omit<DeepResearchAgent, 'id' | 'startedAt' | 'status'>
+          agent: Omit<DeepResearchAgent, 'id' | 'startedAt' | 'status'> & { startedAt?: Date }
         ) => {
           const { deepResearchAgents } = get()
 
@@ -2395,10 +2649,11 @@ export const useChatStore = create<ChatStore>()(
             return id
           }
 
+          const { startedAt, ...agentData } = agent
           const newAgent: DeepResearchAgent = {
-            ...agent,
+            ...agentData,
             id,
-            startedAt: new Date(),
+            startedAt: startedAt ?? new Date(),
             status: 'running',
           }
 
@@ -2413,12 +2668,12 @@ export const useChatStore = create<ChatStore>()(
           return id
         },
 
-        completeDeepResearchAgent: (agentId: string, output?: string) => {
+        completeDeepResearchAgent: (agentId: string, output?: string, completedAt?: Date) => {
           set(
             (state) => ({
               deepResearchAgents: state.deepResearchAgents.map((agent) =>
                 agent.id === agentId
-                  ? { ...agent, status: 'complete' as const, output, completedAt: new Date() }
+                  ? { ...agent, status: 'complete' as const, output, completedAt: completedAt ?? new Date() }
                   : agent
               ),
             }),
@@ -2428,13 +2683,14 @@ export const useChatStore = create<ChatStore>()(
         },
 
         addDeepResearchToolCall: (
-          toolCall: Omit<DeepResearchToolCall, 'id' | 'timestamp' | 'status'>
+          toolCall: Omit<DeepResearchToolCall, 'id' | 'timestamp' | 'status'> & { timestamp?: Date }
         ) => {
           const toolCallId = uuidv4()
+          const { timestamp, ...toolCallData } = toolCall
           const newToolCall: DeepResearchToolCall = {
-            ...toolCall,
+            ...toolCallData,
             id: toolCallId,
-            timestamp: new Date(),
+            timestamp: timestamp ?? new Date(),
             status: 'running',
           }
 
@@ -2468,15 +2724,16 @@ export const useChatStore = create<ChatStore>()(
           )
         },
 
-        addDeepResearchFile: (file: Omit<DeepResearchFile, 'id' | 'timestamp'>) => {
+        addDeepResearchFile: (file: Omit<DeepResearchFile, 'id' | 'timestamp'> & { timestamp?: Date }) => {
           const { deepResearchFiles } = get()
+          const { timestamp, ...fileData } = file
           const existingIndex = deepResearchFiles.findIndex((f) => f.filename === file.filename)
 
           if (existingIndex >= 0) {
             // Update existing file with latest content
             const updatedFiles = deepResearchFiles.map((f, i) =>
               i === existingIndex
-                ? { ...f, content: file.content, timestamp: new Date() }
+                ? { ...f, content: fileData.content, timestamp: timestamp ?? new Date() }
                 : f
             )
             set({ deepResearchFiles: updatedFiles }, false, 'addDeepResearchFile:update')
@@ -2485,9 +2742,9 @@ export const useChatStore = create<ChatStore>()(
 
           const fileId = uuidv4()
           const newFile: DeepResearchFile = {
-            ...file,
+            ...fileData,
             id: fileId,
-            timestamp: new Date(),
+            timestamp: timestamp ?? new Date(),
           }
 
           set(
