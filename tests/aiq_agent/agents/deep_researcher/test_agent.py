@@ -1178,6 +1178,37 @@ class TestIsReportComplete:
             assert packet["source_count"] == 1
             assert packet["sources"][0]["claim_ids"] == ["C1"]
 
+    def test_structured_artifact_merge_backfills_section_brief_from_notes(self, mock_llm_provider, real_tool):
+        """Final synthesis should get a clean section brief even when researchers only wrote notes."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool], job_id="job-brief")
+            result = {
+                "messages": [AIMessage(content="")],
+                "files": {
+                    "/shared/topic_notes.txt": {
+                        "content": (
+                            "This researcher note contains sourced findings about the topic. "
+                            "It is long enough to be useful as synthesis input and should be "
+                            "compiled into an intermediate section brief for the final writer. "
+                            "The note includes several concrete findings, caveats, and URLs like "
+                            "https://example.com/report that the source registry can later verify."
+                        ).splitlines()
+                    }
+                },
+            }
+
+            agent._merge_structured_research_artifacts_into_result(result)
+
+            assert "/shared/section_briefs/compiled_from_notes.md" in result["files"]
+            brief = "\n".join(result["files"]["/shared/section_briefs/compiled_from_notes.md"]["content"])
+            assert "Section Briefs Compiled From Research Notes" in brief
+            assert "topic notes.txt" in brief
+
     def test_source_quality_warning_does_not_make_report_incomplete(self, mock_llm_provider, real_tool):
         """M3 path should deliver real reports and let post-run gates carry soft warnings."""
         with patch(

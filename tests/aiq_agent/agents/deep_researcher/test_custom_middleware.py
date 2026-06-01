@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
 import pytest
+from langchain.agents.middleware.types import ModelResponse
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
@@ -32,11 +33,13 @@ from aiq_agent.agents.deep_researcher.custom_middleware import PostWriteReadback
 from aiq_agent.agents.deep_researcher.custom_middleware import SearchBudgetExhaustionRepairMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ThinkingOnlyRepairMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import ToolArgumentNormalizationMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolBudgetMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolResultPruningMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import _budget_key
 from aiq_agent.agents.deep_researcher.custom_middleware import _scoped_limit
+from aiq_agent.agents.deep_researcher.custom_middleware import get_session_budget_snapshot
 from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_exhausted_tools
 from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_plan_validation_failures
 from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_planner_model_turns
@@ -142,6 +145,88 @@ class TestToolNameSanitizationMiddleware:
 
         assert result.result[0].content == "Just text, no tools"
         assert not result.result[0].tool_calls
+
+
+class TestToolArgumentNormalizationMiddleware:
+    """Tests for narrow MiniMax structured-tool argument repair."""
+
+    @pytest.fixture
+    def middleware(self):
+        return ToolArgumentNormalizationMiddleware()
+
+    @pytest.mark.asyncio
+    async def test_normalizes_write_plan_aliases(self, middleware):
+        ai_msg = AIMessage(
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "tc1",
+                    "name": "write_plan",
+                    "input": {
+                        "title": "AI Use Cases",
+                        "sections": ["Executive Summary"],
+                        "search_queries": [
+                            {
+                                "query_string": "AI use cases ROI 2026 analyst report",
+                                "purpose": "Find quantified value evidence",
+                                "section": "Executive Summary",
+                            }
+                        ],
+                        "requirements": "Use authoritative sources",
+                    },
+                }
+            ],
+            tool_calls=[
+                {
+                    "name": "write_plan",
+                    "args": {
+                        "title": "AI Use Cases",
+                        "sections": ["Executive Summary"],
+                        "search_queries": [
+                            {
+                                "query_string": "AI use cases ROI 2026 analyst report",
+                                "purpose": "Find quantified value evidence",
+                                "section": "Executive Summary",
+                            }
+                        ],
+                        "requirements": "Use authoritative sources",
+                    },
+                    "id": "tc1",
+                }
+            ],
+        )
+        handler = AsyncMock(return_value=ModelResponse(result=[ai_msg]))
+        request = MagicMock()
+
+        result = await middleware.awrap_model_call(request, handler)
+
+        args = result.result[0].tool_calls[0]["args"]
+        assert args["report_title"] == "AI Use Cases"
+        assert args["report_toc"] == [{"title": "Executive Summary"}]
+        assert args["queries"][0]["query"] == "AI use cases ROI 2026 analyst report"
+        assert args["queries"][0]["rationale"] == "Find quantified value evidence"
+        assert args["queries"][0]["target_sections"] == ["Executive Summary"]
+        assert args["constraints"] == ["Use authoritative sources"]
+        assert result.result[0].content[0]["input"]["queries"][0]["query"] == "AI use cases ROI 2026 analyst report"
+
+    @pytest.mark.asyncio
+    async def test_normalizes_file_path_alias(self, middleware):
+        ai_msg = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "read_file",
+                    "args": {"path": "/shared/claim_table.json"},
+                    "id": "tc1",
+                }
+            ],
+        )
+        handler = AsyncMock(return_value=ModelResponse(result=[ai_msg]))
+        request = MagicMock()
+
+        result = await middleware.awrap_model_call(request, handler)
+
+        assert result.result[0].tool_calls[0]["args"]["file_path"] == "/shared/claim_table.json"
 
 
 class TestSourceRegistryMiddleware:
@@ -340,6 +425,22 @@ class TestToolBudgetMiddleware:
             assert first.content == "ok"
             assert "GLOBAL_SEARCH_BUDGET_EXHAUSTED" in second.content
             assert third.content == "ok"
+        finally:
+            reset_session_tool_counts(counts_token)
+            reset_session_tool_limits(limits_token)
+            reset_session_exhausted_tools(exhausted_token)
+
+    def test_session_budget_snapshot_reports_remaining_counts(self):
+        counts_token = set_session_tool_counts({"researcher:search": 3})
+        limits_token = set_session_tool_limits({"researcher:search": 8})
+        exhausted_token = set_session_exhausted_tools({"planner:search"})
+        try:
+            snapshot = get_session_budget_snapshot()
+
+            budgets = {entry["key"]: entry for entry in snapshot["budgets"]}
+            assert budgets["researcher:search"]["used"] == 3
+            assert budgets["researcher:search"]["remaining"] == 5
+            assert snapshot["exhausted"] == ["planner:search"]
         finally:
             reset_session_tool_counts(counts_token)
             reset_session_tool_limits(limits_token)

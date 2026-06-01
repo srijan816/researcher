@@ -167,6 +167,36 @@ def _scoped_limit(active_limits: dict[str, int], tool_name: str, scope: str | No
     return active_limits.get(tool_name)
 
 
+def get_session_budget_snapshot() -> dict[str, object]:
+    """Return a JSON-serializable view of current per-run tool budgets."""
+
+    limits = dict(_session_tool_limits.get() or {})
+    counts = dict(_session_tool_counts.get() or {})
+    exhausted = sorted(_session_exhausted_tools.get() or set())
+    entries: list[dict[str, object]] = []
+    for key in sorted(set(limits) | set(counts)):
+        limit = limits.get(key)
+        used = counts.get(key, 0)
+        remaining = None if limit is None else max(0, int(limit) - int(used))
+        share_used = None if not limit else min(1.0, round(int(used) / max(1, int(limit)), 3))
+        entries.append(
+            {
+                "key": key,
+                "used": used,
+                "limit": limit,
+                "remaining": remaining,
+                "share_used": share_used,
+                "exhausted": key in exhausted,
+            }
+        )
+    return {
+        "budgets": entries,
+        "exhausted": exhausted,
+        "planner_model_turns": _session_planner_model_turns.get() or 0,
+        "plan_validation_failures": _session_plan_validation_failures.get() or 0,
+    }
+
+
 # Path to this agent's prompts directory
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
@@ -424,6 +454,168 @@ class ToolNameSanitizationMiddleware(AgentMiddleware):
                 new_result.append(new_msg)
             else:
                 new_result.append(msg)
+
+        return ModelResponse(result=new_result, structured_response=response.structured_response)
+
+
+class ToolArgumentNormalizationMiddleware(AgentMiddleware):
+    """Repair narrow, known MiniMax structured-tool argument shape mistakes.
+
+    This is intentionally conservative. It only normalizes aliases and simple
+    string/list wrappers for tools we own or for built-in filesystem tools with
+    stable argument names. Anything ambiguous is left for schema validation so
+    real tool-contract bugs stay visible.
+    """
+
+    _FILE_TOOLS = {"read_file", "write_file", "edit_file"}
+
+    @staticmethod
+    def _as_list(value) -> list:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return [value]
+
+    @classmethod
+    def _normalize_file_tool_args(cls, args: dict) -> dict:
+        normalized = dict(args)
+        if "file_path" not in normalized:
+            for alias in ("path", "filename", "file"):
+                if alias in normalized:
+                    normalized["file_path"] = normalized[alias]
+                    break
+        return normalized
+
+    @classmethod
+    def _normalize_plan_query(cls, value) -> dict:
+        if isinstance(value, str):
+            return {"query": value}
+        if not isinstance(value, dict):
+            return {"query": str(value)}
+
+        query = dict(value)
+        if "query" not in query:
+            for alias in ("query_string", "search_query", "question", "topic"):
+                if alias in query:
+                    query["query"] = query[alias]
+                    break
+        if "rationale" not in query:
+            for alias in ("purpose", "objective", "reason"):
+                if alias in query:
+                    query["rationale"] = query[alias]
+                    break
+        if "target_sections" not in query:
+            for alias in ("target_section", "sections", "section"):
+                if alias in query:
+                    query["target_sections"] = cls._as_list(query[alias])
+                    break
+        if "target_claims" not in query:
+            for alias in ("claims", "target_claim", "target_claim_questions"):
+                if alias in query:
+                    query["target_claims"] = cls._as_list(query[alias])
+                    break
+        if "target_claim_ids" not in query:
+            for alias in ("claim_ids", "target_ids"):
+                if alias in query:
+                    query["target_claim_ids"] = [str(item) for item in cls._as_list(query[alias])]
+                    break
+        return query
+
+    @classmethod
+    def _normalize_toc_item(cls, value) -> dict:
+        if isinstance(value, str):
+            return {"title": value}
+        if not isinstance(value, dict):
+            return {"title": str(value)}
+        item = dict(value)
+        if "title" not in item:
+            for alias in ("heading", "name", "section_title"):
+                if alias in item:
+                    item["title"] = item[alias]
+                    break
+        return item
+
+    @classmethod
+    def _normalize_write_plan_args(cls, args: dict) -> dict:
+        normalized = dict(args)
+        alias_map = {
+            "report_title": ("title", "research_title"),
+            "report_toc": ("toc", "sections", "report_sections", "outline"),
+            "queries": ("research_queries", "search_queries", "query_plan"),
+            "constraints": ("acceptance_criteria", "requirements", "rules"),
+            "task_analysis": ("analysis",),
+        }
+        for canonical, aliases in alias_map.items():
+            if canonical in normalized:
+                continue
+            for alias in aliases:
+                if alias in normalized:
+                    normalized[canonical] = normalized[alias]
+                    break
+
+        if "report_toc" in normalized:
+            normalized["report_toc"] = [
+                cls._normalize_toc_item(item) for item in cls._as_list(normalized["report_toc"])
+            ]
+        if "queries" in normalized:
+            normalized["queries"] = [cls._normalize_plan_query(item) for item in cls._as_list(normalized["queries"])]
+        if "constraints" in normalized and not isinstance(normalized["constraints"], list):
+            normalized["constraints"] = cls._as_list(normalized["constraints"])
+        return normalized
+
+    @classmethod
+    def _normalize_args(cls, tool_name: str, args) -> dict | None:
+        if not isinstance(args, dict):
+            return None
+        if tool_name == "write_plan":
+            return cls._normalize_write_plan_args(args)
+        if tool_name in cls._FILE_TOOLS:
+            return cls._normalize_file_tool_args(args)
+        return args
+
+    async def awrap_model_call(self, request, handler):
+        response = await handler(request)
+
+        needs_fix = False
+        for msg in response.result:
+            if not isinstance(msg, AIMessage) or not msg.tool_calls:
+                continue
+            for tc in msg.tool_calls:
+                normalized_args = self._normalize_args(tc.get("name", ""), tc.get("args"))
+                if normalized_args is not None and normalized_args != tc.get("args"):
+                    needs_fix = True
+                    break
+            if needs_fix:
+                break
+        if not needs_fix:
+            return response
+
+        new_result = []
+        for msg in response.result:
+            if not isinstance(msg, AIMessage) or not msg.tool_calls:
+                new_result.append(msg)
+                continue
+            new_tool_calls = []
+            args_map = {}
+            for tc in msg.tool_calls:
+                normalized_args = self._normalize_args(tc.get("name", ""), tc.get("args"))
+                if normalized_args is None:
+                    new_tool_calls.append(tc)
+                    continue
+                updated = {**tc, "args": normalized_args}
+                new_tool_calls.append(updated)
+                if normalized_args != tc.get("args") and tc.get("id"):
+                    args_map[tc["id"]] = normalized_args
+                    logger.info("Normalized arguments for tool %s", tc.get("name", ""))
+            new_result.append(
+                msg.model_copy(
+                    update={
+                        "content": _sync_content_tool_use_blocks(msg.content, new_tool_calls, args_map=args_map),
+                        "tool_calls": new_tool_calls,
+                    }
+                )
+            )
 
         return ModelResponse(result=new_result, structured_response=response.structured_response)
 

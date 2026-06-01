@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from deepagents import create_deep_agent
+from deepagents.backends import StateBackend
 from langchain.agents.middleware import ModelRetryMiddleware
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
@@ -51,10 +52,12 @@ from .custom_middleware import SequentialSearchMiddleware
 from .custom_middleware import SourceRegistryMiddleware
 from .custom_middleware import TaskBatchLimitMiddleware
 from .custom_middleware import ThinkingOnlyRepairMiddleware
+from .custom_middleware import ToolArgumentNormalizationMiddleware
 from .custom_middleware import ToolBudgetMiddleware
 from .custom_middleware import ToolNameSanitizationMiddleware
 from .custom_middleware import ToolResultPruningMiddleware
 from .custom_middleware import ToolRetryMiddleware
+from .custom_middleware import get_session_budget_snapshot
 from .custom_middleware import reset_session_exhausted_tools
 from .custom_middleware import reset_session_parallel_tool_limits
 from .custom_middleware import reset_session_plan_validation_failures
@@ -301,6 +304,67 @@ class DeepResearcherAgent:
             report = evaluate_url_source_quality(list(dict.fromkeys(urls)), tier="deep")
             return report.model_dump_json(indent=2)
 
+        @tool
+        def get_research_progress_snapshot() -> str:
+            """Return live budget, source, and structured-artifact progress.
+
+            Call this between researcher batches and before final synthesis.
+            Use it to decide whether to launch a gap-filling task, move to
+            synthesis, or acknowledge source/claim limitations.
+            """
+            backend = StateBackend()
+
+            def _glob_count(pattern: str) -> int:
+                try:
+                    result = backend.glob(pattern)
+                    if isinstance(result, list):
+                        return len(result)
+                    matches = getattr(result, "matches", None)
+                    if isinstance(matches, list):
+                        return len(matches)
+                    paths = getattr(result, "paths", None)
+                    if isinstance(paths, list):
+                        return len(paths)
+                except Exception:
+                    logger.debug("Unable to glob progress pattern %s", pattern, exc_info=True)
+                return 0
+
+            def _read_present(path: str) -> bool:
+                try:
+                    result = backend.read(path)
+                    if getattr(result, "error", None):
+                        return False
+                    content = getattr(getattr(result, "file_data", None), "content", None)
+                    if isinstance(content, list):
+                        return bool("".join(str(part) for part in content).strip())
+                    return bool(str(content or "").strip())
+                except Exception:
+                    logger.debug("Unable to read progress path %s", path, exc_info=True)
+                    return False
+
+            sources = registry_middleware._get_registry().all_sources()
+            urls = [source.url for source in sources if source.url]
+            source_quality = (
+                evaluate_url_source_quality(list(dict.fromkeys(urls)), tier="deep").model_dump()
+                if urls
+                else {"overall_status": "fail", "failure_reasons": ["no_sources_captured"]}
+            )
+            snapshot = {
+                "budget": get_session_budget_snapshot(),
+                "sources": {
+                    "captured_urls": len(set(urls)),
+                    "quality": source_quality,
+                },
+                "artifacts": {
+                    "claim_fragments": _glob_count("/shared/claims/claims_*.json"),
+                    "extract_fragments": _glob_count("/shared/extracts/*.json"),
+                    "section_briefs": _glob_count("/shared/section_briefs/*.md"),
+                    "claim_table_present": _read_present("/shared/claim_table.json"),
+                    "evidence_packet_present": _read_present("/shared/evidence_packet.json"),
+                },
+            }
+            return json.dumps(snapshot, indent=2, ensure_ascii=False)
+
         write_plan_tool = create_write_plan_tool()
         # M3 has native thinking; exposing an additional planner `think` tool
         # caused costly detours after "I have enough grounding" instead of a
@@ -313,6 +377,7 @@ class DeepResearcherAgent:
             write_plan_tool,
             get_verified_sources,
             get_source_quality_snapshot,
+            get_research_progress_snapshot,
         ]
         self.all_tools = [*self.orchestrator_tools, *self.tools]
 
@@ -323,6 +388,7 @@ class DeepResearcherAgent:
         middleware = [
             EmptyContentFixMiddleware(),
             ToolNameSanitizationMiddleware(valid_tool_names=[t.name for t in self.all_tools]),
+            ToolArgumentNormalizationMiddleware(),
             PlanFileValidationMiddleware(),
             ArtifactWriteValidationMiddleware(),
             PostWriteReadbackGuardMiddleware(),
@@ -1609,7 +1675,90 @@ class DeepResearcherAgent:
         """Build deterministic shared artifacts from researcher fragments."""
         self._merge_claim_fragments_into_result(result, job_id=self.job_id)
         self._merge_fact_ledger_fragments_into_result(result)
+        self._ensure_section_briefs_into_result(result)
         self._build_evidence_packet_into_result(result)
+
+    @staticmethod
+    def _is_section_brief_path(path: str) -> bool:
+        normalized = str(path).lstrip("/").lower()
+        name = Path(normalized).name
+        return normalized.startswith("shared/section_briefs/") and name.endswith(".md")
+
+    def _ensure_section_briefs_into_result(self, result: dict | Any) -> bool:
+        """Create a minimal synthesis-ready section brief when researchers only wrote notes.
+
+        The researcher prompt asks every task to write section briefs, but M3 can
+        occasionally stop after narrative notes. The final writer should still
+        get a clean intermediate layer instead of raw, scattered note files, so
+        this deterministic backfill creates one compact bridge file.
+        """
+        files = dict(self._extract_files(result))
+        if not files:
+            return False
+
+        existing_briefs = [
+            self._coerce_file_content(value).strip()
+            for path, value in files.items()
+            if self._is_section_brief_path(str(path))
+        ]
+        if any(len(content) >= 200 for content in existing_briefs):
+            return False
+
+        ignored_fragments = (
+            "plan.json",
+            "report.md",
+            "claim_table.json",
+            "evidence_packet.json",
+            "fact_ledger.json",
+            "resume_sources",
+            "resume_instructions",
+            "skill.md",
+        )
+        note_blocks: list[tuple[str, str]] = []
+        for path, value in files.items():
+            normalized = str(path).lstrip("/")
+            name_lower = normalized.lower()
+            if any(part in name_lower for part in ignored_fragments):
+                continue
+            if name_lower.startswith("shared/claims/") or name_lower.startswith("shared/extracts/"):
+                continue
+            if not (name_lower.endswith(".txt") or name_lower.endswith(".md")):
+                continue
+            content = self._coerce_file_content(value).strip()
+            if len(content) < 200 or self._looks_like_provider_payload(content):
+                continue
+            if self._is_unavailable_source_context(content):
+                continue
+            note_blocks.append((self._display_shared_path(normalized), content))
+
+        if not note_blocks:
+            return False
+
+        sections = [
+            "# Section Briefs Compiled From Research Notes",
+            "",
+            "This deterministic brief was created because no researcher-specific section brief was present. "
+            "Use it as a synthesis bridge, then ground factual claims in `/shared/evidence_packet.json`, "
+            "`/shared/claim_table.json`, and verified sources.",
+        ]
+        for path, content in note_blocks[:8]:
+            title = Path(path).name.replace("_", " ").replace("-", " ")
+            sections.extend(
+                [
+                    "",
+                    f"## {title}",
+                    "",
+                    self._truncate_artifact(content, limit=8000),
+                ]
+            )
+
+        content = "\n".join(sections).strip() + "\n"
+        entry = self._file_state_entry(content)
+        files["/shared/section_briefs/compiled_from_notes.md"] = entry
+        files["shared/section_briefs/compiled_from_notes.md"] = entry
+        self._set_files(result, files)
+        logger.info("Backfilled /shared/section_briefs/compiled_from_notes.md from %d note file(s)", len(note_blocks))
+        return True
 
     @staticmethod
     def _is_extract_fragment_path(path: str) -> bool:
