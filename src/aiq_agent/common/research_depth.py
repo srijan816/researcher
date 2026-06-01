@@ -97,7 +97,8 @@ class ResearchDepthConfig:
             f"{self.max_researcher_tasks} researcher tasks, batch at most "
             f"{self.max_parallel_researcher_tasks} at a time, and allow up to "
             f"{self.search_calls_per_task} search calls per researcher task. "
-            f"Planner may use up to {self.planner_search_limit} separate search calls for grounding. "
+            f"Planner may use up to {self.planner_search_limit} search call(s) only when ambiguity "
+            "blocks decomposition. "
             "Keep an explicit reserve for gap-filling and synthesis instead of spending the entire budget "
             "in the early search phase."
         )
@@ -126,7 +127,7 @@ RESEARCH_DEPTH_CONFIGS: dict[ResearchDepthTier, ResearchDepthConfig] = {
         max_researcher_tasks=5,
         max_parallel_researcher_tasks=3,
         search_calls_per_task=12,
-        planner_search_limit=7,
+        planner_search_limit=1,
         advanced_web_search_limit=64,
         web_search_limit=20,
         stock_quote_limit=8,
@@ -143,7 +144,7 @@ RESEARCH_DEPTH_CONFIGS: dict[ResearchDepthTier, ResearchDepthConfig] = {
         max_researcher_tasks=5,
         max_parallel_researcher_tasks=3,
         search_calls_per_task=12,
-        planner_search_limit=7,
+        planner_search_limit=1,
         advanced_web_search_limit=64,
         web_search_limit=20,
         stock_quote_limit=8,
@@ -159,7 +160,7 @@ RESEARCH_DEPTH_CONFIGS: dict[ResearchDepthTier, ResearchDepthConfig] = {
         max_researcher_tasks=10,
         max_parallel_researcher_tasks=3,
         search_calls_per_task=14,
-        planner_search_limit=8,
+        planner_search_limit=2,
         advanced_web_search_limit=140,
         web_search_limit=48,
         stock_quote_limit=16,

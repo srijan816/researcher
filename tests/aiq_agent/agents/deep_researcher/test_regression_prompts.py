@@ -103,3 +103,13 @@ def test_prompts_require_generic_task_budget_allocation():
     assert "sum to exactly 100" in planner_prompt
     assert "Search budget: N search calls for this task" in orchestrator_prompt
     assert "Treat that per-task search budget as a hard cap" in researcher_prompt
+
+
+def test_planner_prompt_treats_search_as_optional_not_required():
+    planner_prompt = Path("src/aiq_agent/agents/deep_researcher/prompts/planner.j2").read_text()
+
+    assert "Planning is a compact contract, not a research phase" in planner_prompt
+    assert "Search is optional, not required" in planner_prompt
+    assert "do not need to be grounded by planner search" in planner_prompt
+    assert "Base this list on what you discovered during your planning searches" not in planner_prompt
+    assert "`think`: record your thoughts" not in planner_prompt

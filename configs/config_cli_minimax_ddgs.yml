@@ -250,9 +250,11 @@ functions:
   advanced_web_search_tool:
     _type: searxng_jina_web_search
     searxng_url: ${SEARXNG_URL:-http://localhost:8080}
+    websurfx_url: ${WEBSURFX_URL:-http://localhost:8081}
+    websurfx_engines: ${WEBSURFX_ENGINES:-Brave,Wikipedia}
     max_results: 20
     max_content_length: 2500
-    discovery_backend: hybrid
+    discovery_backend: ${AIQ_ADVANCED_DISCOVERY_BACKEND:-hybrid}
     engines: bing
     ddgs_backend: auto
     ddgs_max_results: 25

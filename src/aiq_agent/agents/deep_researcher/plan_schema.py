@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 from typing import Literal
 
@@ -62,6 +63,44 @@ def _textish(value: Any, *keys: str) -> str | None:
     return None
 
 
+def _shorten_text(value: str, limit: int) -> str:
+    """Return compact single-line text suitable for plan artifacts."""
+
+    value = " ".join(str(value).split()).strip()
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip(" .,;:") + "…"
+
+
+def _compact_mapping(value: Mapping[str, Any], *, text_limit: int = 500) -> dict[str, Any]:
+    """Recursively compact provider-generated plan metadata.
+
+    The executable plan should be a contract for downstream research, not a
+    bulky evidence artifact. Tool-call arguments occasionally contain long
+    prose fields that make `write_plan` fragile and slow; compacting here keeps
+    the typed tool tolerant without asking the model to retry.
+    """
+
+    compacted: dict[str, Any] = {}
+    for key, item in value.items():
+        if isinstance(item, str):
+            compacted[str(key)] = _shorten_text(item, text_limit)
+        elif isinstance(item, Mapping):
+            compacted[str(key)] = _compact_mapping(item, text_limit=text_limit)
+        elif isinstance(item, list):
+            compacted[str(key)] = [
+                _compact_mapping(child, text_limit=text_limit)
+                if isinstance(child, Mapping)
+                else _shorten_text(child, text_limit)
+                if isinstance(child, str)
+                else child
+                for child in item[:20]
+            ]
+        else:
+            compacted[str(key)] = item
+    return compacted
+
+
 class PlanTargetClaim(BaseModel):
     """A compact claim or question a researcher should resolve."""
 
@@ -89,7 +128,7 @@ class PlanTargetClaim(BaseModel):
         value = value.strip()
         if len(value) < 6:
             raise ValueError("claim must be meaningful")
-        return value
+        return _shorten_text(value, 360)
 
 
 class PlanTocItem(BaseModel):
@@ -146,7 +185,7 @@ class PlanConstraint(BaseModel):
         value = value.strip()
         if len(value) < 8:
             raise ValueError("constraint must be meaningful")
-        return value
+        return _shorten_text(value, 500)
 
 
 class PlanOutputStyle(BaseModel):
@@ -184,7 +223,33 @@ class PlanTaskAnalysis(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_wrapped_lists(cls, value: Any) -> Any:
-        return _unwrap_item(value)
+        value = _unwrap_item(value)
+        if not isinstance(value, dict):
+            return value
+
+        normalized = dict(value)
+        source_strategy = normalized.get("source_strategy")
+        if isinstance(source_strategy, str):
+            normalized["source_strategy"] = {"summary": _shorten_text(source_strategy, 800)}
+
+        claim_profile = normalized.get("claim_profile")
+        if isinstance(claim_profile, str):
+            normalized["claim_profile"] = {"summary": _shorten_text(claim_profile, 800)}
+
+        entities = normalized.get("entities")
+        if isinstance(entities, dict):
+            entity_rows: list[dict[str, Any]] = []
+            for centrality, names in entities.items():
+                for name in _as_list(names):
+                    if isinstance(name, dict):
+                        row = dict(name)
+                        row.setdefault("centrality", str(centrality))
+                        entity_rows.append(row)
+                    else:
+                        entity_rows.append({"name": str(name), "centrality": str(centrality)})
+            normalized["entities"] = entity_rows
+
+        return normalized
 
     @field_validator("entities", mode="before")
     @classmethod
@@ -225,12 +290,17 @@ class PlanQuery(BaseModel):
         value = " ".join(value.split()).strip()
         if len(value) < 8:
             raise ValueError("query must be meaningful")
-        return value
+        return _shorten_text(value, 700)
 
     @field_validator("target_claims", "target_claim_ids", "target_sections", mode="before")
     @classmethod
     def _query_lists_are_listish(cls, value: Any) -> list[Any]:
         return _as_list(value)
+
+    @field_validator("rationale")
+    @classmethod
+    def _rationale_is_compact(cls, value: str) -> str:
+        return _shorten_text(value, 360)
 
 
 class WritePlanInput(BaseModel):
@@ -383,7 +453,7 @@ def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
         if isinstance(input_data.task_analysis, PlanTaskAnalysis)
         else PlanTaskAnalysis.model_validate(input_data.task_analysis or {})
     )
-    task_analysis_dict = task_analysis.model_dump()
+    task_analysis_dict = _compact_mapping(task_analysis.model_dump(), text_limit=800)
     task_analysis_dict.setdefault("source_strategy", {})
     if not task_analysis_dict["source_strategy"]:
         task_analysis_dict["source_strategy"] = _source_strategy_for_queries()
@@ -437,6 +507,10 @@ def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
         query_dict = query.model_dump()
         query_dict["task_id"] = query_dict.get("task_id") or f"Q{index}"
         query_dict["budget_percent"] = normalized_budget_percents[index - 1]
+        if query_dict.get("target_sections"):
+            query_dict["target_sections"] = [
+                _shorten_text(str(section), 160) for section in query_dict["target_sections"][:8]
+            ]
         if not query_dict.get("target_sections"):
             query_dict["target_sections"] = section_titles[:]
         if not query_dict.get("target_claims"):
@@ -451,6 +525,7 @@ def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
             ]
             query_dict["target_claim_ids"] = [claim_id]
         elif not query_dict.get("target_claim_ids"):
+            query_dict["target_claims"] = query_dict["target_claims"][:3]
             for claim_index, claim in enumerate(query_dict["target_claims"], start=1):
                 if isinstance(claim, dict) and not claim.get("claim_id"):
                     claim["claim_id"] = f"C{index}.{claim_index}"
@@ -459,16 +534,22 @@ def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
                 for claim in query_dict["target_claims"]
                 if isinstance(claim, dict) and claim.get("claim_id")
             ]
+        else:
+            query_dict["target_claims"] = query_dict["target_claims"][:3]
         queries.append(query_dict)
 
     plan = {
         "task_analysis": task_analysis_dict,
         "report_title": input_data.report_title,
         "report_toc": toc,
-        "constraints": [_constraint_to_dict(constraint) for constraint in input_data.constraints],
+        "constraints": [_constraint_to_dict(constraint) for constraint in input_data.constraints[:12]],
         "output_style": output_style.model_dump(),
         "queries": queries,
     }
     if input_data.fact_ledger_targets:
-        plan["fact_ledger_targets"] = input_data.fact_ledger_targets
+        fact_targets = _unwrap_item(input_data.fact_ledger_targets)
+        if isinstance(fact_targets, Mapping):
+            plan["fact_ledger_targets"] = _compact_mapping(fact_targets, text_limit=300)
+        else:
+            plan["fact_ledger_targets"] = fact_targets
     return plan

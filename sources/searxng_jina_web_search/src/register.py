@@ -93,9 +93,22 @@ class SearXNGJinaWebSearchToolConfig(FunctionBaseConfig, name="searxng_jina_web_
         le=8,
         description="Maximum SearXNG result pages to fetch concurrently.",
     )
-    discovery_backend: Literal["searxng", "ddgs", "hybrid"] = Field(
+    discovery_backend: Literal["searxng", "ddgs", "hybrid", "websurfx", "websurfx_hybrid"] = Field(
         default="searxng",
-        description="URL discovery backend. Hybrid queries SearXNG and DDGS concurrently, then deduplicates/ranks.",
+        description=(
+            "URL discovery backend. Hybrid queries SearXNG and DDGS concurrently; "
+            "websurfx queries a Websurfx JSON endpoint; websurfx_hybrid queries all three."
+        ),
+    )
+    websurfx_url: str = Field(
+        default="http://localhost:8081",
+        description="Base URL of the Websurfx instance when discovery_backend uses Websurfx.",
+    )
+    websurfx_engines: str = Field(
+        default="",
+        description=(
+            "Optional Websurfx-specific engine list. When blank, Websurfx reuses the generic engines setting."
+        ),
     )
     ddgs_backend: str = Field(
         default="auto",
@@ -250,9 +263,33 @@ def _result_rank(result: dict, query: str) -> float:
         score += min(float(result.get("score") or 0.0), 10.0) / 5.0
     except (TypeError, ValueError):
         pass
-    if result.get("_discovery_backend") == "searxng":
+    if result.get("_discovery_backend") in {"searxng", "websurfx"}:
         score += 0.5
     return score
+
+
+def _normalize_websurfx_result(item: dict) -> dict | None:
+    """Map Websurfx camelCase JSON results into the SearXNG-shaped result dict."""
+    url = str(item.get("url") or "").strip()
+    if not url:
+        return None
+    engines = item.get("engine") or item.get("engines") or []
+    if isinstance(engines, str):
+        engines = [engines]
+    if not isinstance(engines, list):
+        engines = []
+    try:
+        score = float(item.get("relevanceScore") or item.get("relevance_score") or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    return {
+        "title": str(item.get("title") or url),
+        "url": url,
+        "content": str(item.get("description") or item.get("content") or ""),
+        "engines": [f"websurfx:{engine}" for engine in engines] or ["websurfx"],
+        "score": score,
+        "_discovery_backend": "websurfx",
+    }
 
 
 async def _scrapling_extract(url: str, tool_config: SearXNGJinaWebSearchToolConfig) -> str:
@@ -282,6 +319,7 @@ async def _scrapling_extract(url: str, tool_config: SearXNGJinaWebSearchToolConf
 @register_function(config_type=SearXNGJinaWebSearchToolConfig)
 async def searxng_jina_web_search(tool_config: SearXNGJinaWebSearchToolConfig, builder: Builder):
     configured_url = os.environ.get("SEARXNG_URL") or tool_config.searxng_url
+    configured_websurfx_url = os.environ.get("WEBSURFX_URL") or tool_config.websurfx_url
 
     async def _fetch_text(url: str) -> str:
         loop = asyncio.get_event_loop()
@@ -379,11 +417,53 @@ async def searxng_jina_web_search(tool_config: SearXNGJinaWebSearchToolConfig, b
                 logger.warning("DDGS discovery failed for %r: %s", query, exc)
                 return []
 
+        async def _fetch_websurfx_page(page_no: int) -> list[dict]:
+            websurfx_params = {
+                "q": query,
+                "page": page_no,
+                "safesearch": tool_config.safe_search,
+                "json": "true",
+            }
+            websurfx_engines = (tool_config.websurfx_engines or tool_config.engines or "").strip()
+            if websurfx_engines:
+                websurfx_params["engines"] = websurfx_engines
+            search_url = f"{configured_websurfx_url.rstrip('/')}/search?{urlencode(websurfx_params)}"
+            payload = await _fetch_text(search_url)
+            data = json.loads(payload)
+            raw_results = data.get("results") if isinstance(data, dict) else None
+            if not isinstance(raw_results, list):
+                return []
+            normalized = []
+            for item in raw_results:
+                if isinstance(item, dict):
+                    result = _normalize_websurfx_result(item)
+                    if result:
+                        normalized.append(result)
+            return normalized
+
+        async def _fetch_websurfx_results() -> list[dict]:
+            page_semaphore = asyncio.Semaphore(tool_config.search_page_concurrency)
+
+            async def _guarded_page(page_no: int) -> list[dict]:
+                async with page_semaphore:
+                    return await _fetch_websurfx_page(page_no)
+
+            try:
+                pages = await asyncio.gather(
+                    *(_guarded_page(page_no) for page_no in range(1, tool_config.search_pages + 1))
+                )
+                return [result for page in pages for result in page]
+            except Exception as exc:
+                logger.warning("Websurfx discovery failed for %r: %s", query, exc)
+                return []
+
         discovery_tasks = []
-        if tool_config.discovery_backend in {"searxng", "hybrid"}:
+        if tool_config.discovery_backend in {"searxng", "hybrid", "websurfx_hybrid"}:
             discovery_tasks.append(_fetch_searxng_results())
-        if tool_config.discovery_backend in {"ddgs", "hybrid"}:
+        if tool_config.discovery_backend in {"ddgs", "hybrid", "websurfx_hybrid"}:
             discovery_tasks.append(_fetch_ddgs_results())
+        if tool_config.discovery_backend in {"websurfx", "websurfx_hybrid"}:
+            discovery_tasks.append(_fetch_websurfx_results())
 
         try:
             discovery_results = await asyncio.gather(*discovery_tasks)

@@ -36,6 +36,8 @@ services:
       - AIQ_SUMMARY_DB=${AIQ_SUMMARY_DB:-postgresql+psycopg://aiq:aiq_dev@postgres:5432/aiq_jobs}
       - AIQ_CHROMA_DIR=${AIQ_CHROMA_DIR:-/app/data/chroma_data}
       - SEARXNG_URL=${SEARXNG_URL:-http://searxng:8080}
+      - WEBSURFX_URL=${WEBSURFX_URL:-http://websurfx:8080}
+      - AIQ_ADVANCED_DISCOVERY_BACKEND=${AIQ_ADVANCED_DISCOVERY_BACKEND:-websurfx_hybrid}
       - NOTEBOOKLM_PYTHON=${NOTEBOOKLM_PYTHON:-python}
       - NOTEBOOKLM_HOME=${NOTEBOOKLM_HOME:-/app/data/notebooklm}
       - NOTEBOOKLM_HARVEST_WORK_DIR=${NOTEBOOKLM_HARVEST_WORK_DIR:-/tmp/aiq-notebooklm-harvest}
@@ -62,6 +64,8 @@ services:
         condition: service_healthy
       searxng:
         condition: service_healthy
+      websurfx:
+        condition: service_started
     restart: unless-stopped
 
   kokoro:
@@ -103,6 +107,20 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
+
+  websurfx:
+    image: ${WEBSURFX_IMAGE:-app2-websurfx:latest}
+    build:
+      context: ../..
+      dockerfile: deploy/websurfx/Dockerfile
+      args:
+        WEBSURFX_GIT_REF: ${WEBSURFX_GIT_REF:-rolling}
+    container_name: app2-aiq-websurfx
+    volumes:
+      - ./websurfx:/etc/xdg/websurfx:ro
+    networks:
+      - aiq-network
     restart: unless-stopped
 
   frontend:

@@ -101,6 +101,51 @@ def test_plan_json_from_tool_args_normalizes_task_budget_percentages():
     assert plan["queries"][0]["task_category"] == "primary_data"
 
 
+def test_plan_json_from_tool_args_accepts_prose_source_strategy_and_compacts_payload():
+    long_text = " ".join(["detailed planner prose"] * 80)
+    plan_json = plan_json_from_tool_args(
+        report_title="Planner Robustness Plan",
+        report_toc=[{"title": "Main Section"}],
+        queries=[
+            {
+                "query": long_text,
+                "rationale": long_text,
+                "target_sections": [f"Section {index} {long_text}" for index in range(12)],
+                "target_claims": [
+                    {
+                        "claim_id": f"C{index}",
+                        "claim_type": "discovery",
+                        "claim": f"Claim {index}: {long_text}",
+                        "required_source_class": "mixed",
+                    }
+                    for index in range(6)
+                ],
+            }
+        ],
+        constraints=[long_text for _ in range(20)],
+        task_analysis={
+            "user_intent": long_text,
+            "source_strategy": long_text,
+            "claim_profile": long_text,
+            "entities": {"central": ["MiniMax M3"], "peripheral": [{"name": "SearXNG"}]},
+        },
+    )
+
+    plan = json.loads(plan_json)
+    assert PlanFileValidationMiddleware._validate_plan_payload(plan_json) == []
+    assert plan["task_analysis"]["source_strategy"]["summary"].endswith("…")
+    assert plan["task_analysis"]["claim_profile"]["summary"].endswith("…")
+    assert plan["task_analysis"]["entities"] == [
+        {"name": "MiniMax M3", "centrality": "central"},
+        {"name": "SearXNG", "centrality": "peripheral"},
+    ]
+    assert len(plan["queries"][0]["target_claims"]) == 3
+    assert len(plan["queries"][0]["target_sections"]) == 8
+    assert len(plan["constraints"]) == 12
+    assert len(plan["queries"][0]["query"]) <= 700
+    assert len(plan["queries"][0]["rationale"]) <= 360
+
+
 def test_plan_json_from_tool_args_accepts_minimax_item_wrappers():
     plan_json = plan_json_from_tool_args(
         report_title="Wrapped Plan",
