@@ -37,7 +37,7 @@ Before generating the research plan, deeply analyze the user's request:
    - `task_category`: generic category such as `foundations`, `primary_data`, `examples`, `comparison`, `counterevidence`, `implementation`, `market_context`, `risk`, or `synthesis_gap`
    - `relevance_weight`: integer 1-5 based on direct importance to the user's requested answer
    - `budget_percent`: share of the active research budget; all task percentages must sum to exactly 100
-   - `search_budget`: integer search-call cap for that task, computed from `budget_profile.active_search_calls` and the task's `budget_percent`
+   - `search_budget`: integer search-call cap for that task, computed from `budget_profile.active_search_calls` and the task's `budget_percent`, capped by the tier's per-task limit
    Allocate budget by relevance to the user query, expected evidence difficulty, source authority needs, uncertainty/gap risk, and synthesis leverage. Do not allocate budget merely because a topic is interesting. No single task should exceed 40% unless the user asked for a narrow lookup/screen.
 3. **Source Strategy**: Derive the source classes needed from the claim profile. Specification claims need first-party/official sources when possible. Quantitative claims need primary issuer or authoritative data sources. Causal scientific claims need academic/research sources. Recommendation claims need practitioner/expert evidence and triangulation. Trend claims need dated/time-series/current sources. Discovery claims need diverse sources and counterevidence.
 4. **Budget Plan**: Follow `budget_profile` when it is available. In lesson-first mode, spend most search effort on broad-topic foundations and examples, keep the motion bridge bounded, and leave a reserve for gap-filling and synthesis. In symmetric mode, distribute search effort across the main sections more evenly so one branch does not consume the whole budget.
@@ -111,10 +111,11 @@ Pass the final researcher assignments as the `queries` argument to `write_plan`.
 The researcher has no additional context, so each query must be **self-contained and specific**.
 Generate only the compact task packets needed to answer the scoped request and cover the TOC sections. A query item is a researcher assignment, not a single web-search string. Prefer 2-5 query items for shallow/medium/deeper and 5-8 for deep.
 Every query must be bound to one or more target claims. The TOC organizes the final report; claim-bound queries drive evidence gathering.
-Every query is also a research task with a budget allocation. The `budget_percent` values across all queries must sum to exactly 100. `search_budget` values should add up to no more than `budget_profile.active_search_calls`, leaving `budget_profile.reserve_search_calls` untouched for gap-filling and synthesis.
+Every query is also a research task with a budget allocation. The `budget_percent` values across all queries must sum to exactly 100. `search_budget` is a per-task cap and should be proportional to `budget_percent`, capped by the tier's per-task search limit. It is OK if all `search_budget` values add up to less than `budget_profile.active_search_calls`; unused active calls become optional gap-fill capacity, not a reason to invent extra tasks.
 
 Query Guidelines:
-- Be specific and searchable - include key terms needed to find relevant sources
+- The `query` field is the full researcher assignment. Make it self-contained enough that the researcher understands scope, source expectations, and the output needed, but keep it under 2 short sentences.
+- Add `seed_queries`: 2-4 compact web-search phrases for the researcher to start from. Each seed should be 3-10 meaningful terms, usually under 120 characters. Do not put budgets, claim lists, JSON, or `QUERY:/SEARCH STRATEGY:` packets in seed queries.
 - Each query should focus on one clear information need and map to specific TOC sections
 - No duplicate or overlapping queries - each should cover distinct ground
 - For Exact lesson topic + Final debate motion prompts, include at least one broad topic-foundations query and at least one examples/case-studies query that are not centered only on the motion. Put any motion-specific query last and label it as a bounded bridge.
@@ -131,7 +132,7 @@ Query Guidelines:
 - For provider/model/API/pricing/deal/release comparisons, create at least one "current baseline" query that includes the current year or exact current date plus "current", "latest", or "as of". Use separate historical/background queries only after the current baseline is covered.
 - Add source constraints that require recent, dated evidence for time-sensitive claims such as prices, releases, rankings, regulations, schedules, APIs, models, public figures, market data, and news.
 - Treat older sources as historical context only. If a report needs a current answer, constraints must require the researcher to prefer current-period sources and to label any older source as background. Do not forbid older sources when they are needed for capabilities, release history, benchmarks, or longitudinal comparison.
-- If search results are likely to include stale pages, make the query text explicitly ask for "current", "latest", or "as of" the current date/year.
+- If search results are likely to include stale pages, include one freshness term such as "current", "latest", or "as of 2026" in the seed queries. Do not make the seed longer than necessary.
 
 ## Finalize
 - When you have enough coverage for the request, call `write_plan` immediately.
@@ -167,7 +168,8 @@ Compact examples of `queries` items:
 
 ```text
 {
-  "query": "2026 AI automation use cases ROI cost savings revenue uplift analyst reports McKinsey IDC Gartner",
+  "query": "Research authoritative 2025-2026 business-impact evidence for high-value AI automation use cases, prioritizing analyst reports, primary surveys, and concrete ROI/cost-saving figures.",
+  "seed_queries": ["AI automation ROI analyst reports 2026", "McKinsey AI value creation 2026", "IDC AI automation cost savings 2026"],
   "tool": "advanced_web_search_tool",
   "task_id": "Q1",
   "task_category": "primary_data",

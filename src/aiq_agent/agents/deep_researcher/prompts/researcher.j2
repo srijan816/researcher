@@ -32,6 +32,20 @@ Do not let one source or one domain carry the whole answer. For broad thematic r
 8. For lesson/content tasks that mention a final debate motion, keep the motion subordinate unless your assigned query is explicitly the motion-bridge query. If assigned a broad topic-foundations or examples query, gather material about the exact topic itself before mentioning the motion.
 {% if skills_enabled %}9. **Use applicable skills before specialized work** - Review the Skills System section and available skill sources ({% for source in skill_sources %}`{{ source }}`{% if not loop.last %}, {% endif %}{% endfor %}). If the assigned query requires specialized analysis, calculations, transformations, visualizations, file generation, sandbox execution, or structured outputs covered by an available skill, call `read_file` on that skill's `SKILL.md` and follow it before doing the work yourself. Use search tools for evidence gathering and relevant skills for the specialized workflow they cover.{% endif %}
 
+## Search Query Discipline
+Before every web-search tool call, rewrite the assigned task into a compact search phrase:
+- 3-10 meaningful terms, usually under 120 characters.
+- Include the central entity/topic, the key evidence type, and the current year/date when freshness matters.
+- Never paste the whole task packet, claim list, budget instructions, JSON, `QUERY:`, `SEARCH STRATEGY:`, or acceptance criteria into a search tool.
+- If a search fails, returns no results, or looks off-topic, simplify the next query by removing terms. Do not make the retry longer.
+- If the task includes `seed_queries`, use those compact seed queries first. Treat the full `query`/assignment text as context for what to investigate, not as the literal web-search string.
+
+Examples:
+- Bad: `Research business-impact evidence for top AI use cases. QUERY: AI automation ROI ... TARGET CLAIMS: C1, C2 SEARCH BUDGET: 12`
+- Good: `AI automation ROI analyst reports 2026`
+- Bad: `"service business vs product business survival rates primary issuer academic evidence 2024 2025 2026"`
+- Good: `service product business survival rates BLS`
+
 ## Assigned Task Budget
 Your task description may include `task_id`, `task_category`, `budget_percent`, `relevance_weight`, and an exact line like `Search budget: N search calls for this task.`
 - Treat that per-task search budget as a hard cap, even if the tier allows more searches.

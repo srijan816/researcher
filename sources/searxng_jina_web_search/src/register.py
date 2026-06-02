@@ -60,6 +60,82 @@ LOW_VALUE_URL_PARTS = (
     "/contact",
 )
 
+SEARCH_QUERY_STOPWORDS = {
+    "about",
+    "acceptance",
+    "according",
+    "address",
+    "analysis",
+    "analyze",
+    "answer",
+    "artifact",
+    "budget",
+    "call",
+    "calls",
+    "claim",
+    "claims",
+    "class",
+    "constraints",
+    "cover",
+    "criteria",
+    "deliverable",
+    "dimensions",
+    "evidence",
+    "extract",
+    "find",
+    "for",
+    "from",
+    "gather",
+    "include",
+    "including",
+    "investigate",
+    "need",
+    "needed",
+    "notes",
+    "output",
+    "plan",
+    "query",
+    "rationale",
+    "report",
+    "research",
+    "researcher",
+    "resolve",
+    "search",
+    "section",
+    "sections",
+    "source",
+    "sources",
+    "strategy",
+    "synthesize",
+    "task",
+    "target",
+    "targets",
+    "the",
+    "this",
+    "tool",
+    "tools",
+    "use",
+    "write",
+}
+
+SEARCH_PACKET_LABEL_RE = re.compile(
+    r"(?im)^\s*(?:query|search strategy|target(?:_|\s*)claims?|target(?:_|\s*)sections?|"
+    r"seed(?:_|\s*)queries|"
+    r"rationale|task(?:_|\s*)id|task(?:_|\s*)category|search(?:_|\s*)budget|"
+    r"budget(?:_|\s*)percent|acceptance criteria|output|files? to create)\s*:\s*"
+)
+QUERY_FIELD_RE = re.compile(
+    r"(?is)\bquery\s*:\s*(.+?)(?:\n\s*(?:search strategy|seed(?:_|\s*)queries|target(?:_|\s*)claims?|"
+    r"target(?:_|\s*)sections?|rationale|task(?:_|\s*)id|task(?:_|\s*)category|"
+    r"search(?:_|\s*)budget|budget(?:_|\s*)percent|acceptance criteria|output|files? to create)\s*:|$)"
+)
+SEED_QUERIES_RE = re.compile(
+    r"(?is)\bseed(?:_|\s*)queries\s*:\s*(.+?)(?:\n\s*(?:query|search strategy|target(?:_|\s*)claims?|"
+    r"target(?:_|\s*)sections?|rationale|task(?:_|\s*)id|task(?:_|\s*)category|"
+    r"search(?:_|\s*)budget|budget(?:_|\s*)percent|acceptance criteria|output|files? to create)\s*:|$)"
+)
+SEARCH_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+/#&'’-]*")
+
 
 class SearXNGJinaWebSearchToolConfig(FunctionBaseConfig, name="searxng_jina_web_search"):
     """Search SearXNG and optionally extract full page text from top results."""
@@ -173,12 +249,82 @@ class SearXNGJinaWebSearchToolConfig(FunctionBaseConfig, name="searxng_jina_web_
         default=True,
         description="Exclude login, account, terms, privacy, and similar low-value URLs.",
     )
+    simplify_complex_queries: bool = Field(
+        default=True,
+        description="Rewrite prompt-like or overlong search inputs into compact engine-friendly queries.",
+    )
+    max_query_terms: int = Field(
+        default=12,
+        ge=3,
+        le=30,
+        description="Maximum meaningful terms to send to discovery engines after simplification.",
+    )
+    max_query_chars: int = Field(
+        default=160,
+        ge=40,
+        le=400,
+        description="Maximum search-query characters sent to discovery engines after simplification.",
+    )
 
 
 def _truncate(content: str, max_length: int | None) -> str:
     if max_length and len(content) > max_length:
         return content[: max_length - 3] + "..."
     return content
+
+
+def simplify_search_query(question: str, max_terms: int = 12, max_chars: int = 160) -> str:
+    """Return a compact search-engine query from model/task text.
+
+    Research agents sometimes pass a whole task packet instead of a search
+    phrase. Search engines handle concise keyword phrases better than long
+    instructions, so the adapter enforces a final deterministic guardrail.
+    """
+    original = (question or "").strip()
+    if not original:
+        return ""
+
+    text = original.replace("```", " ").replace("`", " ")
+    text = re.sub(r"https?://\S+", " ", text)
+    seed_match = SEED_QUERIES_RE.search(text)
+    query_match = QUERY_FIELD_RE.search(text)
+    if seed_match:
+        seed_text = seed_match.group(1)
+        seed_text = re.split(r"\s*(?:\||;|\n|\]\s*,|\")\s*", seed_text, maxsplit=1)[0]
+        text = seed_text
+    elif query_match:
+        text = query_match.group(1)
+    text = SEARCH_PACKET_LABEL_RE.sub(" ", text)
+    text = re.sub(r"[_*{}\[\]()<>,;:|=]+", " ", text)
+    text = re.sub(r"(?m)^\s*[-*#]+\s*", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    raw_terms = [token.strip("\"'“”‘’.,!?") for token in SEARCH_TOKEN_RE.findall(text)]
+    terms: list[str] = []
+    seen: set[str] = set()
+    for token in raw_terms:
+        if not token:
+            continue
+        normalized = token.lower().strip("-")
+        if not normalized or normalized in SEARCH_QUERY_STOPWORDS:
+            continue
+        if len(normalized) == 1 and not normalized.isdigit():
+            continue
+        if normalized in seen:
+            continue
+        terms.append(token)
+        seen.add(normalized)
+        candidate = " ".join(terms)
+        if len(terms) >= max_terms or len(candidate) >= max_chars:
+            break
+
+    if not terms:
+        terms = raw_terms[:max_terms]
+
+    query = " ".join(terms).strip()
+    if len(query) > max_chars:
+        query = query[:max_chars].rsplit(" ", 1)[0].strip() or query[:max_chars].strip()
+    return query or original[:max_chars].strip()
 
 
 def _read_url(url: str, timeout: int) -> str:
@@ -343,12 +489,24 @@ async def searxng_jina_web_search(tool_config: SearXNGJinaWebSearchToolConfig, b
         """Searches the web using SearXNG and expands top results with Jina Reader.
 
         Args:
-            question: Search query, truncated to 400 characters for compatibility.
+            question: Search query or research-task text. Prompt-like inputs are
+                simplified into compact search phrases before discovery.
 
         Returns:
             XML-like documents containing title, URL, engine metadata, and page content.
         """
-        query = question[:397] + "..." if len(question) > 400 else question
+        query = (
+            simplify_search_query(question, tool_config.max_query_terms, tool_config.max_query_chars)
+            if tool_config.simplify_complex_queries
+            else question[: tool_config.max_query_chars]
+        )
+        if query != (question or "").strip():
+            logger.info(
+                "Simplified web search query from %d to %d chars: %r",
+                len(question or ""),
+                len(query),
+                query,
+            )
         base_url = configured_url.rstrip("/")
         params = {
             "q": query,
@@ -480,7 +638,7 @@ async def searxng_jina_web_search(tool_config: SearXNGJinaWebSearchToolConfig, b
 
         raw_results = [result for group in discovery_results for result in group]
         if not raw_results:
-            return "No results found for this query."
+            return f"No results found for this query. Search query used: {query}"
 
         results = []
         seen_urls = set()
@@ -498,7 +656,7 @@ async def searxng_jina_web_search(tool_config: SearXNGJinaWebSearchToolConfig, b
         results.sort(key=lambda result: _result_rank(result, query), reverse=True)
         results = results[: tool_config.max_results]
         if not results:
-            return "No results found for this query."
+            return f"No results found for this query. Search query used: {query}"
 
         extracted: dict[str, str] = {}
         extract_limit = tool_config.scrape_max_results

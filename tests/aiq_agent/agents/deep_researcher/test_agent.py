@@ -1333,6 +1333,59 @@ class TestIsReportComplete:
 
             assert agent._is_report_complete(result) == (True, "complete_via_heuristic")
 
+    def test_report_with_many_available_sources_must_use_tier_source_floor(self, mock_llm_provider, real_tool):
+        """A rich deeper run should not pass synthesis with only a handful of referenced sources."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            registry = agent.source_registry_middleware._get_registry()
+            for index in range(1, 16):
+                registry.add(SourceEntry(url=f"https://source{index}.example.com/report"))
+
+            body = (
+                "This report has enough length and structure, but it cites too few of the "
+                "verified sources collected during the research run. "
+            ) * 18
+            refs = "\n".join(f"[{index}] https://source{index}.example.com/report" for index in range(1, 8))
+            result = {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            f"# Report\n\n## Findings\n\n{body}\n\n## Implications\n\n{body}\n\n## Sources\n{refs}"
+                        )
+                    )
+                ]
+            }
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Q")], research_depth="deeper")
+
+            is_complete, reason = agent._is_report_complete(result, state)
+
+            assert is_complete is False
+            assert "too_few_sources_used" in reason
+
+    def test_report_source_floor_waits_until_enough_sources_are_available(self, mock_llm_provider, real_tool):
+        """A genuinely thin run should not fail the source floor merely because the tier is deeper."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            agent.source_registry_middleware._get_registry().add(SourceEntry(url="https://example.com/source-1"))
+            content = _valid_deep_report("Thin but complete report").replace(
+                "[1] https://example.com",
+                "[1] https://example.com/source-1",
+            )
+            result = {"messages": [AIMessage(content=content)]}
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Q")], research_depth="deeper")
+
+            assert agent._is_report_complete(result, state) == (True, "complete_via_heuristic")
+
     def test_fact_ledger_fragments_merge_into_canonical_ledger(self, mock_llm_provider, real_tool):
         """Per-researcher fact-ledger fragments should be merged deterministically."""
         with patch(

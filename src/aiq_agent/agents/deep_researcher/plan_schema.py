@@ -267,6 +267,7 @@ class PlanQuery(BaseModel):
 
     query: str
     tool: str = Field(default="advanced_web_search_tool")
+    seed_queries: list[str] = Field(default_factory=list)
     task_id: str | None = None
     task_category: str = Field(default="evidence")
     relevance_weight: int = Field(default=1, ge=1, le=5)
@@ -292,10 +293,20 @@ class PlanQuery(BaseModel):
             raise ValueError("query must be meaningful")
         return _shorten_text(value, 700)
 
-    @field_validator("target_claims", "target_claim_ids", "target_sections", mode="before")
+    @field_validator("seed_queries", "target_claims", "target_claim_ids", "target_sections", mode="before")
     @classmethod
     def _query_lists_are_listish(cls, value: Any) -> list[Any]:
         return _as_list(value)
+
+    @field_validator("seed_queries")
+    @classmethod
+    def _seed_queries_are_compact(cls, value: list[Any]) -> list[str]:
+        compact: list[str] = []
+        for item in value[:5]:
+            text = " ".join(str(item).split()).strip()
+            if text:
+                compact.append(_shorten_text(text, 140))
+        return compact
 
     @field_validator("rationale")
     @classmethod

@@ -2231,7 +2231,53 @@ class DeepResearcherAgent:
             return file_content
         return message_content
 
-    def _is_report_complete(self, result: dict | Any) -> tuple[bool, str]:
+    @staticmethod
+    def _minimum_final_source_count(state: DeepResearchAgentState | dict[str, Any] | None) -> int:
+        """Return the minimum distinct verified sources expected in a final report."""
+        tier = None
+        if state is not None:
+            tier = state.get("research_depth") if isinstance(state, dict) else getattr(state, "research_depth", None)
+        depth_config = get_research_depth_config(tier)
+        return {
+            "shallow": 4,
+            "medium": 10,
+            "deeper": 12,
+            "deep": 20,
+        }[depth_config.tier]
+
+    @staticmethod
+    def _count_valid_report_sources(content: str, registry: Any) -> int:
+        """Count distinct reference-section sources that resolve to captured tool outputs."""
+        from aiq_agent.common.citation_verification import _CITATION_LINE_RE
+        from aiq_agent.common.citation_verification import _REFERENCE_SECTION_RE
+        from aiq_agent.common.citation_verification import _URL_IN_LINE_RE
+        from aiq_agent.common.citation_verification import _URL_TRIM_CHARS
+        from aiq_agent.common.citation_verification import _is_knowledge_citation
+
+        ref_match = _REFERENCE_SECTION_RE.search(content)
+        if not ref_match:
+            return 0
+        ref_section = content[ref_match.start() :]
+        valid_sources: set[str] = set()
+        for line_match in _CITATION_LINE_RE.finditer(ref_section):
+            ref_text = line_match.group(2).strip()
+            url_match = _URL_IN_LINE_RE.search(ref_text)
+            if url_match:
+                url = url_match.group(0).rstrip(_URL_TRIM_CHARS)
+                canonical = registry.resolve_url(url)
+                if canonical:
+                    valid_sources.add(canonical)
+                continue
+            is_kl, citation_key = _is_knowledge_citation(ref_text, registry)
+            if is_kl and citation_key and registry.has_citation_key(citation_key):
+                valid_sources.add(citation_key)
+        return len(valid_sources)
+
+    def _is_report_complete(
+        self,
+        result: dict | Any,
+        state: DeepResearchAgentState | dict[str, Any] | None = None,
+    ) -> tuple[bool, str]:
         """
         Check if the agent produced a complete report using tool calls or heuristics.
         """
@@ -2309,6 +2355,15 @@ class DeepResearcherAgent:
 
         registry = self.source_registry_middleware._get_registry()
         if registry.all_sources():
+            available_source_count = len(registry.all_sources())
+            min_source_count = self._minimum_final_source_count(state)
+            valid_source_count = self._count_valid_report_sources(content, registry)
+            if available_source_count >= min_source_count and valid_source_count < min_source_count:
+                return (
+                    False,
+                    f"too_few_sources_used ({valid_source_count}/{min_source_count}; "
+                    f"available {available_source_count})",
+                )
             source_quality = evaluate_report_source_quality(content, registry)
             if not source_quality.passed:
                 logger.warning("Deep research report has source-quality warning: %s", source_quality.reason)
@@ -2377,7 +2432,7 @@ class DeepResearcherAgent:
                         raise ex
                     continue
 
-                is_complete, reason = self._is_report_complete(result)
+                is_complete, reason = self._is_report_complete(result, state)
                 if is_complete:
                     logger.info(f"Report completed successfully. Reason: {reason}")
                     break
@@ -2412,6 +2467,17 @@ class DeepResearcherAgent:
                     )
                     # Include the consolidated source list so the orchestrator
                     # has an authoritative reference for the retry
+                    source_list = self.source_registry_middleware.get_source_list_text()
+                    if source_list:
+                        feedback_msg += "\n\n" + source_list
+                elif "too_few_sources_used" in reason:
+                    feedback_msg += (
+                        "The report used too few distinct verified sources relative to the sources already collected. "
+                        "Repair the report without restarting research: call get_verified_sources, use the existing "
+                        "source inventory, and spread citations across more distinct URLs/domains in the body and "
+                        "Sources section. Use only sources that came from tools, and keep claims aligned to what "
+                        "those sources actually support."
+                    )
                     source_list = self.source_registry_middleware.get_source_list_text()
                     if source_list:
                         feedback_msg += "\n\n" + source_list
@@ -2482,7 +2548,7 @@ class DeepResearcherAgent:
                     continue
 
                 # Evaluate the feedback-retry result before the next iteration
-                is_complete, reason = self._is_report_complete(result)
+                is_complete, reason = self._is_report_complete(result, state)
                 if is_complete:
                     logger.info(f"Report completed after feedback retry. Reason: {reason}")
                     break
