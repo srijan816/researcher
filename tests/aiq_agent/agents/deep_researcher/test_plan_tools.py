@@ -80,6 +80,62 @@ def test_plan_json_from_tool_args_fills_missing_claims_and_sections():
     assert plan["constraints"][0]["constraint"] == "Stay scoped to the request."
 
 
+def test_plan_json_from_tool_args_expands_single_query_for_multi_section_reports():
+    plan_json = plan_json_from_tool_args(
+        report_title="Multi Section Plan",
+        report_toc=[
+            {"title": "Technical Foundations"},
+            {"title": "Market Evidence"},
+            {"title": "Implementation Risks"},
+        ],
+        queries=[
+            {
+                "query": "Research the complete topic using authoritative evidence",
+                "tool": "advanced_web_search_tool",
+                "target_sections": ["Technical Foundations", "Market Evidence", "Implementation Risks"],
+                "target_claims": [
+                    {
+                        "claim_id": "C0",
+                        "claim_type": "discovery",
+                        "claim": "Broad evidence needed for the full report",
+                        "required_source_class": "mixed",
+                    }
+                ],
+            }
+        ],
+        constraints=["Cover each section with source-backed evidence."],
+    )
+
+    plan = json.loads(plan_json)
+    assert PlanFileValidationMiddleware._validate_plan_payload(plan_json) == []
+    assert len(plan["queries"]) == 3
+    assert [query["target_sections"] for query in plan["queries"]] == [
+        ["Technical Foundations"],
+        ["Market Evidence"],
+        ["Implementation Risks"],
+    ]
+    assert sum(query["budget_percent"] for query in plan["queries"]) == pytest.approx(100.0)
+    assert plan["task_analysis"]["claim_profile"]["claims"][0]["target_task_id"] == "Q1"
+
+
+def test_plan_json_from_tool_args_preserves_single_query_for_focused_screen():
+    plan_json = plan_json_from_tool_args(
+        report_title="Focused Screen",
+        report_toc=[
+            {"title": "Candidate Table"},
+            {"title": "Evidence Notes"},
+            {"title": "Caveats"},
+        ],
+        queries=[{"query": "single focused screen evidence task"}],
+        constraints=["Stay compact."],
+        output_style={"mode": "focused_screen"},
+    )
+
+    plan = json.loads(plan_json)
+    assert len(plan["queries"]) == 1
+    assert plan["queries"][0]["target_sections"] == ["Candidate Table", "Evidence Notes", "Caveats"]
+
+
 def test_plan_json_from_tool_args_normalizes_task_budget_percentages():
     plan_json = plan_json_from_tool_args(
         report_title="Allocated Research Plan",

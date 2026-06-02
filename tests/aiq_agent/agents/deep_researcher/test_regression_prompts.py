@@ -90,6 +90,8 @@ def test_planner_prompt_uses_typed_write_plan_not_raw_json():
 
     assert "write_plan" in prompt
     assert "Never call\n`write_file` for `/shared/plan.json`" in prompt
+    assert "treat it as a runtime safety floor or stale checkpoint" in prompt
+    assert "After `write_plan` succeeds, trust the tool result" in prompt
     assert "```json" not in prompt
 
 

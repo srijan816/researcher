@@ -91,13 +91,15 @@ def create_write_plan_tool() -> BaseTool:
             task_analysis=task_analysis,
             fact_ledger_targets=fact_ledger_targets,
         )
+        plan_payload = json.loads(plan_json)
         backend = StateBackend()
         results = [_upsert_virtual_file(backend, path, plan_json) for path in PLAN_PATHS]
         if any(result.startswith("Error") for result in results):
             return "\n".join(results)
         return (
             "Plan successfully written and validated at /shared/plan.json. "
-            f"Sections: {len(report_toc)}. Researcher queries: {len(queries)}."
+            f"Sections: {len(plan_payload.get('report_toc', []))}. "
+            f"Researcher queries: {len(plan_payload.get('queries', []))}."
         )
 
     async def async_write_plan(

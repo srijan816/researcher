@@ -453,6 +453,61 @@ def _claim_profile_from_queries(queries: list[PlanQuery]) -> dict[str, Any]:
     }
 
 
+def _expand_single_query_for_sections(
+    raw_queries: list[PlanQuery],
+    *,
+    section_titles: list[str],
+    output_style: PlanOutputStyle,
+) -> list[PlanQuery]:
+    """Split one overloaded research assignment across report sections.
+
+    MiniMax sometimes commits a plausible multi-section plan with only one
+    broad `queries` item. That is valid tool syntax but poor execution: one
+    researcher can burn the budget while later sections never get evidence.
+    When the final report is not a focused one-task screen, expand the single
+    assignment into section-bound tasks so downstream orchestration remains
+    parallel and balanced.
+    """
+
+    if len(raw_queries) != 1 or len(section_titles) <= 1 or output_style.mode == "focused_screen":
+        return raw_queries
+
+    base = raw_queries[0]
+    expanded: list[PlanQuery] = []
+    for index, section_title in enumerate(section_titles[:5], start=1):
+        section_query = _shorten_text(f"{base.query} Focus specifically on: {section_title}.", 700)
+        expanded.append(
+            PlanQuery.model_validate(
+                {
+                    **base.model_dump(),
+                    "query": section_query,
+                    "task_id": f"Q{index}",
+                    "task_category": base.task_category or "evidence",
+                    "relevance_weight": base.relevance_weight or 1,
+                    "budget_percent": None,
+                    "target_sections": [section_title],
+                    "target_claims": [
+                        {
+                            "claim_id": f"C{index}",
+                            "claim_type": "discovery",
+                            "claim": f"Evidence needed to answer report section: {section_title}",
+                            "required_source_class": base.target_class or "mixed",
+                        }
+                    ],
+                    "target_claim_ids": [f"C{index}"],
+                    "rationale": _shorten_text(
+                        (
+                            "Expanded from a single broad planner assignment so "
+                            f"{section_title} receives dedicated evidence."
+                        ),
+                        360,
+                    ),
+                }
+            )
+        )
+    return expanded
+
+
 def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
     """Expand compact tool arguments into the canonical `/shared/plan.json` shape."""
 
@@ -468,11 +523,24 @@ def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
     task_analysis_dict.setdefault("source_strategy", {})
     if not task_analysis_dict["source_strategy"]:
         task_analysis_dict["source_strategy"] = _source_strategy_for_queries()
+    output_style = (
+        input_data.output_style
+        if isinstance(input_data.output_style, PlanOutputStyle)
+        else PlanOutputStyle.model_validate(input_data.output_style or {})
+    )
+
+    queries: list[dict[str, Any]] = []
+    raw_queries = _expand_single_query_for_sections(
+        list(input_data.queries),
+        section_titles=section_titles,
+        output_style=output_style,
+    )
+
     task_analysis_dict.setdefault("claim_profile", {})
     if not task_analysis_dict["claim_profile"]:
-        task_analysis_dict["claim_profile"] = _claim_profile_from_queries(list(input_data.queries))
+        task_analysis_dict["claim_profile"] = _claim_profile_from_queries(raw_queries)
     elif not task_analysis_dict["claim_profile"].get("claims"):
-        derived_profile = _claim_profile_from_queries(list(input_data.queries))
+        derived_profile = _claim_profile_from_queries(raw_queries)
         if derived_profile.get("claims"):
             task_analysis_dict["claim_profile"] = {
                 **task_analysis_dict["claim_profile"],
@@ -485,14 +553,6 @@ def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
                 ),
             }
 
-    output_style = (
-        input_data.output_style
-        if isinstance(input_data.output_style, PlanOutputStyle)
-        else PlanOutputStyle.model_validate(input_data.output_style or {})
-    )
-
-    queries: list[dict[str, Any]] = []
-    raw_queries = list(input_data.queries)
     budget_percents = [query.budget_percent for query in raw_queries]
     needs_budget_normalization = (
         not raw_queries
@@ -514,7 +574,7 @@ def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
                 normalized_budget_percents[-1] + (100.0 - sum(normalized_budget_percents)), 1
             )
 
-    for index, query in enumerate(input_data.queries, start=1):
+    for index, query in enumerate(raw_queries, start=1):
         query_dict = query.model_dump()
         query_dict["task_id"] = query_dict.get("task_id") or f"Q{index}"
         query_dict["budget_percent"] = normalized_budget_percents[index - 1]
