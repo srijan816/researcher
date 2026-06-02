@@ -184,15 +184,6 @@ export const MainLayout: FC<MainLayoutProps> = ({
 
   const showHomeExperience =
     isAuthenticated && currentUserId === 'srijan' && !hasDisplayableMessages && !isResearchPanelOpen
-  const hasActiveResearchForCurrentConversation =
-    (isDeepResearchStreaming && deepResearchOwnerConversationId === currentConversation?.id) ||
-    hasActiveDeepResearchJob(currentConversation?.messages ?? [])
-  const showAmbientResearchVideo =
-    isAuthenticated &&
-    currentUserId === 'srijan' &&
-    !showHomeExperience &&
-    hasActiveResearchForCurrentConversation
-
   return (
     <Flex
       direction="col"
@@ -240,9 +231,6 @@ export const MainLayout: FC<MainLayoutProps> = ({
             connectionMode="websocket"
             variant={showHomeExperience ? 'hero' : 'dock'}
           />
-
-          {showHomeExperience && <HomeMediaShowcase />}
-          {showAmbientResearchVideo && <ResearchAmbientVideo />}
         </div>
 
         {/* Research Panel (Right) - Pushes content, takes 60% width */}
@@ -273,36 +261,3 @@ export const MainLayout: FC<MainLayoutProps> = ({
     </Flex>
   )
 }
-
-const HomeMediaShowcase: FC = () => (
-  <section className="mx-auto w-full max-w-5xl px-4 pb-8 pt-1 sm:px-6 sm:pb-10">
-    <div className="deep-home-video-frame">
-      <video
-        className="h-full w-full object-cover"
-        src="/media/deep-research-loop.mp4"
-        poster="/media/deep-research-poster.jpg"
-        autoPlay
-        muted
-        loop
-        playsInline
-        preload="metadata"
-        aria-label="Looping AI research workspace"
-      />
-    </div>
-  </section>
-)
-
-const ResearchAmbientVideo: FC = () => (
-  <div className="deep-research-ambient" aria-hidden="true">
-    <video
-      className="h-full w-full object-cover"
-      src="/media/deep-research-loop.mp4"
-      poster="/media/deep-research-poster.jpg"
-      autoPlay
-      muted
-      loop
-      playsInline
-      preload="metadata"
-    />
-  </div>
-)

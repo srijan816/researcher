@@ -1,5 +1,6 @@
 from searxng_jina_web_search.register import SearXNGJinaWebSearchToolConfig
 from searxng_jina_web_search.register import _normalize_websurfx_result
+from searxng_jina_web_search.register import _result_rank
 from searxng_jina_web_search.register import simplify_search_query
 
 
@@ -76,3 +77,19 @@ def test_simplify_search_query_prefers_seed_queries() -> None:
 
 def test_simplify_search_query_preserves_short_query() -> None:
     assert simplify_search_query("AI automation ROI analyst reports 2026") == "AI automation ROI analyst reports 2026"
+
+
+def test_result_rank_prefers_authoritative_sources_over_listicles() -> None:
+    query = "AI automation ROI analyst reports 2026"
+    authoritative = {
+        "title": "AI automation ROI research report 2026",
+        "url": "https://mckinsey.com/capabilities/quantumblack/our-insights/ai-report",
+        "content": "Research report with survey data and measured productivity gains.",
+    }
+    listicle = {
+        "title": "Top AI automation ideas for 2026",
+        "url": "https://themoneypocket.com/top-ai-automation-ideas",
+        "content": "Ultimate guide to the best AI automation ideas.",
+    }
+
+    assert _result_rank(authoritative, query) > _result_rank(listicle, query)

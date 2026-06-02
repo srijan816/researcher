@@ -60,6 +60,105 @@ LOW_VALUE_URL_PARTS = (
     "/contact",
 )
 
+HIGH_AUTHORITY_DOMAINS = (
+    "gov",
+    "edu",
+    "arxiv.org",
+    "openreview.net",
+    "aclanthology.org",
+    "dl.acm.org",
+    "ieeexplore.ieee.org",
+    "nature.com",
+    "sciencedirect.com",
+    "springer.com",
+    "wiley.com",
+    "tandfonline.com",
+    "cambridge.org",
+    "oup.com",
+    "jstor.org",
+    "ssrn.com",
+    "pubmed.ncbi.nlm.nih.gov",
+    "ncbi.nlm.nih.gov",
+    "bls.gov",
+    "census.gov",
+    "bea.gov",
+    "sec.gov",
+    "federalreserve.gov",
+    "imf.org",
+    "worldbank.org",
+    "oecd.org",
+    "un.org",
+    "unesco.org",
+    "who.int",
+    "weforum.org",
+    "gemconsortium.org",
+    "idc.com",
+    "gartner.com",
+    "mckinsey.com",
+    "bcg.com",
+    "bain.com",
+    "deloitte.com",
+    "pwc.com",
+    "ey.com",
+    "kpmg.com",
+    "goldmansachs.com",
+)
+
+REPUTABLE_NEWS_DOMAINS = (
+    "reuters.com",
+    "apnews.com",
+    "ft.com",
+    "economist.com",
+    "bloomberg.com",
+    "wsj.com",
+    "nytimes.com",
+    "washingtonpost.com",
+    "bbc.com",
+    "bbc.co.uk",
+    "npr.org",
+    "theguardian.com",
+    "techcrunch.com",
+    "theverge.com",
+    "wired.com",
+    "arstechnica.com",
+    "theinformation.com",
+    "scmp.com",
+)
+
+WEAK_RESULT_DOMAINS = (
+    "medium.com",
+    "substack.com",
+    "hashnode.com",
+    "blogspot.com",
+    "themoneypocket.com",
+    "ideaproof.io",
+    "packapop.com",
+    "onlinekormo.com",
+)
+
+HIGH_AUTHORITY_TEXT_SIGNALS = (
+    "annual report",
+    "working paper",
+    "journal",
+    "study",
+    "survey",
+    "dataset",
+    "official",
+    "pdf",
+    "press release",
+    "policy brief",
+    "research report",
+)
+
+LOW_VALUE_TEXT_SIGNALS = (
+    "best ",
+    "top ",
+    "ultimate guide",
+    "how to",
+    "listicle",
+    "ideas",
+)
+
 SEARCH_QUERY_STOPWORDS = {
     "about",
     "acceptance",
@@ -409,6 +508,14 @@ def _result_rank(result: dict, query: str) -> float:
         score += 4.0
     if hostname.endswith("minimax.io") or hostname.endswith("minimaxi.com"):
         score += 4.0
+    if _host_matches_any(hostname, HIGH_AUTHORITY_DOMAINS):
+        score += 5.0
+    elif _host_matches_any(hostname, REPUTABLE_NEWS_DOMAINS):
+        score += 2.5
+    if _host_matches_any(hostname, WEAK_RESULT_DOMAINS):
+        score -= 3.0
+    score += sum(0.75 for signal in HIGH_AUTHORITY_TEXT_SIGNALS if signal in haystack)
+    score -= sum(0.6 for signal in LOW_VALUE_TEXT_SIGNALS if signal in haystack)
 
     # Preserve upstream relevance where available without letting it dominate.
     try:
@@ -418,6 +525,18 @@ def _result_rank(result: dict, query: str) -> float:
     if result.get("_discovery_backend") in {"searxng", "websurfx"}:
         score += 0.5
     return score
+
+
+def _host_matches_any(hostname: str, domains: Sequence[str]) -> bool:
+    for domain in domains:
+        normalized = domain.lower().lstrip(".")
+        if "." not in normalized:
+            if hostname == normalized or hostname.endswith(f".{normalized}"):
+                return True
+            continue
+        if hostname == normalized or hostname.endswith(f".{normalized}"):
+            return True
+    return False
 
 
 def _normalize_websurfx_result(item: dict) -> dict | None:

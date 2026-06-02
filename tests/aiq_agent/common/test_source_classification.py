@@ -71,3 +71,10 @@ def test_registry_hot_reload_is_callable():
     registry = reload_registry()
 
     assert "domains" in registry
+
+
+def test_classifies_common_analyst_academic_and_trade_sources():
+    assert classify_source("https://www.mckinsey.com/capabilities/quantumblack/our-insights/report") == "primary_issuer"
+    assert classify_source("https://www.oecd.org/en/publications/example.html") == "primary_issuer"
+    assert classify_source("https://pubmed.ncbi.nlm.nih.gov/12345678/") == "academic"
+    assert classify_source("https://www.reuters.com/world/example") == "trade_press"

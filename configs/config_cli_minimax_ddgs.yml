@@ -3,7 +3,8 @@
 #   - MiniMax M3 synthesis for high-context reasoning
 #   - MiniMax M3 planner-fast for compact plan commits
 #   - Deeper tier uses MiniMax M2.7 highspeed with explicit thinking enabled
-#     for planner, researcher, and synthesis to recover the faster pre-M3 path
+#     for planner and researcher loops, then MiniMax M3 for final high-context
+#     synthesis where the evidence packet/claim table/source registry matter most
 #   - MiniMax M3 with thinking disabled for latency-sensitive intent, clarifier,
 #     shallow, and researcher loops
 #   - Exa → optional primary high-quality search when EXA_API_KEY is set
@@ -306,7 +307,7 @@ functions:
     _type: deep_research_agent
     orchestrator_llm: minimax_m3_synthesis_llm
     medium_orchestrator_llm: minimax_m3_synthesis_fast_llm
-    deeper_orchestrator_llm: minimax_m27_deeper_synthesis_llm
+    deeper_orchestrator_llm: minimax_m3_synthesis_llm
     deeper_planner_llm: minimax_m27_deeper_planner_llm
     deeper_researcher_llm: minimax_m27_deeper_research_llm
     researcher_llm: minimax_m3_research_llm
