@@ -909,7 +909,15 @@ class PostWriteReadbackGuardMiddleware(AgentMiddleware):
         return str(args.get("file_path") or args.get("path") or args.get("filename") or "")
 
     @staticmethod
-    def _is_artifact_path(path: str) -> bool:
+    def _normalize_artifact_path(path: str) -> str:
+        path = path.strip()
+        if path.startswith("shared/"):
+            return f"/{path}"
+        return path
+
+    @classmethod
+    def _is_artifact_path(cls, path: str) -> bool:
+        path = cls._normalize_artifact_path(path)
         return path.startswith("/shared/") or path.startswith("shared/") or path == "/report.md"
 
     @staticmethod
@@ -932,7 +940,7 @@ class PostWriteReadbackGuardMiddleware(AgentMiddleware):
         if not isinstance(args, dict):
             return await handler(request)
 
-        path = self._target_path(args)
+        path = self._normalize_artifact_path(self._target_path(args))
         if tool_name in self._READ_TOOLS and path and self._is_artifact_path(path):
             recent_writes = _session_recent_artifact_writes.get() or {}
             remaining = recent_writes.get(path, 0)
@@ -1698,23 +1706,19 @@ class ToolResultPruningMiddleware(AgentMiddleware):
         for key, value in args.items():
             if isinstance(value, str) and len(value) > self.max_tool_call_arg_chars:
                 changed = True
-                path_hint = args.get("file_path") or args.get("path") or args.get("filename")
                 if tool_name == "write_file" and key == "content":
-                    # Do not put sentence-shaped placeholder text in `content`.
-                    # MiniMax can later copy historical tool arguments verbatim
-                    # into a new write_file call, so the writable field must not
-                    # contain any fake artifact prose.
-                    pruned[key] = ""
-                    pruned["_aiq_history_content_redacted"] = True
-                    pruned["_aiq_history_content_chars"] = len(value)
-                    if path_hint:
-                        pruned["_aiq_history_content_path"] = str(path_hint)
-                else:
-                    head = value[: self.max_tool_call_arg_chars].rstrip()
-                    pruned[key] = (
-                        f"{head}\n\nTOOL_ARGUMENT_DISPLAY_SHORTENED: original argument had {len(value)} "
-                        "characters and was shortened only in prompt history."
-                    )
+                    # Artifact write payloads are semantically important in
+                    # later turns. Keeping the real historical content is less
+                    # harmful than showing an empty or placeholder payload that
+                    # the model can mistake for a failed virtual-filesystem
+                    # write.
+                    pruned[key] = value
+                    continue
+                head = value[: self.max_tool_call_arg_chars].rstrip()
+                pruned[key] = (
+                    f"{head}\n\nTOOL_ARGUMENT_DISPLAY_SHORTENED: original argument had {len(value)} "
+                    "characters and was shortened only in prompt history."
+                )
             elif isinstance(value, dict):
                 nested, nested_changed = self._prune_arg_dict(value, tool_name)
                 pruned[key] = nested

@@ -110,6 +110,12 @@ class SearXNGJinaWebSearchToolConfig(FunctionBaseConfig, name="searxng_jina_web_
             "Optional Websurfx-specific engine list. When blank, Websurfx reuses the generic engines setting."
         ),
     )
+    websurfx_timeout_seconds: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=60.0,
+        description="Maximum wall-clock seconds to wait for Websurfx discovery before dropping that lane.",
+    )
     ddgs_backend: str = Field(
         default="auto",
         description=(
@@ -463,7 +469,9 @@ async def searxng_jina_web_search(tool_config: SearXNGJinaWebSearchToolConfig, b
         if tool_config.discovery_backend in {"ddgs", "hybrid", "websurfx_hybrid"}:
             discovery_tasks.append(_fetch_ddgs_results())
         if tool_config.discovery_backend in {"websurfx", "websurfx_hybrid"}:
-            discovery_tasks.append(_fetch_websurfx_results())
+            discovery_tasks.append(
+                asyncio.wait_for(_fetch_websurfx_results(), timeout=tool_config.websurfx_timeout_seconds)
+            )
 
         try:
             discovery_results = await asyncio.gather(*discovery_tasks)

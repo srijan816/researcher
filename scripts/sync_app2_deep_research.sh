@@ -118,7 +118,7 @@ case "$RESTART" in
     remote_compose up -d --build --no-deps frontend
     ;;
   all)
-    remote_compose up -d --build aiq-agent frontend kokoro searxng
+    remote_compose up -d --build aiq-agent frontend kokoro searxng websurfx websurfx-redis
     ;;
 esac
 

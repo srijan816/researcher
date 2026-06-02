@@ -763,6 +763,28 @@ class TestPostWriteReadbackGuardMiddleware:
         finally:
             reset_session_recent_artifact_writes(token)
 
+    @pytest.mark.asyncio
+    async def test_readback_guard_normalizes_shared_paths(self):
+        middleware = PostWriteReadbackGuardMiddleware(suppress_read_count=1)
+        token = set_session_recent_artifact_writes({})
+        handler = AsyncMock(
+            side_effect=[
+                ToolMessage(content="written", tool_call_id="write_file-1", name="write_file"),
+                ToolMessage(content="actual file content", tool_call_id="read_file-1", name="read_file"),
+            ]
+        )
+        try:
+            await middleware.awrap_tool_call(self.Request("write_file", path="/shared/notes_topic.md"), handler)
+            read_result = await middleware.awrap_tool_call(
+                self.Request("read_file", path="shared/notes_topic.md"),
+                handler,
+            )
+
+            assert "READ_AFTER_WRITE_CONFIRMED" in read_result.content
+            assert handler.await_count == 1
+        finally:
+            reset_session_recent_artifact_writes(token)
+
 
 class TestPlannerCommitGuardMiddleware:
     """Tests for planner turn-budget commit enforcement."""
@@ -1001,12 +1023,13 @@ class TestToolResultPruningMiddleware:
         assert "TOOL_RESULT_DISPLAY_SHORTENED" in pruned[1].content
 
     @pytest.mark.asyncio
-    async def test_historical_ai_tool_call_args_are_pruned(self):
-        """Large historical write_file arguments should not balloon the next prompt."""
+    async def test_historical_write_file_content_is_not_replaced_with_placeholder(self):
+        """Artifact writes must not be shown as empty or placeholder content later."""
         middleware = ToolResultPruningMiddleware(max_tool_call_arg_chars=1000)
+        original_content = "x" * 5000
         tool_call = {
             "name": "write_file",
-            "args": {"file_path": "/shared/report.md", "content": "x" * 5000},
+            "args": {"file_path": "/shared/report.md", "content": original_content},
             "id": "call-1",
         }
         messages = [
@@ -1025,9 +1048,41 @@ class TestToolResultPruningMiddleware:
         pruned = await middleware.awrap_model_call(request, handler)
 
         pruned_call = pruned[0].tool_calls[0]
-        assert pruned_call["args"]["content"] == ""
-        assert pruned_call["args"]["_aiq_history_content_redacted"] is True
-        assert pruned_call["args"]["_aiq_history_content_chars"] == 5000
-        assert pruned_call["args"]["_aiq_history_content_path"] == "/shared/report.md"
+        assert pruned_call["args"]["content"] == original_content
+        assert "_aiq_history_content_redacted" not in pruned_call["args"]
         assert pruned[0].content[0]["input"]["content"] == pruned_call["args"]["content"]
-        assert pruned[0].content[0]["input"]["_aiq_history_content_redacted"] is True
+        assert "_aiq_history_content_redacted" not in pruned[0].content[0]["input"]
+
+    @pytest.mark.asyncio
+    async def test_historical_non_file_tool_args_are_still_pruned(self):
+        """Non-artifact arguments can still be shortened to protect context."""
+        middleware = ToolResultPruningMiddleware(max_tool_call_arg_chars=1000)
+        tool_call = {
+            "name": "advanced_web_search_tool",
+            "args": {"query": "x" * 5000},
+            "id": "call-1",
+        }
+        messages = [
+            AIMessage(
+                content=[
+                    {
+                        "type": "tool_use",
+                        "id": "call-1",
+                        "name": "advanced_web_search_tool",
+                        "input": tool_call["args"],
+                    }
+                ],
+                tool_calls=[tool_call],
+            )
+        ]
+        request = MagicMock()
+        request.messages = messages
+        request.override.side_effect = lambda **kwargs: MagicMock(messages=kwargs["messages"])
+
+        async def handler(req):
+            return req.messages
+
+        pruned = await middleware.awrap_model_call(request, handler)
+
+        assert "TOOL_ARGUMENT_DISPLAY_SHORTENED" in pruned[0].tool_calls[0]["args"]["query"]
+        assert len(pruned[0].tool_calls[0]["args"]["query"]) < 1200

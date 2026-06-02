@@ -37,6 +37,7 @@ services:
       - AIQ_CHROMA_DIR=${AIQ_CHROMA_DIR:-/app/data/chroma_data}
       - SEARXNG_URL=${SEARXNG_URL:-http://searxng:8080}
       - WEBSURFX_URL=${WEBSURFX_URL:-http://websurfx:8080}
+      - WEBSURFX_ENGINES=${WEBSURFX_ENGINES:-Searx,Brave,DuckDuckGo,LibreX,Mojeek,Qwant,Startpage,Yahoo,Bing,SepiaSearch}
       - AIQ_ADVANCED_DISCOVERY_BACKEND=${AIQ_ADVANCED_DISCOVERY_BACKEND:-websurfx_hybrid}
       - NOTEBOOKLM_PYTHON=${NOTEBOOKLM_PYTHON:-python}
       - NOTEBOOKLM_HOME=${NOTEBOOKLM_HOME:-/app/data/notebooklm}
@@ -117,8 +118,24 @@ services:
       args:
         WEBSURFX_GIT_REF: ${WEBSURFX_GIT_REF:-rolling}
     container_name: app2-aiq-websurfx
+    environment:
+      - WEBSURFX_SEARX_URL=${WEBSURFX_SEARX_URL:-http://searxng:8080}
+      - WEBSURFX_PROXY=${WEBSURFX_PROXY:-}
     volumes:
       - ./websurfx:/etc/xdg/websurfx:ro
+    networks:
+      - aiq-network
+    depends_on:
+      searxng:
+        condition: service_healthy
+      websurfx-redis:
+        condition: service_started
+    restart: unless-stopped
+
+  websurfx-redis:
+    image: redis:7-alpine
+    container_name: app2-aiq-websurfx-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
     networks:
       - aiq-network
     restart: unless-stopped

@@ -251,7 +251,8 @@ functions:
     _type: searxng_jina_web_search
     searxng_url: ${SEARXNG_URL:-http://localhost:8080}
     websurfx_url: ${WEBSURFX_URL:-http://localhost:8081}
-    websurfx_engines: ${WEBSURFX_ENGINES:-Brave,Wikipedia}
+    websurfx_engines: ${WEBSURFX_ENGINES:-Searx,Brave,DuckDuckGo,LibreX,Mojeek,Qwant,Startpage,Yahoo,Bing,SepiaSearch}
+    websurfx_timeout_seconds: ${WEBSURFX_TIMEOUT_SECONDS:-10}
     max_results: 20
     max_content_length: 2500
     discovery_backend: ${AIQ_ADVANCED_DISCOVERY_BACKEND:-hybrid}

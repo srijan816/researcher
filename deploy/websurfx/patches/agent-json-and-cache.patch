@@ -1,0 +1,25 @@
+--- a/src/routes/search.rs
++++ b/src/routes/search.rs
+@@ -165,7 +165,7 @@
+     );
+
+     // Add a random delay before making the request.
+-    if config.aggregator.random_delay || config.debug {
++    if (config.aggregator.random_delay && !params.json.unwrap_or(false)) || config.debug {
+         let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.subsec_nanos();
+         let delay = nanos % 10 + 1;
+         tokio::time::sleep(Duration::from_secs(delay as u64)).await;
+@@ -181,12 +181,7 @@
+
+     #[cfg(any(feature = "redis-cache", feature = "memory-cache"))]
+     {
+-        let previous_page = page.saturating_sub(1);
+-
+-        let next_page = page + 1;
+-
+-        let mut pages = vec![next_page, previous_page, page];
+-        pages.dedup();
++        let pages = [page];
+
+         let urls: Vec<String> = pages
+             .iter()

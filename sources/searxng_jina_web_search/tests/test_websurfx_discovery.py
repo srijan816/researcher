@@ -32,8 +32,10 @@ def test_config_accepts_websurfx_discovery_backend() -> None:
         discovery_backend="websurfx",
         websurfx_url="http://websurfx:8080",
         websurfx_engines="Brave,Wikipedia",
+        websurfx_timeout_seconds=8,
     )
 
     assert config.discovery_backend == "websurfx"
     assert config.websurfx_url == "http://websurfx:8080"
     assert config.websurfx_engines == "Brave,Wikipedia"
+    assert config.websurfx_timeout_seconds == 8

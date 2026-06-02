@@ -13,12 +13,15 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     ca-certificates \
     git \
     libssl-dev \
+    patch \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 RUN git clone --depth 1 --branch "${WEBSURFX_GIT_REF}" https://github.com/neon-mmd/websurfx.git .
-RUN cargo build --release --no-default-features
+COPY deploy/websurfx/patches/ /tmp/websurfx-patches/
+RUN for patch_file in /tmp/websurfx-patches/*.patch; do patch -p1 < "$patch_file"; done
+RUN cargo build --release --no-default-features --features redis-cache
 
 FROM debian:bookworm-slim AS runtime
 
