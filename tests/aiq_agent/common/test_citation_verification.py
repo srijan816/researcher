@@ -24,6 +24,7 @@ from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import _normalize_url
 from aiq_agent.common.citation_verification import _parse_citation_key
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
+from aiq_agent.common.citation_verification import rebuild_references
 from aiq_agent.common.citation_verification import register_source_parser
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import verify_citations
@@ -161,6 +162,12 @@ class TestSourceRegistry:
         registry.add(e1)
         registry.add(e2)
         assert len(registry.all_sources()) == 2
+
+    def test_entry_for_url_returns_canonical_entry(self, registry):
+        entry = SourceEntry(url="https://example.com/article", title="Article")
+        registry.add(entry)
+
+        assert registry.entry_for_url("https://example.com/article/") is entry
 
     def test_clear(self, registry):
         registry.add(SourceEntry(url="https://a.com"))
@@ -670,6 +677,13 @@ class TestVerifyCitations:
         result = verify_citations(report, registry)
         assert len(result.valid_citations) == 1
 
+    def test_references_with_numbered_hash_header(self, registry):
+        """Test numbered report-section header such as ## 14. Sources."""
+        report = "Finding [1].\n\n## 14. Sources\n[1] Article 1: https://valid.com/article1"
+        result = verify_citations(report, registry)
+        assert len(result.valid_citations) == 1
+        assert not result.removed_citations
+
     def test_unverifiable_citation_removed(self, registry):
         """Citation with no URL and no recognizable citation key is removed."""
         report = (
@@ -713,6 +727,29 @@ class TestVerifyCitations:
         result = verify_citations(report, reg)
         assert len(result.valid_citations) == 1
         assert "https://arxiv.org/abs/1706.03762" in result.verified_report
+
+    def test_rebuild_references_removes_garbled_tail_and_orders_by_inline_usage(self, registry):
+        report = (
+            "Second source is cited first [2]. First source appears later [1]. Missing source [3].\n\n"
+            "## References\n"
+            "[1] Article 1: https://valid.com/article1\n"
+            "[2] Article 2: https://valid.com/article2\n"
+            "[3] Fake: https://fake.com/nope\n"
+            "a73\n"
+            "## Glossary\n"
+            "duplicated corrupted tail\n"
+        )
+
+        rebuilt = rebuild_references(report, registry)
+
+        assert rebuilt.rebuilt
+        assert rebuilt.reference_count == 2
+        assert rebuilt.removed_inline_citations == [3]
+        assert "a73" not in rebuilt.report
+        assert "Glossary" not in rebuilt.report
+        assert "Second source is cited first [1]. First source appears later [2]. Missing source." in rebuilt.report
+        assert "[1] Article 2" in rebuilt.report
+        assert "[2] Article 1" in rebuilt.report
 
 
 # ---------------------------------------------------------------------------

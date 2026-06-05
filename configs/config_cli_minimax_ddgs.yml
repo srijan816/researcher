@@ -1,12 +1,9 @@
-# AI-Q Deep Research — MiniMax M3/M2.7 + SearXNG/Jina (Zero Tavily)
+# AI-Q Deep Research — MiniMax M3 + SearXNG/Jina (Zero Tavily)
 # Strategy:
-#   - MiniMax M3 synthesis for high-context reasoning
-#   - MiniMax M3 planner-fast for compact plan commits
-#   - Deeper tier uses MiniMax M2.7 highspeed with explicit thinking enabled
-#     for planner and researcher loops, then MiniMax M3 for final high-context
-#     synthesis where the evidence packet/claim table/source registry matter most
-#   - MiniMax M3 with thinking disabled for latency-sensitive intent, clarifier,
-#     shallow, and researcher loops
+#   - MiniMax M3 across active planner, researcher, and synthesis paths.
+#   - Planner/researcher loops keep thinking disabled for speed and tool-call reliability.
+#   - The thinking-enabled synthesis model is reserved for the orchestrator on
+#     deep, high-stakes, or large-document jobs.
 #   - Exa → optional primary high-quality search when EXA_API_KEY is set
 #   - SearXNG → self-hosted metasearch JSON results and free fallback
 #   - Jina Reader → full-page markdown extraction for the top results
@@ -79,6 +76,8 @@ llms:
     max_tokens: 16000
     streaming: true
     stream_usage: true
+    thinking:
+      type: disabled
     request_timeout: 600
     stream_no_progress_timeout: 120
     stream_repetition_token_limit: 24
@@ -94,6 +93,8 @@ llms:
     max_tokens: 32768
     streaming: true
     stream_usage: true
+    thinking:
+      type: disabled
     request_timeout: 480
     stream_no_progress_timeout: 90
     stream_repetition_token_limit: 24
@@ -126,6 +127,9 @@ llms:
     max_tokens: 24000
     streaming: true
     stream_usage: true
+    thinking:
+      type: enabled
+      budget_tokens: 4096
     request_timeout: 720
     stream_no_progress_timeout: 120
     stream_repetition_token_limit: 24
@@ -148,9 +152,9 @@ llms:
     stream_repetition_token_limit: 24
     max_retries: 1
 
-  minimax_m27_deeper_planner_llm:
+  minimax_m3_deeper_planner_fast_llm:
     _type: anthropic
-    model_name: ${MINIMAX_DEEPER_PLANNER_MODEL:-MiniMax-M2.7-highspeed}
+    model_name: ${MINIMAX_DEEPER_PLANNER_MODEL:-MiniMax-M3}
     base_url: https://api.minimax.io/anthropic
     api_key: ${MINIMAX_API_KEY}
     temperature: 0.2
@@ -159,16 +163,15 @@ llms:
     streaming: true
     stream_usage: true
     thinking:
-      type: enabled
-      budget_tokens: 2048
+      type: disabled
     request_timeout: 300
     stream_no_progress_timeout: 75
     stream_repetition_token_limit: 24
     max_retries: 1
 
-  minimax_m27_deeper_research_llm:
+  minimax_m3_deeper_research_fast_llm:
     _type: anthropic
-    model_name: ${MINIMAX_DEEPER_RESEARCH_MODEL:-MiniMax-M2.7-highspeed}
+    model_name: ${MINIMAX_DEEPER_RESEARCH_MODEL:-MiniMax-M3}
     base_url: https://api.minimax.io/anthropic
     api_key: ${MINIMAX_API_KEY}
     temperature: 0.25
@@ -177,28 +180,9 @@ llms:
     streaming: true
     stream_usage: true
     thinking:
-      type: enabled
-      budget_tokens: 2048
+      type: disabled
     request_timeout: 360
     stream_no_progress_timeout: 90
-    stream_repetition_token_limit: 24
-    max_retries: 1
-
-  minimax_m27_deeper_synthesis_llm:
-    _type: anthropic
-    model_name: ${MINIMAX_DEEPER_SYNTHESIS_MODEL:-MiniMax-M2.7-highspeed}
-    base_url: https://api.minimax.io/anthropic
-    api_key: ${MINIMAX_API_KEY}
-    temperature: 0.2
-    top_p: 0.8
-    max_tokens: 18000
-    streaming: true
-    stream_usage: true
-    thinking:
-      type: enabled
-      budget_tokens: 4096
-    request_timeout: 480
-    stream_no_progress_timeout: 120
     stream_repetition_token_limit: 24
     max_retries: 1
 
@@ -307,9 +291,9 @@ functions:
     _type: deep_research_agent
     orchestrator_llm: minimax_m3_synthesis_llm
     medium_orchestrator_llm: minimax_m3_synthesis_fast_llm
-    deeper_orchestrator_llm: minimax_m3_synthesis_llm
-    deeper_planner_llm: minimax_m27_deeper_planner_llm
-    deeper_researcher_llm: minimax_m27_deeper_research_llm
+    deeper_orchestrator_llm: minimax_m3_synthesis_fast_llm
+    deeper_planner_llm: minimax_m3_deeper_planner_fast_llm
+    deeper_researcher_llm: minimax_m3_deeper_research_fast_llm
     researcher_llm: minimax_m3_research_llm
     planner_llm: minimax_m3_planner_fast_llm
     max_loops: 2

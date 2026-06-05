@@ -5,6 +5,9 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from datetime import date
+from datetime import datetime
 from typing import Any
 from typing import Literal
 
@@ -25,6 +28,13 @@ class FactLedgerEntry(BaseModel):
 
     entity: str = Field(min_length=1)
     fact: str = Field(min_length=1)
+    fact_type: str = "general"
+    value: str | None = None
+    unit: str | None = None
+    event_date: str | None = None
+    source_published_at: str | None = None
+    as_of_date: str | None = None
+    supersedes: list[str] = Field(default_factory=list)
     source_url: str | None = None
     source_extract: str | None = None
     source_class: SourceClass | None = None
@@ -94,6 +104,33 @@ class FactLedger(BaseModel):
         raise ValueError("fact ledger must be a list, an object with entries, or an entity-to-entries map")
 
 
+@dataclass(frozen=True)
+class LiveFactConflict:
+    """A stale or conflicting current/live fact in the ledger."""
+
+    entity: str
+    fact_type: str
+    stale_fact: str
+    latest_fact: str
+    stale_date: str
+    latest_date: str
+    message: str
+
+
+LIVE_FACT_TYPES = frozenset(
+    {
+        "current_funding",
+        "funding",
+        "valuation",
+        "pricing",
+        "release_status",
+        "model_limit",
+        "benchmark",
+        "current_metric",
+    }
+)
+
+
 def validate_fact_ledger_json(content: str) -> tuple[FactLedger | None, list[str]]:
     """Validate fact-ledger JSON content and return human-readable errors."""
     try:
@@ -150,10 +187,62 @@ def summarize_fact_ledger(content: str) -> dict[str, Any]:
         "entities": entities,
         "verified_count": verified_count,
         "unverified_count": unverified_count,
+        "live_fact_conflicts": [conflict.__dict__ for conflict in live_fact_conflicts(ledger)],
     }
 
 
-def _fact_entry_sort_key(entry: FactLedgerEntry) -> tuple[int, int, int]:
+def live_fact_conflicts(ledger: FactLedger) -> list[LiveFactConflict]:
+    """Return stale current/live facts that have a newer conflicting value.
+
+    This deliberately focuses on facts where recency changes the answer:
+    funding, valuation, pricing, release status, model limits, and benchmarks.
+    Historical facts can coexist; current/live facts need a newest-value rule.
+    """
+
+    groups: dict[tuple[str, str], list[FactLedgerEntry]] = {}
+    for entry in ledger.entries:
+        fact_type = _normalize_fact_type(entry.fact_type)
+        if entry.status != "verified" or fact_type not in LIVE_FACT_TYPES:
+            continue
+        groups.setdefault((_normalize_entity(entry.entity), fact_type), []).append(entry)
+
+    conflicts: list[LiveFactConflict] = []
+    for (_entity_key, fact_type), entries in groups.items():
+        dated = [(entry, _entry_date(entry)) for entry in entries]
+        dated = [(entry, parsed_date) for entry, parsed_date in dated if parsed_date is not None]
+        if len(dated) < 2:
+            continue
+        latest_entry, latest_date = max(dated, key=lambda item: item[1])
+        latest_value = _entry_value(latest_entry)
+        for entry, parsed_date in dated:
+            if entry is latest_entry:
+                continue
+            if parsed_date >= latest_date:
+                continue
+            if _entry_value(entry) == latest_value:
+                continue
+            conflicts.append(
+                LiveFactConflict(
+                    entity=latest_entry.entity,
+                    fact_type=fact_type,
+                    stale_fact=entry.fact,
+                    latest_fact=latest_entry.fact,
+                    stale_date=entry.event_date or entry.source_published_at or entry.as_of_date or "",
+                    latest_date=latest_entry.event_date
+                    or latest_entry.source_published_at
+                    or latest_entry.as_of_date
+                    or "",
+                    message=(
+                        f"{entry.entity} {fact_type} has newer verified evidence dated "
+                        f"{latest_date.isoformat()}; older value dated {parsed_date.isoformat()} "
+                        "must be framed as historical or omitted."
+                    ),
+                )
+            )
+    return conflicts
+
+
+def _fact_entry_sort_key(entry: FactLedgerEntry) -> tuple[int, int, int, int]:
     source_rank = 0
     if entry.source_class:
         source_rank = {
@@ -170,5 +259,55 @@ def _fact_entry_sort_key(entry: FactLedgerEntry) -> tuple[int, int, int]:
     return (
         1 if entry.status == "verified" else 0,
         source_rank,
+        _date_sort_value(_entry_date(entry)),
         1 if entry.source_extract else 0,
     )
+
+
+def _normalize_entity(entity: str) -> str:
+    return " ".join(entity.lower().split())
+
+
+def _normalize_fact_type(fact_type: str | None) -> str:
+    value = " ".join(str(fact_type or "general").lower().replace("-", "_").split())
+    value = value.replace(" ", "_")
+    aliases = {
+        "funding_round": "funding",
+        "fundraise": "funding",
+        "valuation_current": "valuation",
+        "current_valuation": "valuation",
+        "price": "pricing",
+        "api_pricing": "pricing",
+    }
+    return aliases.get(value, value)
+
+
+def _entry_value(entry: FactLedgerEntry) -> str:
+    return " ".join(str(entry.value or entry.fact).lower().split())
+
+
+def _entry_date(entry: FactLedgerEntry) -> date | None:
+    for value in (entry.event_date, entry.source_published_at, entry.as_of_date):
+        parsed = _parse_date(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _parse_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%Y-%m", "%Y"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            return parsed.date()
+        except ValueError:
+            continue
+    return None
+
+
+def _date_sort_value(value: date | None) -> int:
+    if value is None:
+        return 0
+    return value.toordinal()

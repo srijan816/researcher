@@ -23,6 +23,7 @@ from .claim_table import validate_claim_table_json
 from .source_classification import classify_url
 from .source_classification import normalize_source_class
 from .source_classification import source_class_rank
+from .source_scoring import score_source
 
 
 class EvidenceExtract(BaseModel):
@@ -44,6 +45,11 @@ class EvidencePacketSource(BaseModel):
     extracts: list[EvidenceExtract] = Field(default_factory=list)
     full_text: str | None = None
     rank_score: int = 0
+    authority: int = 1
+    recency: int = 3
+    relevance: int = 1
+    bias_risk: int = 5
+    used_for: list[str] = Field(default_factory=list)
 
 
 class EvidencePacket(BaseModel):
@@ -62,6 +68,7 @@ class EvidencePacket(BaseModel):
 def build_evidence_packet(
     *,
     job_id: str | None = None,
+    request_text: str = "",
     claim_table_content: str | None = None,
     extract_contents: list[str] | None = None,
     registry_sources: list[Any] | None = None,
@@ -72,6 +79,8 @@ def build_evidence_packet(
 
     Args:
         job_id: Optional async job id.
+        request_text: Original user request or approved scope text, used for
+            deterministic source relevance scoring.
         claim_table_content: JSON content from `/shared/claim_table.json`.
         extract_contents: JSON fragments from `/shared/extracts/*.json`.
         registry_sources: SourceEntry-like objects captured from search tools.
@@ -110,10 +119,14 @@ def build_evidence_packet(
         if entry.extraction_status == "unknown":
             entry.extraction_status = "registered"
 
-    ranked = sorted(sources.values(), key=_source_sort_key, reverse=True)
+    _score_sources(sources.values(), request_text=request_text)
+    ranked = sorted(
+        (source for source in sources.values() if _keep_source(source)),
+        key=_source_sort_key,
+        reverse=True,
+    )
     distribution: dict[str, int] = {}
     for source in ranked:
-        source.rank_score = _source_rank_score(source)
         distribution[source.source_class] = distribution.get(source.source_class, 0) + 1
 
     return EvidencePacket(
@@ -262,18 +275,52 @@ def _truncate(value: str, limit: int) -> str:
     return value[:limit].rstrip() + f" [... truncated from {len(value)} chars]"
 
 
+def _score_sources(sources: Any, *, request_text: str) -> None:
+    for source in sources:
+        evidence_text = " ".join(
+            [extract.text for extract in source.extracts[:5]] + ([source.full_text] if source.full_text else [])
+        )
+        score = score_source(
+            url=source.url,
+            title=source.title,
+            source_class=source.source_class,
+            used_for=source.claim_ids,
+            extract_count=len(source.extracts),
+            relevance_text=request_text,
+            evidence_text=evidence_text,
+        )
+        source.authority = score.authority
+        source.recency = score.recency
+        source.relevance = score.relevance
+        source.bias_risk = score.bias_risk
+        source.used_for = score.used_for
+        source.rank_score = _source_rank_score(source)
+
+
+def _keep_source(source: EvidencePacketSource) -> bool:
+    """Drop only registry-only sources that are unsupported and off-topic."""
+
+    if source.claim_ids or source.extracts or source.full_text:
+        return True
+    return source.relevance > 1
+
+
 def _source_rank_score(source: EvidencePacketSource) -> int:
     return (
         source_class_rank(source.source_class) * 100
         + min(len(source.claim_ids), 20) * 5
         + min(len(source.extracts), 10)
+        + source.relevance * 3
+        - source.bias_risk
     )
 
 
-def _source_sort_key(source: EvidencePacketSource) -> tuple[int, int, int, str]:
+def _source_sort_key(source: EvidencePacketSource) -> tuple[int, int, int, int, int, str]:
     return (
         source_class_rank(source.source_class),
         len(source.claim_ids),
         len(source.extracts),
+        source.relevance,
+        -source.bias_risk,
         source.url,
     )

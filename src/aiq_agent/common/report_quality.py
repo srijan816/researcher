@@ -14,16 +14,18 @@ from aiq_agent.common.source_classification import AUTHORITATIVE_CLASSES
 from aiq_agent.common.source_classification import WEAK_DERIVATIVE_CLASSES
 from aiq_agent.common.source_classification import classify_source
 from aiq_agent.common.source_classification import normalize_source_class
+from aiq_agent.common.source_scoring import score_source
 
 _CONTEXT_MARKERS = ("## Clarification Context", "## Resume Context", "**Approved Research Plan**")
 _WORD_RE = re.compile(r"[a-z][a-z0-9-]+", re.IGNORECASE)
 _REFERENCE_SECTION_RE = re.compile(
-    r"^(?:#{2,3}\s+(?:Sources|References)|Reference\s+List|\*\*References:?\*\*)",
+    r"^(?:#{2,3}\s+(?:(?:\d+|[A-Z])[\).:-]?\s+)?(?:Sources|References)|Reference\s+List|\*\*References:?\*\*)",
     re.MULTILINE | re.IGNORECASE,
 )
 _CITATION_LINE_RE = re.compile(r"^\s*[-*]?\s*\[(\d+)\]\s*(.+)$", re.MULTILINE)
 _INLINE_CITATION_RE = re.compile(r"\[(\d+)\]")
 _URL_RE = re.compile(r"https?://\S+")
+_H2_SECTION_RE = re.compile(r"(?m)^##\s+(.+?)\s*$")
 _NUMERIC_CLAIM_RE = re.compile(
     r"(?:\b\d+(?:\.\d+)?\s?%|\$\s?\d|(?:\b\d+(?:\.\d+)?\s?(?:million|billion|trillion|x|times)\b))",
     re.IGNORECASE,
@@ -131,6 +133,78 @@ class SourceQualityResult:
     authoritative_citation_count: int = 0
     numeric_claim_count: int = 0
     weak_numeric_claim_count: int = 0
+    low_relevance_citation_count: int = 0
+
+
+def sanitize_report_structure(report_text: str | None) -> str:
+    """Remove obvious duplicated top-level sections from a final report.
+
+    This is deliberately conservative. It targets the corruption pattern seen in
+    long report finalization where appendices, motions, reading lists, or source
+    sections are emitted twice after a late repair attempt. It does not rewrite
+    prose or invent missing content.
+    """
+
+    if not report_text:
+        return ""
+    matches = list(_H2_SECTION_RE.finditer(report_text))
+    if len(matches) < 2:
+        return report_text
+
+    prefix = report_text[: matches[0].start()]
+    output = [prefix.rstrip()]
+    seen: dict[str, str] = {}
+    always_unique = {
+        "argument bank",
+        "argument banks",
+        "debate motions",
+        "further reading",
+        "motion bank",
+        "recommended debate motions",
+        "references",
+        "reading list",
+        "source list",
+        "sources",
+    }
+    changed = False
+
+    for index, match in enumerate(matches):
+        start = match.start()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(report_text)
+        section = report_text[start:end].strip()
+        heading = _normalize_heading(match.group(1))
+        body = section[match.end() - start :].strip()
+        prior_body = seen.get(heading)
+        if prior_body is not None:
+            if heading in always_unique or _sections_are_duplicate(prior_body, body):
+                changed = True
+                continue
+        seen[heading] = body
+        output.append(section)
+
+    if not changed:
+        return report_text
+    cleaned = "\n\n".join(part for part in output if part).strip()
+    return re.sub(r"\n{3,}", "\n\n", cleaned) + ("\n" if report_text.endswith("\n") else "")
+
+
+def _normalize_heading(heading: str) -> str:
+    heading = re.sub(r"^(?:\d+|[A-Z])[\).:-]?\s+", "", heading.strip(), flags=re.IGNORECASE)
+    heading = re.sub(r"[^a-z0-9 ]+", " ", heading.lower())
+    return re.sub(r"\s+", " ", heading).strip()
+
+
+def _sections_are_duplicate(first: str, second: str) -> bool:
+    first_tokens = _section_tokens(first)
+    second_tokens = _section_tokens(second)
+    if not first_tokens or not second_tokens:
+        return False
+    overlap = len(first_tokens & second_tokens) / max(1, min(len(first_tokens), len(second_tokens)))
+    return overlap >= 0.82
+
+
+def _section_tokens(text: str) -> set[str]:
+    return {token for token in _WORD_RE.findall(text.lower()) if len(token) >= 5}
 
 
 _MODEL_CALL_FAILED_RE = re.compile(
@@ -309,6 +383,7 @@ def evaluate_report_source_quality(
     report_text: str | None,
     registry: SourceRegistry,
     *,
+    request_text: str = "",
     min_distinct_cited_domains: int = 4,
     max_top_domain_share: float = 0.60,
     max_blog_share: float = 0.65,
@@ -352,6 +427,7 @@ def evaluate_report_source_quality(
     blog_share = sum(class_counts[source_class] for source_class in WEAK_DERIVATIVE_CLASSES) / len(cited_entries)
     authoritative_count = sum(class_counts[source_class] for source_class in AUTHORITATIVE_CLASSES)
     numeric_claim_count, weak_numeric_claim_count = _numeric_claim_counts(body, citation_sources)
+    low_relevance_count = sum(1 for entry in cited_entries if _source_relevance(entry, request_text) <= 1)
 
     available_domains = len({_hostname(source.url) for source in registry.all_sources() if source.url})
     if available_domains >= min_distinct_cited_domains and distinct_domains < min_distinct_cited_domains:
@@ -365,6 +441,7 @@ def evaluate_report_source_quality(
             authoritative_count,
             numeric_claim_count,
             weak_numeric_claim_count,
+            low_relevance_count,
         )
 
     if len(cited_entries) >= 8 and top_domain_share > max_top_domain_share:
@@ -378,6 +455,7 @@ def evaluate_report_source_quality(
             authoritative_count,
             numeric_claim_count,
             weak_numeric_claim_count,
+            low_relevance_count,
         )
 
     if len(cited_entries) >= 8 and blog_share > max_blog_share and authoritative_count < 2:
@@ -391,6 +469,7 @@ def evaluate_report_source_quality(
             authoritative_count,
             numeric_claim_count,
             weak_numeric_claim_count,
+            low_relevance_count,
         )
 
     if numeric_claim_count >= 3 and weak_numeric_claim_count / numeric_claim_count > 0.5:
@@ -404,6 +483,21 @@ def evaluate_report_source_quality(
             authoritative_count,
             numeric_claim_count,
             weak_numeric_claim_count,
+            low_relevance_count,
+        )
+
+    if len(cited_entries) >= 8 and low_relevance_count / len(cited_entries) > 0.35:
+        return SourceQualityResult(
+            False,
+            f"low_relevance_citation_share:{low_relevance_count}/{len(cited_entries)}",
+            distinct_domains,
+            top_domain,
+            top_domain_share,
+            blog_share,
+            authoritative_count,
+            numeric_claim_count,
+            weak_numeric_claim_count,
+            low_relevance_count,
         )
 
     return SourceQualityResult(
@@ -416,6 +510,7 @@ def evaluate_report_source_quality(
         authoritative_count,
         numeric_claim_count,
         weak_numeric_claim_count,
+        low_relevance_count,
     )
 
 
@@ -461,6 +556,18 @@ def _entry_source_class(entry) -> str:
     if source_class == "unknown" and getattr(entry, "url", None):
         source_class = classify_source(entry.url)
     return normalize_source_class(source_class)
+
+
+def _source_relevance(entry, request_text: str) -> int:
+    if not request_text:
+        return 3
+    score = score_source(
+        url=getattr(entry, "url", "") or "",
+        title=getattr(entry, "title", None),
+        source_class=getattr(entry, "source_class", None),
+        relevance_text=request_text,
+    )
+    return score.relevance
 
 
 def _numeric_claim_counts(body: str, citation_sources: dict[int, object]) -> tuple[int, int]:

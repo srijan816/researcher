@@ -128,12 +128,26 @@ Only include extracts you actually saw in tool results. Do not include long pros
 ## Fact Ledger Fragment (REQUIRED for entity-targeted work)
 If your assigned task/query includes `target_entity`, `per_entity`, or fact-ledger targets from `/shared/plan.json`, you MUST write a fact-ledger fragment in addition to your research notes.
 
+For live/current facts, use structured fields so the final writer can choose the newest verified value:
+- `fact_type`: use `funding`, `valuation`, `pricing`, `release_status`, `model_limit`, `benchmark`, or `current_metric` when applicable.
+- `value`: the exact value being claimed, e.g. `$950M`, `$15.8B`, `98.7%`, `2025-06-18`.
+- `event_date`: the date the fact happened when available, e.g. a funding announcement date.
+- `source_published_at`: the source publication/update date when available.
+- `as_of_date`: the date the value is current as of.
+Older values are still useful, but mark their dates. Do not present an older funding, valuation, pricing, release-status, model-limit, or benchmark value as current if you found a newer dated value for the same entity/fact type.
+
 1. Call `read_file` on `/shared/plan.json` if you need the fact-ledger targets.
 2. For each target you can answer from tool results, write a verified entry:
 ```json
 {
   "entity": "Grok Imagine",
+  "fact_type": "pricing",
   "fact": "Per-second pricing is ...",
+  "value": "$...",
+  "unit": "USD per second",
+  "event_date": "2026-06-05",
+  "source_published_at": "2026-06-05",
+  "as_of_date": "2026-06-05",
   "source_url": "https://official-or-other-source.example/...",
   "source_extract": "1-3 short sentences or exact text from the source that supports this fact",
   "source_class": "first_party",

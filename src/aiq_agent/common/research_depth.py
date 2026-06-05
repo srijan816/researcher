@@ -123,13 +123,13 @@ RESEARCH_DEPTH_CONFIGS: dict[ResearchDepthTier, ResearchDepthConfig] = {
     "deeper": ResearchDepthConfig(
         tier="deeper",
         label="Deeper",
-        source_target="32-64",
+        source_target="40-77",
         max_researcher_tasks=5,
         max_parallel_researcher_tasks=3,
-        search_calls_per_task=12,
+        search_calls_per_task=14,
         planner_search_limit=1,
-        advanced_web_search_limit=64,
-        web_search_limit=20,
+        advanced_web_search_limit=77,
+        web_search_limit=24,
         stock_quote_limit=8,
         planner_guidance=(
             "Build a multi-angle plan, but pack related sections into 3-4 researcher tasks. "

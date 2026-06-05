@@ -61,6 +61,11 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         default=None,
         description="Optional researcher LLM for the deeper tier",
     )
+    deep_planner_llm: LLMRef | None = Field(default=None, description="Optional planner LLM for the deep tier")
+    deep_researcher_llm: LLMRef | None = Field(
+        default=None,
+        description="Optional researcher LLM for the deep tier",
+    )
     researcher_llm: LLMRef | None = Field(default=None, description="LLM for researcher")
     planner_llm: LLMRef | None = Field(default=None, description="LLM for planner")
     tools: list[FunctionRef | FunctionGroupRef] = Field(
@@ -135,6 +140,15 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
             wrapper_type=LLMFrameworkEnum.LANGCHAIN,
         )
         provider.configure(LLMRole.DEEPER_RESEARCHER, deeper_researcher_llm)
+    if config.deep_planner_llm:
+        deep_planner_llm = await builder.get_llm(config.deep_planner_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+        provider.configure(LLMRole.DEEP_PLANNER, deep_planner_llm)
+    if config.deep_researcher_llm:
+        deep_researcher_llm = await builder.get_llm(
+            config.deep_researcher_llm,
+            wrapper_type=LLMFrameworkEnum.LANGCHAIN,
+        )
+        provider.configure(LLMRole.DEEP_RESEARCHER, deep_researcher_llm)
     if config.researcher_llm:
         researcher_llm = await builder.get_llm(config.researcher_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
         provider.configure(LLMRole.RESEARCHER, researcher_llm)

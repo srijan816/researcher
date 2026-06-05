@@ -64,6 +64,7 @@ _session_task_search_counts: contextvars.ContextVar[dict[str, int] | None] = con
 )
 
 _SEARCH_TOOL_FAMILY = {"advanced_web_search_tool", "web_search_tool", "exa_web_search_tool"}
+_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 
 def set_session_tool_counts(counts: dict[str, int] | None) -> contextvars.Token:
@@ -487,11 +488,79 @@ class ToolArgumentNormalizationMiddleware(AgentMiddleware):
 
     @staticmethod
     def _as_list(value) -> list:
+        while isinstance(value, dict) and set(value) == {"item"}:
+            value = value["item"]
         if value is None:
             return []
         if isinstance(value, list):
-            return value
+            flattened = []
+            for item in value:
+                flattened.extend(ToolArgumentNormalizationMiddleware._as_list(item))
+            return flattened
         return [value]
+
+    @staticmethod
+    def _coerce_int_like(value):
+        while isinstance(value, dict) and set(value) == {"item"}:
+            value = value["item"]
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(round(value))
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            semantic_weights = {
+                "low": 1,
+                "lowish": 2,
+                "medium": 3,
+                "moderate": 3,
+                "high": 5,
+                "highish": 4,
+            }
+            if lowered in semantic_weights:
+                return semantic_weights[lowered]
+            match = _NUMBER_RE.search(value.replace(",", ""))
+            if match:
+                return int(round(float(match.group(0))))
+        return None
+
+    @staticmethod
+    def _coerce_float_like(value):
+        while isinstance(value, dict) and set(value) == {"item"}:
+            value = value["item"]
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return float(int(value))
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            match = _NUMBER_RE.search(value.replace(",", ""))
+            if match:
+                return float(match.group(0))
+        return None
+
+    @staticmethod
+    def _normalize_mode(value):
+        if not isinstance(value, str):
+            return value
+        normalized = re.sub(r"[\s\-]+", "_", value.strip().lower())
+        aliases = {
+            "standard": "standard_report",
+            "standard_report": "standard_report",
+            "standardreport": "standard_report",
+            "focused": "focused_screen",
+            "focused_screen": "focused_screen",
+            "focusedscreen": "focused_screen",
+            "lesson": "lesson_first",
+            "lesson_first": "lesson_first",
+            "lessonfirst": "lesson_first",
+        }
+        return aliases.get(normalized, "standard_report")
 
     @classmethod
     def _normalize_file_tool_args(cls, args: dict) -> dict:
@@ -505,6 +574,8 @@ class ToolArgumentNormalizationMiddleware(AgentMiddleware):
 
     @classmethod
     def _normalize_plan_query(cls, value) -> dict:
+        while isinstance(value, dict) and set(value) == {"item"}:
+            value = value["item"]
         if isinstance(value, str):
             return {"query": value}
         if not isinstance(value, dict):
@@ -531,11 +602,27 @@ class ToolArgumentNormalizationMiddleware(AgentMiddleware):
                 if alias in query:
                     query["target_claims"] = cls._as_list(query[alias])
                     break
+        elif isinstance(query["target_claims"], (dict, list)):
+            query["target_claims"] = cls._as_list(query["target_claims"])
         if "target_claim_ids" not in query:
             for alias in ("claim_ids", "target_ids"):
                 if alias in query:
                     query["target_claim_ids"] = [str(item) for item in cls._as_list(query[alias])]
                     break
+        elif isinstance(query["target_claim_ids"], (dict, list)):
+            query["target_claim_ids"] = [str(item) for item in cls._as_list(query["target_claim_ids"])]
+        if "seed_queries" in query and isinstance(query["seed_queries"], (dict, list)):
+            query["seed_queries"] = cls._as_list(query["seed_queries"])
+        if "target_sections" in query and isinstance(query["target_sections"], (dict, list)):
+            query["target_sections"] = cls._as_list(query["target_sections"])
+        for numeric_field in ("relevance_weight", "budget_percent", "search_budget"):
+            if numeric_field in query:
+                if numeric_field == "budget_percent":
+                    coerced = cls._coerce_float_like(query[numeric_field])
+                else:
+                    coerced = cls._coerce_int_like(query[numeric_field])
+                if coerced is not None:
+                    query[numeric_field] = coerced
         return query
 
     @classmethod
@@ -578,6 +665,13 @@ class ToolArgumentNormalizationMiddleware(AgentMiddleware):
             normalized["queries"] = [cls._normalize_plan_query(item) for item in cls._as_list(normalized["queries"])]
         if "constraints" in normalized and not isinstance(normalized["constraints"], list):
             normalized["constraints"] = cls._as_list(normalized["constraints"])
+        if "output_style" in normalized and isinstance(normalized["output_style"], dict):
+            output_style = dict(normalized["output_style"])
+            while isinstance(output_style, dict) and set(output_style) == {"item"}:
+                output_style = output_style["item"]
+            if "mode" in output_style:
+                output_style["mode"] = cls._normalize_mode(output_style["mode"])
+            normalized["output_style"] = output_style
         return normalized
 
     @classmethod

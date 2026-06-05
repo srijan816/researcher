@@ -197,6 +197,8 @@ The sync script is:
 /Volumes/SrijanExt/Users/Srijan/Downloads/code/minimax/nvda-deep-research/scripts/sync_app2_deep_research.sh
 ```
 
+Operational rule: after any code/config change that should affect app2, sync to Oracle and restart the affected app2 service immediately. If the change is backend, restart backend; if UI, restart frontend; if the impact spans both, restart `all`. Do not skip the restart just because a job is currently running.
+
 Dry run:
 
 ```bash

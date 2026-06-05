@@ -213,6 +213,120 @@ class TestToolArgumentNormalizationMiddleware:
         assert result.result[0].content[0]["input"]["queries"][0]["query"] == "AI use cases ROI 2026 analyst report"
 
     @pytest.mark.asyncio
+    async def test_flattens_nested_write_plan_list_wrappers(self, middleware):
+        ai_msg = AIMessage(
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "tc1",
+                    "name": "write_plan",
+                    "input": {
+                        "report_title": "CRO Video Strategy",
+                        "report_toc": {"item": {"item": {"title": "Mute-to-Unmute UX"}}},
+                        "queries": {
+                            "item": {
+                                "item": {
+                                    "query": "Research mute autoplay UX and browser policy evidence",
+                                    "seed_queries": {
+                                        "item": {
+                                            "item": [
+                                                "Chrome autoplay policy muted video",
+                                                "iOS Safari autoplay muted playsinline policy",
+                                            ]
+                                        }
+                                    },
+                                    "target_sections": {"item": {"item": "Mute-to-Unmute UX"}},
+                                    "target_claims": {
+                                        "item": {
+                                            "item": [
+                                                {"claim_id": "C1", "claim": "Browser autoplay policy evidence"},
+                                                {
+                                                    "item": [
+                                                        {"claim_id": "C2", "claim": "Kinetic typography case evidence"},
+                                                        {
+                                                            "item": {
+                                                                "claim_id": "C3",
+                                                                "claim": "Unmute UX recommendation",
+                                                            }
+                                                        },
+                                                    ]
+                                                },
+                                            ]
+                                        }
+                                    },
+                                }
+                            }
+                        },
+                        "constraints": {"item": {"item": "Use first-party browser policy sources."}},
+                    },
+                }
+            ],
+            tool_calls=[
+                {
+                    "name": "write_plan",
+                    "args": {
+                        "report_title": "CRO Video Strategy",
+                        "report_toc": {"item": {"item": {"title": "Mute-to-Unmute UX"}}},
+                        "queries": {
+                            "item": {
+                                "item": {
+                                    "query": "Research mute autoplay UX and browser policy evidence",
+                                    "seed_queries": {
+                                        "item": {
+                                            "item": [
+                                                "Chrome autoplay policy muted video",
+                                                "iOS Safari autoplay muted playsinline policy",
+                                            ]
+                                        }
+                                    },
+                                    "target_sections": {"item": {"item": "Mute-to-Unmute UX"}},
+                                    "target_claims": {
+                                        "item": {
+                                            "item": [
+                                                {"claim_id": "C1", "claim": "Browser autoplay policy evidence"},
+                                                {
+                                                    "item": [
+                                                        {"claim_id": "C2", "claim": "Kinetic typography case evidence"},
+                                                        {
+                                                            "item": {
+                                                                "claim_id": "C3",
+                                                                "claim": "Unmute UX recommendation",
+                                                            }
+                                                        },
+                                                    ]
+                                                },
+                                            ]
+                                        }
+                                    },
+                                }
+                            }
+                        },
+                        "constraints": {"item": {"item": "Use first-party browser policy sources."}},
+                    },
+                    "id": "tc1",
+                }
+            ],
+        )
+        handler = AsyncMock(return_value=ModelResponse(result=[ai_msg]))
+        request = MagicMock()
+
+        result = await middleware.awrap_model_call(request, handler)
+
+        args = result.result[0].tool_calls[0]["args"]
+        assert args["report_toc"] == [{"title": "Mute-to-Unmute UX"}]
+        assert args["queries"][0]["seed_queries"] == [
+            "Chrome autoplay policy muted video",
+            "iOS Safari autoplay muted playsinline policy",
+        ]
+        assert args["queries"][0]["target_sections"] == ["Mute-to-Unmute UX"]
+        assert args["queries"][0]["target_claims"] == [
+            {"claim_id": "C1", "claim": "Browser autoplay policy evidence"},
+            {"claim_id": "C2", "claim": "Kinetic typography case evidence"},
+            {"claim_id": "C3", "claim": "Unmute UX recommendation"},
+        ]
+        assert args["constraints"] == ["Use first-party browser policy sources."]
+
+    @pytest.mark.asyncio
     async def test_normalizes_file_path_alias(self, middleware):
         ai_msg = AIMessage(
             content="",

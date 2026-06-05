@@ -72,6 +72,7 @@ from .prompt_utils import render_prompt_template
 from .report_quality import evaluate_report_source_quality
 from .report_quality import is_model_failure_report
 from .report_quality import report_matches_request_scope
+from .report_quality import sanitize_report_structure
 from .research_depth import DEFAULT_RESEARCH_DEPTH
 from .research_depth import RESEARCH_DEPTH_CONFIGS
 from .research_depth import ResearchDepthConfig
@@ -139,6 +140,7 @@ __all__ = [
     "reset_session_registry",
     "sanitize_report",
     "report_matches_request_scope",
+    "sanitize_report_structure",
     "set_session_registry",
     "summarize_claim_table",
     "validate_tool_availability",

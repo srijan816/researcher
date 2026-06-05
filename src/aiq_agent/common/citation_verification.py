@@ -74,6 +74,17 @@ class CitationVerificationResult:
     valid_citations: list[dict] = field(default_factory=list)
 
 
+@dataclass
+class ReferenceRebuildResult:
+    """Result of rebuilding a report's References section deterministically."""
+
+    report: str
+    rebuilt: bool
+    reference_count: int = 0
+    removed_inline_citations: list[int] = field(default_factory=list)
+    ambiguous_reference_numbers: list[int] = field(default_factory=list)
+
+
 class EmptySourceRegistryError(Exception):
     """Raised when no sources were captured during research."""
 
@@ -335,6 +346,23 @@ class SourceRegistry:
     def all_sources(self) -> list[SourceEntry]:
         """Return all registered sources."""
         return list(self._all)
+
+    def entry_for_url(self, url: str) -> SourceEntry | None:
+        """Return the registry entry for a URL if it can be resolved."""
+        resolved = self.resolve_url(url)
+        if not resolved:
+            return None
+        return self._urls.get(resolved) or self._urls.get(_normalize_url(resolved))
+
+    def entry_for_citation_key(self, key: str) -> SourceEntry | None:
+        """Return the registry entry for a knowledge-layer citation key."""
+        target_file, _ = _parse_citation_key(key)
+        target_lower = target_file.lower()
+        for entry in self._citation_keys:
+            entry_file, _ = _parse_citation_key(entry.citation_key)
+            if entry_file.lower() == target_lower:
+                return entry
+        return None
 
     def clear(self) -> None:
         """Reset the registry."""
@@ -672,7 +700,7 @@ register_source_parser(lambda name: "searxng" in name or "web_search" in name, _
 # ---------------------------------------------------------------------------
 
 _REFERENCE_SECTION_RE = re.compile(
-    r"^(?:#{2,3}\s+(?:Sources|References)|Reference\s+List|\*\*References:?\*\*)",
+    r"^(?:#{2,3}\s+(?:(?:\d+|[A-Z])[\).:-]?\s+)?(?:Sources|References)|Reference\s+List|\*\*References:?\*\*)",
     re.MULTILINE | re.IGNORECASE,
 )
 
@@ -749,6 +777,115 @@ def _renumber_citations(body: str, ref_section: str) -> tuple[str, str, dict[int
         ref_section = ref_section.replace(placeholder, f"[{new_num}]")
 
     return body, ref_section, renumber_map
+
+
+def rebuild_references(report_text: str, registry: SourceRegistry) -> ReferenceRebuildResult:
+    """Rebuild the References section from verified inline citation usage.
+
+    The LLM may produce a malformed reference tail: duplicate numbers, orphaned
+    URLs, duplicated appendices, or text after the final source list. This helper
+    treats the report body as the source of citation intent, resolves each cited
+    reference number back to the captured source registry, then appends a fresh
+    deterministic `## References` section. It never invents references: inline
+    citations whose reference line cannot be resolved are removed.
+    """
+
+    report_text = report_text.replace("【", "[").replace("】", "]")
+    ref_match = _REFERENCE_SECTION_RE.search(report_text)
+    if not ref_match:
+        return ReferenceRebuildResult(report=report_text, rebuilt=False)
+
+    body = report_text[: ref_match.start()].rstrip()
+    ref_section = report_text[ref_match.start() :]
+    number_to_source: dict[int, SourceEntry | None] = {}
+    number_to_key: dict[int, str] = {}
+    ambiguous: set[int] = set()
+
+    for line_match in _CITATION_LINE_RE.finditer(ref_section):
+        num = int(line_match.group(1))
+        ref_text = line_match.group(2).strip()
+        entry: SourceEntry | None = None
+        key = ""
+
+        url_match = _URL_IN_LINE_RE.search(ref_text)
+        if url_match:
+            entry = registry.entry_for_url(url_match.group(0).rstrip(_URL_TRIM_CHARS))
+            if entry and entry.url:
+                key = f"url:{_normalize_url(entry.url)}"
+        else:
+            is_kl, citation_key = _is_knowledge_citation(ref_text, registry)
+            if is_kl and citation_key:
+                entry = registry.entry_for_citation_key(citation_key)
+                if entry and entry.citation_key:
+                    key = f"key:{entry.citation_key.lower()}"
+
+        if not entry or not key:
+            continue
+        existing_key = number_to_key.get(num)
+        if existing_key and existing_key != key:
+            number_to_source[num] = None
+            ambiguous.add(num)
+            continue
+        number_to_key[num] = key
+        number_to_source[num] = entry
+
+    old_to_new: dict[int, int] = {}
+    canonical_entries: dict[str, SourceEntry] = {}
+    removed_inline: set[int] = set()
+
+    def _replace_citation(match: re.Match) -> str:
+        old_num = int(match.group(1))
+        entry = number_to_source.get(old_num)
+        key = number_to_key.get(old_num)
+        if entry is None or not key:
+            removed_inline.add(old_num)
+            return ""
+        new_num = old_to_new.get(old_num)
+        if new_num is None:
+            if key not in canonical_entries:
+                canonical_entries[key] = entry
+            new_num = list(canonical_entries).index(key) + 1
+            old_to_new[old_num] = new_num
+        return f"[{new_num}]"
+
+    rebuilt_body = re.sub(r"\[(\d+)\]", _replace_citation, body)
+    rebuilt_body = re.sub(r"\s+([.,;:])", r"\1", rebuilt_body)
+    rebuilt_body = re.sub(r" {2,}", " ", rebuilt_body).rstrip()
+
+    if not canonical_entries:
+        return ReferenceRebuildResult(
+            report=rebuilt_body,
+            rebuilt=True,
+            removed_inline_citations=sorted(removed_inline),
+            ambiguous_reference_numbers=sorted(ambiguous),
+        )
+
+    lines = ["## References"]
+    for index, entry in enumerate(canonical_entries.values(), start=1):
+        lines.append(f"[{index}] {_reference_display_text(entry)}")
+
+    return ReferenceRebuildResult(
+        report=rebuilt_body + "\n\n" + "\n".join(lines) + "\n",
+        rebuilt=True,
+        reference_count=len(canonical_entries),
+        removed_inline_citations=sorted(removed_inline),
+        ambiguous_reference_numbers=sorted(ambiguous),
+    )
+
+
+def _reference_display_text(entry: SourceEntry) -> str:
+    title = " ".join(str(entry.title or "").split()).strip()
+    source_class = str(entry.source_class or "unknown")
+    class_suffix = f" [{source_class}]" if source_class and source_class != "unknown" else ""
+    if entry.url:
+        if not title:
+            title = urlparse(entry.url).netloc.replace("www.", "") or "Source"
+        return f"{title}{class_suffix}: {entry.url}"
+    if entry.citation_key:
+        if title and title.lower() not in entry.citation_key.lower():
+            return f"{title}: {entry.citation_key}"
+        return entry.citation_key
+    return title or entry.tool_name or "Tool result"
 
 
 def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVerificationResult:

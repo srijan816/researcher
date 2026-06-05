@@ -63,6 +63,50 @@ def test_plan_json_from_tool_args_creates_valid_validator_payload():
     plan = json.loads(plan_json)
     assert plan["report_title"] == 'AI Use Cases and "Ready" Criteria'
     assert plan["queries"][0]["target_claim_ids"] == ["C1"]
+    assert plan["task_analysis"]["scope_profile"]["primary_subject"] == 'AI Use Cases and "Ready" Criteria'
+
+
+def test_plan_json_from_tool_args_preserves_topic_first_scope_profile():
+    plan_json = plan_json_from_tool_args(
+        report_title="Social Movements Training Research Dossier",
+        report_toc=[{"title": "Foundations"}, {"title": "Cases"}],
+        queries=[
+            {
+                "query": "social movements academic foundations and cases",
+                "target_sections": ["Foundations", "Cases"],
+                "target_claims": [
+                    {
+                        "claim_id": "C1",
+                        "claim_type": "definition",
+                        "claim": "Social movements need a topic-first training dossier",
+                        "required_source_class": "academic",
+                    }
+                ],
+            }
+        ],
+        constraints=["Keep debate training as application context."],
+        output_style={
+            "mode": "lesson_first",
+            "topic_anchor": "Social change, social justice, and social movements",
+            "target": "Slide-deck-ready training dossier",
+            "avoid": ["A report about WSDC/BP itself"],
+        },
+        task_analysis={
+            "scope_profile": {
+                "primary_subject": "Social change, social justice, and social movements",
+                "deliverable_type": "slide-deck-ready training dossier",
+                "application_context": "WSDC/BP competitive debate training",
+                "scope_mode": "topic_first",
+                "budget_mode": "lesson_first",
+            }
+        },
+    )
+
+    plan = json.loads(plan_json)
+    profile = plan["task_analysis"]["scope_profile"]
+    assert profile["primary_subject"] == "Social change, social justice, and social movements"
+    assert profile["application_context"] == "WSDC/BP competitive debate training"
+    assert profile["scope_mode"] == "topic_first"
 
 
 def test_plan_json_from_tool_args_fills_missing_claims_and_sections():
@@ -155,6 +199,66 @@ def test_plan_json_from_tool_args_normalizes_task_budget_percentages():
     assert budget_percents == [50.0, 10.0, 40.0]
     assert [query["task_id"] for query in plan["queries"]] == ["Q1", "Q2", "Q3"]
     assert plan["queries"][0]["task_category"] == "primary_data"
+
+
+def test_plan_json_from_tool_args_coerces_numeric_strings_and_mode_aliases():
+    plan_json = plan_json_from_tool_args(
+        report_title="Numeric Coercion Plan",
+        report_toc=[
+            {"title": "Foundations"},
+            {"title": "Evidence"},
+        ],
+        queries=[
+            {
+                "query": "first query evidence",
+                "tool": "advanced_web_search_tool",
+                "relevance_weight": "5",
+                "budget_percent": "55.6%",
+                "search_budget": "12 calls",
+                "target_sections": {"item": ["Foundations"]},
+                "target_claims": {
+                    "item": [
+                        {
+                            "claim_id": "C1",
+                            "claim_type": "quantitative",
+                            "claim": "Quantitative evidence for the first query",
+                            "required_source_class": "primary_issuer",
+                        }
+                    ]
+                },
+            },
+            {
+                "query": "second query evidence",
+                "tool": "advanced_web_search_tool",
+                "relevance_weight": "1",
+                "budget_percent": "44.4%",
+                "search_budget": "6",
+                "target_sections": {"item": "Evidence"},
+                "target_claims": {
+                    "item": {
+                        "item": {
+                            "claim_id": "C2",
+                            "claim_type": "discovery",
+                            "claim": "Discovery evidence for the second query",
+                            "required_source_class": "mixed",
+                        }
+                    }
+                },
+            },
+        ],
+        constraints=["Keep it compact."],
+        output_style={"mode": "standard report", "avoid": {"item": "verbose repair loops"}},
+    )
+
+    plan = json.loads(plan_json)
+    assert PlanFileValidationMiddleware._validate_plan_payload(plan_json) == []
+    assert plan["output_style"]["mode"] == "standard_report"
+    assert plan["queries"][0]["relevance_weight"] == 5
+    assert plan["queries"][0]["budget_percent"] == pytest.approx(55.6)
+    assert plan["queries"][0]["search_budget"] == 12
+    assert plan["queries"][1]["relevance_weight"] == 1
+    assert plan["queries"][1]["budget_percent"] == pytest.approx(44.4)
+    assert plan["queries"][1]["search_budget"] == 6
 
 
 def test_plan_json_from_tool_args_accepts_prose_source_strategy_and_compacts_payload():
@@ -291,6 +395,79 @@ def test_plan_json_from_tool_args_accepts_single_item_double_wrappers():
             "preferred_source_classes": ["mixed"],
             "target_task_id": "Q1",
         }
+    ]
+
+
+def test_plan_json_from_tool_args_flattens_nested_claim_lists():
+    """Regression for M3 putting a list of claims into one target_claims slot."""
+
+    plan_json = plan_json_from_tool_args(
+        report_title="CRO Video Strategy Plan",
+        report_toc=[
+            {
+                "title": "Mute-to-Unmute UX",
+                "subsections": {"item": [{"title": "Browser Policy"}, {"title": "Case Studies"}]},
+            }
+        ],
+        queries=[
+            {
+                "query": "Research mute autoplay UX case studies and browser policy evidence",
+                "seed_queries": {
+                    "item": {
+                        "item": [
+                            "Chrome autoplay policy muted video",
+                            "iOS Safari autoplay muted playsinline policy",
+                        ]
+                    }
+                },
+                "target_sections": {"item": {"item": "Mute-to-Unmute UX"}},
+                "target_claims": {
+                    "item": {
+                        "item": [
+                            {
+                                "claim_id": "C1",
+                                "claim_type": "specification",
+                                "claim": "Chrome and Safari autoplay policies require muted or user-initiated media",
+                                "required_source_class": "first_party",
+                            },
+                            {
+                                "item": [
+                                    {
+                                        "claim_id": "C2",
+                                        "claim_type": "existence",
+                                        "claim": "Brands use kinetic typography to preserve meaning in muted video",
+                                        "required_source_class": "authoritative_third_party",
+                                    },
+                                    {
+                                        "item": {
+                                            "claim_id": "C3",
+                                            "claim_type": "recommendation",
+                                            "claim": "Unmute UX should minimize friction and preserve context",
+                                            "required_source_class": "primary_issuer",
+                                        }
+                                    },
+                                ]
+                            },
+                        ]
+                    }
+                },
+            }
+        ],
+        constraints={"item": {"item": "Stay scoped to mute-first homepage video UX."}},
+    )
+
+    plan = json.loads(plan_json)
+    assert PlanFileValidationMiddleware._validate_plan_payload(plan_json) == []
+    assert plan["queries"][0]["seed_queries"] == [
+        "Chrome autoplay policy muted video",
+        "iOS Safari autoplay muted playsinline policy",
+    ]
+    assert plan["queries"][0]["target_sections"] == ["Mute-to-Unmute UX"]
+    assert plan["queries"][0]["target_claim_ids"] == ["C1", "C2", "C3"]
+    assert [claim["claim"] for claim in plan["queries"][0]["target_claims"]] == [
+        "Chrome and Safari autoplay policies require muted or user-initiated media",
+        "Brands use kinetic typography to preserve meaning in muted video",
+        "Unmute UX should minimize friction and preserve context",
     ]
 
 

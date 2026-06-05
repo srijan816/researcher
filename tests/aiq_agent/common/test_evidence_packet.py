@@ -98,3 +98,26 @@ def test_build_evidence_packet_merges_extract_fragments_with_claim_sources():
     assert packet.source_count == 1
     assert packet.sources[0].title == "BLS Report"
     assert len(packet.sources[0].extracts) == 2
+
+
+def test_build_evidence_packet_drops_off_topic_registry_only_sources():
+    class RegistrySource:
+        def __init__(self, url: str, title: str, source_class: str = "academic"):
+            self.url = url
+            self.title = title
+            self.source_class = source_class
+
+    packet = build_evidence_packet(
+        request_text="Research social movements, civil rights activism, protest tactics, and political change.",
+        registry_sources=[
+            RegistrySource("https://example.edu/qaidam-basin-hydroclimate", "Qaidam Basin hydroclimate"),
+            RegistrySource(
+                "https://journals.example.edu/civil-rights-protest-movements",
+                "Civil rights protest movements and political change",
+            ),
+        ],
+    )
+
+    urls = [source.url for source in packet.sources]
+    assert "https://journals.example.edu/civil-rights-protest-movements" in urls
+    assert "https://example.edu/qaidam-basin-hydroclimate" not in urls

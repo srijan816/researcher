@@ -38,6 +38,8 @@ class LLMRole(StrEnum):
     DEEPER_ORCHESTRATOR = "deeper_orchestrator"
     DEEPER_PLANNER = "deeper_planner"
     DEEPER_RESEARCHER = "deeper_researcher"
+    DEEP_PLANNER = "deep_planner"
+    DEEP_RESEARCHER = "deep_researcher"
     REFLECTION = "reflection"
     CLARIFIER = "clarifier"
     META_CHATTER = "meta_chatter"

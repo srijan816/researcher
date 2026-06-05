@@ -563,6 +563,25 @@ def _normalize_websurfx_result(item: dict) -> dict | None:
     }
 
 
+def _salvage_discovery_results(query: str, discovery_results_or_errors: Sequence[object]) -> list[list[dict]]:
+    """Return successful discovery result groups while logging failed lanes."""
+    discovery_results: list[list[dict]] = []
+    discovery_errors: list[str] = []
+    for result in discovery_results_or_errors:
+        if isinstance(result, Exception):
+            discovery_errors.append(str(result) or result.__class__.__name__)
+            continue
+        if isinstance(result, list):
+            discovery_results.append(result)
+    if discovery_errors:
+        logger.warning(
+            "Some web search discovery lanes failed for %r but salvageable lanes will be used: %s",
+            query,
+            "; ".join(discovery_errors),
+        )
+    return discovery_results
+
+
 async def _scrapling_extract(url: str, tool_config: SearXNGJinaWebSearchToolConfig) -> str:
     """Fetch a URL with Scrapling and return dense visible page text."""
     try:
@@ -750,10 +769,8 @@ async def searxng_jina_web_search(tool_config: SearXNGJinaWebSearchToolConfig, b
                 asyncio.wait_for(_fetch_websurfx_results(), timeout=tool_config.websurfx_timeout_seconds)
             )
 
-        try:
-            discovery_results = await asyncio.gather(*discovery_tasks)
-        except Exception as exc:
-            return f"Error: web search discovery failed - {exc}"
+        discovery_results_or_errors = await asyncio.gather(*discovery_tasks, return_exceptions=True)
+        discovery_results = _salvage_discovery_results(query, discovery_results_or_errors)
 
         raw_results = [result for group in discovery_results for result in group]
         if not raw_results:

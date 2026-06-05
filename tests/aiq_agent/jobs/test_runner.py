@@ -632,8 +632,8 @@ class TestDeepResearchEventCallback:
         assert call_args["name"] == "web_search"
         assert call_args["data"]["output"] == "search results"
 
-    def test_write_plan_tool_start_emits_plan_file_artifact(self):
-        """The typed planner tool should surface /shared/plan.json in UI files."""
+    def test_write_plan_tool_start_does_not_emit_plan_file_artifact(self):
+        """The UI should not see /shared/plan.json until write_plan succeeds."""
         mock_store = MagicMock()
         callback = DeepResearchEventCallback(event_store=mock_store)
         callback._agent_run_ids["planner-run"] = "planner-agent"
@@ -651,6 +651,37 @@ class TestDeepResearchEventCallback:
             ),
             run_id="tool-run",
             parent_run_id="planner-run",
+        )
+
+        stored_events = [call[0][0] for call in mock_store.store.call_args_list]
+        assert [event["type"] for event in stored_events] == ["tool.start"]
+        assert not any(
+            event["type"] == "artifact.update" and event.get("name") == "/shared/plan.json" for event in stored_events
+        )
+
+    def test_write_plan_tool_end_success_emits_plan_file_artifact(self):
+        """The typed planner tool should surface /shared/plan.json after successful validation."""
+        mock_store = MagicMock()
+        callback = DeepResearchEventCallback(event_store=mock_store)
+        callback._agent_run_ids["planner-run"] = "planner-agent"
+        callback._run_id_to_parent["tool-run"] = "planner-run"
+
+        callback.on_tool_start(
+            {"name": "write_plan"},
+            input_str=str(
+                {
+                    "report_title": "AI Use Cases 2026",
+                    "report_toc": [{"title": "Executive Summary"}, {"title": "Ranked Use Cases"}],
+                    "queries": [{"query": "AI use cases 2026 analyst reports"}],
+                    "constraints": ["Use authoritative sources for quantified impact."],
+                }
+            ),
+            run_id="tool-run",
+            parent_run_id="planner-run",
+        )
+        callback.on_tool_end(
+            "Plan successfully written and validated at /shared/plan.json. Sections: 2. Researcher queries: 1.",
+            run_id="tool-run",
         )
 
         stored_events = [call[0][0] for call in mock_store.store.call_args_list]

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for deep-research fact ledger validation."""
 
+from aiq_agent.common.fact_ledger import live_fact_conflicts
 from aiq_agent.common.fact_ledger import merge_fact_ledgers_json
 from aiq_agent.common.fact_ledger import summarize_fact_ledger
 from aiq_agent.common.fact_ledger import validate_fact_ledger_json
@@ -135,3 +136,81 @@ def test_merge_fact_ledgers_prefers_verified_duplicate():
     assert len(ledger.entries) == 1
     assert ledger.entries[0].status == "verified"
     assert ledger.entries[0].source_url == "https://docs.x.ai/grok"
+
+
+def test_live_fact_conflicts_detect_newer_funding_value():
+    ledger, errors = validate_fact_ledger_json(
+        """
+        {
+          "entries": [
+            {
+              "entity": "Sierra",
+              "fact_type": "funding",
+              "fact": "Sierra raised $175M at a $4.5B valuation.",
+              "value": "$175M / $4.5B",
+              "event_date": "2025-02-01",
+              "source_url": "https://example.com/old",
+              "source_extract": "Sierra raised $175M at a $4.5B valuation.",
+              "source_class": "trade_press",
+              "confidence": "medium",
+              "status": "verified"
+            },
+            {
+              "entity": "Sierra",
+              "fact_type": "funding",
+              "fact": "Sierra raised $950M at a $15.8B valuation.",
+              "value": "$950M / $15.8B",
+              "event_date": "2026-05-01",
+              "source_url": "https://example.com/new",
+              "source_extract": "Sierra raised $950M at a $15.8B valuation.",
+              "source_class": "first_party",
+              "confidence": "high",
+              "status": "verified"
+            }
+          ]
+        }
+        """
+    )
+
+    assert errors == []
+    assert ledger is not None
+    conflicts = live_fact_conflicts(ledger)
+    assert len(conflicts) == 1
+    assert conflicts[0].entity == "Sierra"
+    assert "newer verified evidence" in conflicts[0].message
+
+
+def test_fact_ledger_summary_exposes_live_fact_conflicts():
+    summary = summarize_fact_ledger(
+        """
+        {
+          "entries": [
+            {
+              "entity": "Decagon",
+              "fact_type": "valuation",
+              "fact": "Decagon was valued at $1.5B.",
+              "value": "$1.5B",
+              "event_date": "2025-06",
+              "source_url": "https://example.com/old",
+              "source_extract": "Decagon was valued at $1.5B.",
+              "source_class": "trade_press",
+              "status": "verified"
+            },
+            {
+              "entity": "Decagon",
+              "fact_type": "valuation",
+              "fact": "Decagon was valued at $4.5B.",
+              "value": "$4.5B",
+              "event_date": "2026-01",
+              "source_url": "https://example.com/new",
+              "source_extract": "Decagon was valued at $4.5B.",
+              "source_class": "trade_press",
+              "status": "verified"
+            }
+          ]
+        }
+        """
+    )
+
+    assert summary["valid"] is True
+    assert summary["live_fact_conflicts"][0]["entity"] == "Decagon"

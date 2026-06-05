@@ -1,6 +1,7 @@
 from searxng_jina_web_search.register import SearXNGJinaWebSearchToolConfig
 from searxng_jina_web_search.register import _normalize_websurfx_result
 from searxng_jina_web_search.register import _result_rank
+from searxng_jina_web_search.register import _salvage_discovery_results
 from searxng_jina_web_search.register import simplify_search_query
 
 
@@ -93,3 +94,11 @@ def test_result_rank_prefers_authoritative_sources_over_listicles() -> None:
     }
 
     assert _result_rank(authoritative, query) > _result_rank(listicle, query)
+
+
+def test_salvage_discovery_results_keeps_successful_lanes() -> None:
+    good_group = [{"title": "Useful", "url": "https://example.com", "content": "Result"}]
+
+    groups = _salvage_discovery_results("test query", [RuntimeError("searx timeout"), good_group])
+
+    assert groups == [good_group]

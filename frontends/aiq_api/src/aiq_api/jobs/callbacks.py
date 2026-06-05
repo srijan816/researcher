@@ -236,6 +236,7 @@ class AgentEventCallback(BaseCallbackHandler):
         self._run_id_to_name: dict[str, str] = {}
         self._run_id_to_parent: dict[str, str] = {}
         self._agent_run_ids: dict[str, str] = {}  # {run_id: name}
+        self._pending_tool_inputs: dict[str, Any] = {}
 
         self._job_id = event_store.job_id if event_store else None
         self._instance_discovered_urls: set[str] = set()
@@ -768,6 +769,8 @@ class AgentEventCallback(BaseCallbackHandler):
                 self._run_id_to_parent[run_id] = parent_run_id
 
         parsed_input = self._parse_tool_input(input_str)
+        if run_id and tool_name.lower() == "write_plan":
+            self._pending_tool_inputs[run_id] = parsed_input
 
         emit_input = self._trim_tool_input(parsed_input)
 
@@ -781,7 +784,8 @@ class AgentEventCallback(BaseCallbackHandler):
             )
         )
 
-        self._emit_tool_artifact(tool_name, parsed_input, run_id=run_id)
+        if tool_name.lower() != "write_plan":
+            self._emit_tool_artifact(tool_name, parsed_input, run_id=run_id)
 
     def on_tool_end(self, output: str, **kwargs) -> None:
         run_id = str(kwargs.get("run_id", ""))
@@ -799,6 +803,11 @@ class AgentEventCallback(BaseCallbackHandler):
                 metadata=self._build_metadata_for_run(run_id),
             )
         )
+
+        if tool_name.lower() == "write_plan":
+            pending_input = self._pending_tool_inputs.pop(run_id, None)
+            if pending_input is not None and "Plan successfully written" in str(output):
+                self._emit_tool_artifact(tool_name, pending_input, run_id=run_id)
 
         if self._is_search_tool(tool_name) and output:
             output_text = str(output)

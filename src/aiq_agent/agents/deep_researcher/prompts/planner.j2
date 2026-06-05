@@ -21,7 +21,20 @@ After `write_plan` succeeds, trust the tool result. Do not call `read_file`, `gr
 ## Task Analysis
 Before generating the research plan, deeply analyze the user's request:
 
-0. **Claim Anticipation (REQUIRED before TOC)**: Identify the claim profile of an ideal answer. Do not only ask "what sections should the report have"; ask "what factual claims will this report need to make, and what source class should support each claim type?"
+0. **Scope Classification (REQUIRED before TOC)**: First decide what the request is actually about. Put this in `task_analysis.scope_profile`:
+   - `primary_subject`: the topic the report must research and teach
+   - `deliverable_type`: report, screen, lesson, slide-deck-ready dossier, training session, comparison, playbook, etc.
+   - `audience`: the intended reader/student/user when stated
+   - `application_context`: how the research will be used, such as WSDC/BP debate training, a final motion, a classroom deck, or business strategy
+   - `scope_mode`: `topic_first`, `symmetric`, or `focused_screen`
+   - `budget_mode`: `lesson_first`, `symmetric`, or `focused_screen`
+   - `section_count_target`: desired top-level section count
+   - `secondary_contexts`: motions, audiences, formats, or applications that shape relevance but do not replace the primary subject
+   - `forbidden_reframes`: adjacent frames the report must not drift into
+
+   If the request says "research X to create Y", X is usually the `primary_subject` and Y is the `deliverable_type` or `application_context`. For example, "research social change, social justice, and social movements to create a WSDC/BP training session" is primarily about social change/social movements; WSDC/BP is the application and output frame. Do not make the whole plan about debate pedagogy unless the user explicitly asks to research debate pedagogy.
+
+0.5. **Claim Anticipation (REQUIRED before TOC)**: Identify the claim profile of an ideal answer. Do not only ask "what sections should the report have"; ask "what factual claims will this report need to make, and what source class should support each claim type?"
    Claim types:
    - `specification`: X has property Y, product/service/law/source says Y, current feature/limit/pricing/status.
    - `quantitative`: any statistic, percentage, dollar amount, market size, survival rate, benchmark, ranking, or numeric comparison.
@@ -54,6 +67,8 @@ Before generating the research plan, deeply analyze the user's request:
 When the request is about a core topic such as "university education", treat counterarguments, alternatives, and trade-offs as supporting evidence inside the same report, not as a separate report topic unless the user explicitly asks for a comparison or alternative-pathways brief.
 
 When the request contains both an **Exact lesson topic** and a **Final debate motion**, the exact lesson topic is the primary scope. The final motion is a relevance anchor for selected sections, not permission to turn the entire plan into a motion-only controversy brief. The plan must include broad-topic queries first, then bounded motion-bridge queries.
+
+When the request asks for a slide-deck-ready, lesson, debate, WSDC/BP, or training-session deliverable about a broader topic, keep the broader topic as `primary_subject`. Use the debate/training frame to shape final report structure, speaker notes, motions, examples, and applications. For broad training dossiers, prefer no more than 6 top-level research sections and 3-5 packed researcher assignments for medium/deeper.
 
 ## Workflow
 - **Task Decomposition**: Internally break the request into focused tasks. Do not spend turns maintaining a todo list unless the orchestrator explicitly requires it.
@@ -164,7 +179,7 @@ Call `write_plan` with these compact fields:
 - `report_toc`: 1-5 top-level sections, each with `title`; include `subsections` only when truly useful.
 - `constraints`: actionable acceptance criteria. Strings are allowed, but structured `{category, constraint, rationale, verification}` objects are better.
 - `queries`: compact self-contained researcher assignments. Each query must include `query`, `tool`, `target_sections`, and either `target_claims` or `target_claim_ids`. Do not include more than 3 target claims per query.
-- `task_analysis`: compact object with user intent, claim profile, source strategy, entities, explicit requirements, implicit requirements, out-of-scope topics, and language. Keep prose fields short.
+- `task_analysis`: compact object with user intent, scope_profile, claim profile, source strategy, entities, explicit requirements, implicit requirements, out-of-scope topics, and language. Keep prose fields short.
 - `output_style`: compact object with `mode`, `target`, `avoid`, and optional topic/motion anchors.
 - `fact_ledger_targets`: optional compact object for entity-heavy briefs. Include only central entities and 1-3 factual targets per entity.
 

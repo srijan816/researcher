@@ -473,6 +473,49 @@ class TestDeepResearcherAgent:
             assert "Topic Landscape" in (updated.clarifier_result or "")
             assert "Approved Research Plan" in (updated.clarifier_result or "")
 
+    def test_training_deck_prompt_keeps_primary_subject_ahead_of_debate_frame(
+        self,
+        mock_llm_provider,
+        real_tool,
+        mock_create_deep_agent,
+    ):
+        """Slide-deck/debate deliverables should not become WSDC/BP-only research."""
+        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+            )
+            state = DeepResearchAgentState(
+                messages=[
+                    HumanMessage(
+                        content=(
+                            "You are an elite research specialist. Your mission is to conduct deep research on "
+                            "social change, social justice, and social movements to create a world-class WSDC/BP "
+                            "competitive debate training session. Produce a complete slide-deck-ready research "
+                            "document with slide titles, core bullets, and rich speaker notes."
+                        )
+                    )
+                ],
+                research_depth="deeper",
+            )
+
+            updated = agent._inject_approved_plan_if_available(state)
+
+            assert "/shared/plan.json" in updated.files
+            assert "social change, social justice, and social movements Training Research Dossier" in (
+                updated.clarifier_result or ""
+            )
+            plan = json.loads("\n".join(updated.files["/shared/plan.json"]["content"]))
+            profile = plan["task_analysis"]["scope_profile"]
+            assert profile["primary_subject"] == "social change, social justice, and social movements"
+            assert profile["application_context"] == "WSDC/BP competitive debate training"
+            assert profile["scope_mode"] == "topic_first"
+            assert "WSDC/BP" not in plan["report_title"]
+            assert len(plan["report_toc"]) == 6
+            assert sum(query["budget_percent"] for query in plan["queries"]) == pytest.approx(100.0)
+
     def test_lesson_prompt_passes_abbreviation_glossary_to_planner(
         self,
         mock_llm_provider,
@@ -551,7 +594,7 @@ class TestDeepResearcherAgent:
             assert agent._tool_limits_for_state(shallow)["planner:advanced_web_search_tool"] == 1
             assert agent._tool_limits_for_state(medium)["advanced_web_search_tool"] == 64
             assert agent._tool_limits_for_state(medium)["planner:advanced_web_search_tool"] == 1
-            assert agent._tool_limits_for_state(deeper)["advanced_web_search_tool"] == 64
+            assert agent._tool_limits_for_state(deeper)["advanced_web_search_tool"] == 77
             assert agent._tool_limits_for_state(deeper)["planner:advanced_web_search_tool"] == 1
             assert agent._tool_limits_for_state(deep)["advanced_web_search_tool"] == 140
             assert agent._tool_limits_for_state(deep)["planner:advanced_web_search_tool"] == 2
@@ -580,10 +623,10 @@ class TestDeepResearcherAgent:
         assert agent._orchestrator_llm_for_state(deep) is default_llm
 
     def test_deeper_tier_uses_dedicated_model_roles_when_configured(self, real_tool):
-        """Deeper should be able to run on M2.7-specific role aliases."""
+        """Deeper should be able to run on dedicated fast role aliases."""
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
-        default_llm = MagicMock(name="default")
+        default_llm = MagicMock(name="thinking_orchestrator")
         deeper_orchestrator = MagicMock(name="deeper_orchestrator")
         deeper_planner = MagicMock(name="deeper_planner")
         deeper_researcher = MagicMock(name="deeper_researcher")
@@ -607,6 +650,71 @@ class TestDeepResearcherAgent:
         assert agent._orchestrator_llm_for_state(deep) is default_llm
         assert agent._planner_llm_for_state(deep) is default_llm
         assert agent._researcher_llm_for_state(deep) is default_llm
+
+    def test_deep_high_stakes_use_thinking_but_deeper_stays_fast(self, real_tool):
+        """Deep may use the thinking orchestrator; deeper should stay on the fast path."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        thinking_orchestrator = MagicMock(name="thinking_orchestrator")
+        fast_orchestrator = MagicMock(name="fast_orchestrator")
+        provider = LLMProvider()
+        provider.set_default(thinking_orchestrator)
+        provider.configure(LLMRole.ORCHESTRATOR, thinking_orchestrator)
+        provider.configure(LLMRole.DEEPER_ORCHESTRATOR, fast_orchestrator)
+        provider.configure(LLMRole.MEDIUM_ORCHESTRATOR, fast_orchestrator)
+
+        agent = DeepResearcherAgent(llm_provider=provider, tools=[real_tool])
+
+        ordinary_deeper = DeepResearchAgentState(
+            messages=[HumanMessage(content="Research best AI coding workflows")],
+            research_depth="deeper",
+        )
+        legal_deeper = DeepResearchAgentState(
+            messages=[HumanMessage(content="Research regulatory and legal risks in AI compliance")],
+            research_depth="deeper",
+        )
+        large_doc_deeper = DeepResearchAgentState(
+            messages=[HumanMessage(content="Analyze these uploaded documents")],
+            research_depth="deeper",
+            available_documents=[
+                {"file_name": "a.pdf", "summary": "one"},
+                {"file_name": "b.pdf", "summary": "two"},
+                {"file_name": "c.pdf", "summary": "three"},
+            ],
+        )
+        deep = DeepResearchAgentState(
+            messages=[HumanMessage(content="Research AI evals")],
+            research_depth="deep",
+        )
+
+        assert agent._orchestrator_llm_for_state(ordinary_deeper) is fast_orchestrator
+        assert agent._orchestrator_llm_for_state(legal_deeper) is fast_orchestrator
+        assert agent._orchestrator_llm_for_state(large_doc_deeper) is fast_orchestrator
+        assert agent._orchestrator_llm_for_state(deep) is thinking_orchestrator
+
+    def test_deep_tier_uses_dedicated_thinking_model_roles_when_configured(self, real_tool):
+        """Deep should be able to run planner/researcher on dedicated thinking-enabled aliases."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        default_llm = MagicMock(name="default")
+        deep_planner = MagicMock(name="deep_planner")
+        deep_researcher = MagicMock(name="deep_researcher")
+        provider = LLMProvider()
+        provider.set_default(default_llm)
+        provider.configure(LLMRole.PLANNER, default_llm)
+        provider.configure(LLMRole.RESEARCHER, default_llm)
+        provider.configure(LLMRole.DEEP_PLANNER, deep_planner)
+        provider.configure(LLMRole.DEEP_RESEARCHER, deep_researcher)
+
+        agent = DeepResearcherAgent(llm_provider=provider, tools=[real_tool])
+
+        deeper = DeepResearchAgentState(messages=[HumanMessage(content="Compare models")], research_depth="deeper")
+        deep = DeepResearchAgentState(messages=[HumanMessage(content="Compare models")], research_depth="deep")
+
+        assert agent._planner_llm_for_state(deep) is deep_planner
+        assert agent._researcher_llm_for_state(deep) is deep_researcher
+        assert agent._planner_llm_for_state(deeper) is default_llm
+        assert agent._researcher_llm_for_state(deeper) is default_llm
 
     def test_researcher_context_pruning_is_tighter_than_orchestrator(self, mock_llm_provider, real_tool):
         """Subagents should keep compact context; final synthesis can use more."""
@@ -754,7 +862,7 @@ class TestDeepResearcherAgent:
 
     @pytest.mark.asyncio
     async def test_run_preserves_valid_message_content(self, mock_llm_provider, real_tool):
-        """Test run() preserves valid message content unchanged."""
+        """Test run() preserves valid body content while finalizing references."""
         final_report = _valid_deep_report("Original query final analysis")
         result_messages = [
             HumanMessage(content="Original query"),
@@ -780,11 +888,16 @@ class TestDeepResearcherAgent:
 
             result = await agent.run(state)
 
-            # All valid content should be preserved
+            # Non-final messages and report body content should be preserved.
             assert result.messages[0].content == "Original query"
             assert result.messages[1].content == "I'll help with that."
             assert result.messages[2].content == "Search results here"
-            assert result.messages[3].content == final_report
+            final_content = result.messages[3].content
+            assert "# Original query final analysis" in final_content
+            assert "## Executive Summary" in final_content
+            assert "## Analysis" in final_content
+            assert "## Caveats" in final_content
+            assert "https://example.com" not in final_content
 
 
 class TestRunRetryStatePreservation:

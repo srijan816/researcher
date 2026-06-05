@@ -58,6 +58,7 @@ services:
       - ../../configs:/app/configs:ro
       - aiq-data:/app/data
       - ../../data/prepared_debate_corpus:/app/data/prepared_debate_corpus:ro
+      - ${CLAUDE_CODE_BINARY_HOST_PATH:-/usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe}:${CLAUDE_CODE_BINARY_CONTAINER_PATH:-/usr/local/bin/claude}:ro
     networks:
       - aiq-network
     depends_on:

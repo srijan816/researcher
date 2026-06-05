@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Any
 from typing import Literal
@@ -45,7 +46,14 @@ def _as_list(value: Any) -> list[Any]:
     if value is None:
         return []
     if isinstance(value, list):
-        return value
+        flattened: list[Any] = []
+        for item in value:
+            item = _unwrap_item(item)
+            if isinstance(item, list):
+                flattened.extend(_as_list(item))
+            else:
+                flattened.append(item)
+        return flattened
     return [value]
 
 
@@ -70,6 +78,77 @@ def _shorten_text(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return value[: limit - 1].rstrip(" .,;:") + "…"
+
+
+_NUMERIC_TEXT_RE = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def _coerce_int_like(value: Any) -> int | None:
+    """Coerce common MiniMax string-number shapes to an int."""
+
+    value = _unwrap_item(value)
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(round(value))
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        semantic_weights = {
+            "low": 1,
+            "lowish": 2,
+            "medium": 3,
+            "moderate": 3,
+            "high": 5,
+            "highish": 4,
+        }
+        if lowered in semantic_weights:
+            return semantic_weights[lowered]
+        match = _NUMERIC_TEXT_RE.search(value.replace(",", ""))
+        if match:
+            return int(round(float(match.group(0))))
+    return None
+
+
+def _coerce_float_like(value: Any) -> float | None:
+    """Coerce common MiniMax string-number shapes to a float."""
+
+    value = _unwrap_item(value)
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return float(int(value))
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        match = _NUMERIC_TEXT_RE.search(value.replace(",", ""))
+        if match:
+            return float(match.group(0))
+    return None
+
+
+def _normalize_output_mode(value: Any) -> str | Any:
+    """Map loose MiniMax mode strings back to the canonical enum values."""
+
+    value = _unwrap_item(value)
+    if not isinstance(value, str):
+        return value
+    normalized = re.sub(r"[\s\-]+", "_", value.strip().lower())
+    alias_map = {
+        "standard": "standard_report",
+        "standard_report": "standard_report",
+        "standardreport": "standard_report",
+        "focused": "focused_screen",
+        "focused_screen": "focused_screen",
+        "focusedscreen": "focused_screen",
+        "lesson": "lesson_first",
+        "lesson_first": "lesson_first",
+        "lessonfirst": "lesson_first",
+    }
+    return alias_map.get(normalized, "standard_report")
 
 
 def _compact_mapping(value: Mapping[str, Any], *, text_limit: int = 500) -> dict[str, Any]:
@@ -142,7 +221,16 @@ class PlanTocItem(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_wrapped_lists(cls, value: Any) -> Any:
-        return _unwrap_item(value)
+        value = _unwrap_item(value)
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "title" not in normalized:
+            for alias in ("heading", "name", "section_title"):
+                if alias in normalized:
+                    normalized["title"] = normalized[alias]
+                    break
+        return normalized
 
     @field_validator("title")
     @classmethod
@@ -200,7 +288,18 @@ class PlanOutputStyle(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_wrapped_lists(cls, value: Any) -> Any:
-        return _unwrap_item(value)
+        value = _unwrap_item(value)
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "mode" in normalized:
+            normalized["mode"] = _normalize_output_mode(normalized["mode"])
+        return normalized
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _mode_is_canonical(cls, value: Any) -> Any:
+        return _normalize_output_mode(value)
 
     @field_validator("avoid", mode="before")
     @classmethod
@@ -212,6 +311,7 @@ class PlanTaskAnalysis(BaseModel):
     """Compact analysis fields needed by downstream orchestration."""
 
     user_intent: str = Field(default="")
+    scope_profile: dict[str, Any] = Field(default_factory=dict)
     claim_profile: dict[str, Any] = Field(default_factory=dict)
     source_strategy: dict[str, Any] = Field(default_factory=dict)
     entities: list[dict[str, Any]] = Field(default_factory=list)
@@ -231,6 +331,10 @@ class PlanTaskAnalysis(BaseModel):
         source_strategy = normalized.get("source_strategy")
         if isinstance(source_strategy, str):
             normalized["source_strategy"] = {"summary": _shorten_text(source_strategy, 800)}
+
+        scope_profile = normalized.get("scope_profile")
+        if isinstance(scope_profile, str):
+            normalized["scope_profile"] = {"summary": _shorten_text(scope_profile, 800)}
 
         claim_profile = normalized.get("claim_profile")
         if isinstance(claim_profile, str):
@@ -283,7 +387,10 @@ class PlanQuery(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_wrapped_lists(cls, value: Any) -> Any:
-        return _unwrap_item(value)
+        value = _unwrap_item(value)
+        if not isinstance(value, dict):
+            return value
+        return dict(value)
 
     @field_validator("query")
     @classmethod
@@ -297,6 +404,24 @@ class PlanQuery(BaseModel):
     @classmethod
     def _query_lists_are_listish(cls, value: Any) -> list[Any]:
         return _as_list(value)
+
+    @field_validator("relevance_weight", mode="before")
+    @classmethod
+    def _relevance_weight_is_int_like(cls, value: Any) -> int | None:
+        coerced = _coerce_int_like(value)
+        return coerced if coerced is not None else value
+
+    @field_validator("budget_percent", mode="before")
+    @classmethod
+    def _budget_percent_is_float_like(cls, value: Any) -> float | None:
+        coerced = _coerce_float_like(value)
+        return coerced if coerced is not None else value
+
+    @field_validator("search_budget", mode="before")
+    @classmethod
+    def _search_budget_is_int_like(cls, value: Any) -> int | None:
+        coerced = _coerce_int_like(value)
+        return coerced if coerced is not None else value
 
     @field_validator("seed_queries")
     @classmethod
@@ -453,6 +578,54 @@ def _claim_profile_from_queries(queries: list[PlanQuery]) -> dict[str, Any]:
     }
 
 
+def _scope_profile_from_plan(
+    *,
+    title: str,
+    toc: list[dict[str, Any]],
+    output_style: PlanOutputStyle,
+) -> dict[str, Any]:
+    """Derive a compact scope contract when the planner did not provide one."""
+
+    section_titles = [str(section.get("title") or "").strip() for section in toc if section.get("title")]
+    primary_subject = output_style.topic_anchor or title
+    secondary_contexts: list[str] = []
+    if output_style.motion_anchor:
+        secondary_contexts.append(output_style.motion_anchor)
+
+    if output_style.mode == "focused_screen":
+        scope_mode = "focused_screen"
+        budget_mode = "focused_screen"
+        deliverable_type = "screen_or_lookup"
+    elif output_style.mode == "lesson_first" or output_style.topic_anchor:
+        scope_mode = "topic_first"
+        budget_mode = "lesson_first"
+        deliverable_type = "lesson_or_training_dossier"
+    else:
+        scope_mode = "symmetric"
+        budget_mode = "symmetric"
+        deliverable_type = "research_report"
+
+    forbidden_reframes = list(output_style.avoid or [])
+    if output_style.motion_anchor:
+        forbidden_reframes.append("Treating the application, motion, or audience context as the main topic")
+
+    return {
+        "primary_subject": _shorten_text(primary_subject, 220),
+        "deliverable_type": deliverable_type,
+        "audience": None,
+        "application_context": output_style.motion_anchor,
+        "scope_mode": scope_mode,
+        "budget_mode": budget_mode,
+        "section_count_target": len(section_titles) or None,
+        "secondary_contexts": secondary_contexts,
+        "forbidden_reframes": forbidden_reframes[:8],
+        "classification_reason": (
+            "Derived from output_style anchors and report shape. The primary subject controls titles, "
+            "research task order, and final synthesis."
+        ),
+    }
+
+
 def _expand_single_query_for_sections(
     raw_queries: list[PlanQuery],
     *,
@@ -535,6 +708,14 @@ def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
         section_titles=section_titles,
         output_style=output_style,
     )
+
+    task_analysis_dict.setdefault("scope_profile", {})
+    if not task_analysis_dict["scope_profile"]:
+        task_analysis_dict["scope_profile"] = _scope_profile_from_plan(
+            title=input_data.report_title,
+            toc=toc,
+            output_style=output_style,
+        )
 
     task_analysis_dict.setdefault("claim_profile", {})
     if not task_analysis_dict["claim_profile"]:

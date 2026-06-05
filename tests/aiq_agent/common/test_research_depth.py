@@ -11,6 +11,15 @@ def test_medium_is_first_class_depth_tier():
     assert config.max_parallel_researcher_tasks == 3
 
 
+def test_deeper_tier_has_expanded_search_budget():
+    config = get_research_depth_config("deeper")
+
+    assert config.source_target == "40-77"
+    assert config.advanced_web_search_limit == 77
+    assert config.search_calls_per_task == 14
+    assert config.web_search_limit == 24
+
+
 def test_m3_heavy_tiers_use_three_parallel_researchers():
     assert get_research_depth_config("deeper").max_parallel_researcher_tasks == 3
     assert get_research_depth_config("deep").max_parallel_researcher_tasks == 3
