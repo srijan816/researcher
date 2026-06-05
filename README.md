@@ -1,451 +1,612 @@
-## Start Here: MiniMax Deep Research
+# MiniMax Deep Research
 
-From the repo root, run this single command to start fresh:
+MiniMax Deep Research is a full-stack, multi-agent research application evolved
+from NVIDIA's AI-Q Blueprint and NeMo Agent Toolkit foundations. The current app
+is no longer just the upstream AI-Q demo: it is a production-oriented research
+system for planning, searching, collecting evidence, auditing facts, and writing
+source-grounded reports through a FastAPI backend, a Next.js interface, and a
+MiniMax M3 based agent stack.
+
+The system is optimized for long-form research workflows where the user needs
+more than a chatbot answer: explicit plans, parallel research lanes, durable
+artifacts, source quality checks, citation verification, and a final report that
+can be inspected after the run.
+
+## Contents
+
+- [What This App Is](#what-this-app-is)
+- [Core Capabilities](#core-capabilities)
+- [Architecture](#architecture)
+- [Research Pipeline](#research-pipeline)
+- [Research Modes](#research-modes)
+- [Model Strategy](#model-strategy)
+- [Search And Web Retrieval](#search-and-web-retrieval)
+- [Research Artifacts](#research-artifacts)
+- [Quality And Verification Layers](#quality-and-verification-layers)
+- [Claude Code Specialist Integration](#claude-code-specialist-integration)
+- [Frontend Experience](#frontend-experience)
+- [Local Development](#local-development)
+- [Oracle App2 Deployment](#oracle-app2-deployment)
+- [Configuration](#configuration)
+- [Testing](#testing)
+- [Repository Layout](#repository-layout)
+- [Operational Notes](#operational-notes)
+- [Known Limitations](#known-limitations)
+- [Upstream Lineage](#upstream-lineage)
+
+## What This App Is
+
+This repository contains a customized deep research platform built around:
+
+- NVIDIA AI-Q / NeMo Agent Toolkit runtime concepts for agent registration,
+  tool wiring, and workflow execution.
+- DeepAgents and LangGraph style agent orchestration with shared virtual
+  filesystem state under `/shared/*`.
+- A FastAPI backend in `frontends/aiq_api` that accepts chat and async research
+  jobs, streams events, persists job state, and exposes reports.
+- A Next.js UI in `frontends/ui` that provides the research interface, plan
+  approval, live event traces, artifacts, and final report rendering.
+- MiniMax M3 as the active primary model family, accessed through an
+  Anthropic-compatible pathway.
+- Self-hosted and local retrieval services including SearXNG, Websurfx,
+  Scrapling/Jina extraction, DDGS, and optional specialist search providers.
+
+In plain English: this is an AI research workstation. It takes a complex prompt,
+turns it into an execution plan, fans out the evidence gathering, stores the
+intermediate artifacts, audits the report, and presents the result in a browser.
+
+## Core Capabilities
+
+- User-facing plan previews before expensive research begins.
+- Typed deep research plans committed through a `write_plan` tool instead of
+  fragile free-form file writes.
+- Shallow, medium, deeper, and deep research modes.
+- Parallel researcher lanes with per-task search budgets.
+- Search budget allocation across modules rather than a single undifferentiated
+  pool.
+- Websurfx-backed advanced discovery for higher-quality broad search on deeper
+  workflows.
+- SearXNG-backed general web search for broad compatibility and fallback.
+- Durable scrape artifacts for pages, extracts, and citation evidence.
+- Source classification and source quality gates.
+- Fact ledger and evidence packet artifacts for structured synthesis.
+- Citation registry and reference rebuilding for final reports.
+- Report fact audit to catch unsupported, contradicted, stale, or malformed
+  claims.
+- Optional Claude Code specialist calls for planning advice, gap analysis, and
+  high-context synthesis assistance.
+- Oracle app2 deployment with Docker Compose, PostgreSQL, SearXNG, Websurfx,
+  Redis, backend, frontend, and speech services.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    User["User in browser"] --> UI["Next.js UI"]
+    UI --> API["FastAPI aiq_api"]
+    API --> JobRunner["Async job runner"]
+    JobRunner --> Agent["AI-Q / NAT agent runtime"]
+    Agent --> Orchestrator["Deep research orchestrator"]
+    Orchestrator --> Planner["Planner agent"]
+    Orchestrator --> ResearcherA["Researcher lane A"]
+    Orchestrator --> ResearcherB["Researcher lane B"]
+    Orchestrator --> ResearcherC["Researcher lane C"]
+    Orchestrator --> Claude["Claude Code specialist"]
+    ResearcherA --> Search["SearXNG / Websurfx / DDGS"]
+    ResearcherB --> Search
+    ResearcherC --> Search
+    Search --> Scrape["Scrapling / Jina extraction"]
+    Scrape --> Artifacts["Scrape artifacts and source registry"]
+    Artifacts --> Evidence["Evidence packet / fact ledger"]
+    Evidence --> Synth["Synthesis and report writing"]
+    Synth --> Verify["Citation and fact audit"]
+    Verify --> Report["/report.md"]
+    API --> Events["Persistent job events"]
+    Events --> UI
+    Report --> UI
+```
+
+The important architectural idea is that the model is not asked to remember
+everything in chat context. Research creates durable intermediate artifacts, and
+later stages read those artifacts.
+
+## Research Pipeline
+
+The exact route depends on the selected mode, but the current deep research
+pathway works like this.
+
+1. **Request intake**
+
+   The UI submits a chat or async research request to the FastAPI backend. The
+   backend records a job, streams status through SSE, and starts the agent
+   workflow.
+
+2. **Intent and clarification**
+
+   The system decides whether the request is shallow chat, research, or a deeper
+   async job. For interactive flows, the user can approve or revise a plan before
+   execution. Direct async submissions also receive deterministic plan preload
+   protection so they do not depend only on an LLM successfully writing a plan.
+
+3. **Plan construction**
+
+   The planner turns the user request into a structured plan with:
+
+   - title and scope
+   - research sections
+   - researcher task modules
+   - seed queries
+   - target source types
+   - budget allocation
+   - high-risk claims to verify
+   - output expectations
+
+   The plan is committed through `write_plan`, validated against
+   `DeepResearchPlan`, normalized for provider-specific oddities, then exposed as
+   `/shared/plan.json`.
+
+4. **Plan inspection and repair**
+
+   The orchestrator checks whether a usable plan already exists. If the planner
+   stalls, writes malformed nested structures, or returns provider-shaped
+   arguments like `{"item": ...}`, middleware normalizes the structure before it
+   reaches the schema. Artifact events for `/shared/plan.json` are emitted only
+   after a successful write.
+
+5. **Optional Claude Code specialist**
+
+   When the task is broad, high-context, synthesis-heavy, or structurally
+   complex, the orchestrator can ask a Claude Code specialist for a bounded
+   planning or synthesis memo. The prompt specifies the exact expected output
+   file and keeps the specialist from performing uncontrolled web research when
+   the desired role is orchestration advice.
+
+6. **Research task fan-out**
+
+   The orchestrator launches multiple researcher tasks. Each task receives a
+   scoped assignment, a search budget, source-quality preferences, and expected
+   artifacts. Researchers search, browse, scrape, summarize, and write notes or
+   structured evidence into `/shared/*`.
+
+7. **Evidence compilation**
+
+   The system builds structured artifacts such as evidence packets, fact ledgers,
+   source registries, source scores, and claim or section briefs where enabled.
+   This reduces reliance on long conversational memory.
+
+8. **Gap and quality checks**
+
+   The workflow checks for weak source concentration, missing key sections,
+   unsupported claims, stale facts, and citation integrity. For some paths, gap
+   finding can trigger targeted follow-up research before synthesis.
+
+9. **Synthesis**
+
+   The orchestrator writes the report using the collected artifacts rather than
+   only the raw chat trace. The report is written to `/report.md` and streamed to
+   the UI as it becomes available.
+
+10. **Verification and finalization**
+
+    Citation verification, reference rebuilding, source quality reporting, and
+    report fact audits run after synthesis. The report should still be delivered
+    if a quality layer fails, but the failure should be visible rather than
+    silent.
+
+## Research Modes
+
+The active modes are defined in code and configuration rather than hard-coded in
+the UI alone. Budget numbers and model choices should be checked in
+`src/aiq_agent/common/research_depth.py` and
+`configs/config_cli_minimax_ddgs.yml`.
+
+| Mode | Purpose | Typical Behavior |
+| --- | --- | --- |
+| `shallow` | Fast answer with light research | Uses a smaller bounded search path. Best for quick questions, initial orientation, and lower-stakes requests. |
+| `medium` | Experimental speed tier | Uses a more research-capable budget profile than shallow while keeping MiniMax M3 thinking mostly off to test faster end-to-end delivery. |
+| `deeper` | Main serious research tier | Uses structured planning, parallel researcher tasks, Websurfx-backed advanced discovery, source quality checks, and MiniMax M3 fast pathways. |
+| `deep` | Highest rigor tier | Designed for larger reports and higher-stakes synthesis. Can enable more expensive reasoning, verification, and long-context synthesis behavior. |
+
+The guiding principle is not simply "more searches equals better report." The
+system tries to distribute research budget across the actual subproblems in the
+query, preserve enough reserve for gap filling, and prioritize source quality
+early.
+
+## Model Strategy
+
+The current active app is MiniMax-first.
+
+- MiniMax M3 is the primary model family.
+- Thinking-off pathways are preferred for fast planning, classification, and
+  bounded research loops when the task does not need long reflective reasoning.
+- Thinking-enabled or higher-effort pathways are reserved for high-stakes
+  orchestration, large-document reasoning, deep synthesis, or verification where
+  the extra latency is justified.
+- Older NVIDIA and reference model configuration remains in the repository for
+  upstream compatibility and experimentation, but the active Oracle app2 config
+  is the MiniMax config.
+
+The main active config is:
+
+```text
+configs/config_cli_minimax_ddgs.yml
+```
+
+The design lesson from production use is that MiniMax M3 can be very strong, but
+only if long-context and thinking are used deliberately. Putting thinking on
+every short loop can make jobs much slower and can worsen tool-call reliability.
+
+## Search And Web Retrieval
+
+The research system separates search discovery from page extraction.
+
+### Discovery
+
+- `web_search_tool` uses the SearXNG/Jina search path.
+- `advanced_web_search_tool` can use Websurfx hybrid discovery.
+- Websurfx can fan out to engines such as Searx, Brave, DuckDuckGo, LibreX,
+  Mojeek, Qwant, Startpage, Yahoo, Bing, and SepiaSearch depending on config.
+- SearXNG remains available for compatibility and fallback.
+- DDGS may appear as an engine or provider label in event traces depending on
+  the active search tool path.
+
+### Extraction
+
+After a result is selected, content is fetched and extracted through the app's
+scrape pipeline. The current stack includes Scrapling/Jina style extraction and
+artifact persistence so later stages can cite and inspect source content.
+
+### Source Strategy
+
+The system is being pushed toward source quality before volume:
+
+- prefer primary sources for numeric, legal, technical, and funding claims
+- prefer academic or standards bodies for research claims
+- prefer first-party docs for product specifications
+- use trade press as useful context, not as sole authority for hard numbers
+- treat content-marketing sources as weak unless corroborated
+
+## Research Artifacts
+
+Deep research jobs use a virtual filesystem exposed to agents. Common paths
+include:
+
+```text
+/shared/plan.json
+/shared/evidence_packet.json
+/shared/fact_ledger.json
+/shared/sources.json
+/shared/source_quality_report.json
+/shared/claim_table.json
+/shared/section_briefs/
+/shared/notes_*.md
+/report.md
+```
+
+The virtual filesystem is LangGraph/DeepAgents state, not the host disk. That is
+why the system avoids having multiple researcher agents write the same file at
+the same time. Per-task artifacts are safer, then deterministic Python merge
+steps can build shared summary files.
+
+Scrape artifacts and job events are persisted outside the virtual filesystem so
+the UI and backend can recover, inspect, or stream them later.
+
+## Quality And Verification Layers
+
+The app has several layers intended to reduce hallucination and report
+corruption.
+
+### Plan Validation
+
+Planner output is schema-validated. Provider-specific nested tool arguments are
+normalized before validation. A malformed plan should no longer silently become
+a generic fallback plan.
+
+### Source Classification
+
+URLs are classified into source classes such as first-party, primary issuer,
+academic, authoritative third party, vendor marketing, content marketing, forum,
+or unknown. Classification is imperfect, but it gives downstream code a way to
+avoid treating all citations equally.
+
+### Source Quality Gates
+
+The system can report domain concentration, class distribution, weak-source
+concentration, and authority floor warnings. These gates should warn and
+calibrate, not censor useful reports.
+
+### Evidence Packet And Fact Ledger
+
+Evidence packets and fact ledgers give synthesis a structured basis for claims.
+They are intended to stop the writer from inventing precise statistics or
+crossing facts between similar companies, papers, or funding rounds.
+
+### Citation Verification
+
+Citation verification and reference rebuilding try to ensure inline citations
+point to real, registered sources and that the final reference list is
+traceable.
+
+### Report Fact Audit
+
+The report fact audit looks for:
+
+- unsupported precise claims
+- contradicted claims
+- stale time-sensitive facts
+- citation-number collisions
+- garbled or duplicated reference tails
+- suspicious repository, paper, or funding claims
+
+The goal is calibrated reliability: enough content to be useful, but with
+visible warnings where source support is weak.
+
+## Claude Code Specialist Integration
+
+The app can call a Claude Code specialist backed by MiniMax M3 for tasks where a
+plain researcher loop is the wrong abstraction.
+
+Good uses:
+
+- converting a broad user prompt into a strong research-direction memo
+- auditing a plan before expensive research begins
+- reviewing gathered evidence for gaps and contradictions
+- producing structured synthesis inputs from many source notes
+- generating analysis scripts or tables when evidence needs computation
+
+Poor uses:
+
+- simple web search
+- browsing one or two pages
+- uncontrolled parallel research outside the app's own source registry
+- vague prompts that do not specify the expected artifact path
+
+Specialist prompts should say exactly what file the app is waiting for and what
+format it must contain. For example:
+
+```text
+Write a concise planning memo to /shared/claude_code/planning_memo.md.
+Do not perform web search. Use only the supplied query, plan, source policy,
+and available tool descriptions.
+```
+
+This keeps Claude Code useful as an orchestration and synthesis assistant
+instead of a second disconnected research agent.
+
+## Frontend Experience
+
+The browser interface supports:
+
+- research prompt entry
+- mode selection
+- plan preview and approval
+- live agent, tool, and thought traces
+- SSE reconnect handling
+- artifact display
+- final report rendering
+- job history and recovery paths
+
+The UI is intentionally app-like rather than a static NVIDIA blueprint page. The
+home screen, job pages, and research panel should reflect the current MiniMax
+research product identity while preserving clear operational visibility.
+
+Local default URLs:
+
+```text
+Frontend: http://127.0.0.1:3000
+Backend:  http://127.0.0.1:9000
+Health:   http://127.0.0.1:9000/health
+SearXNG:  http://127.0.0.1:8080
+```
+
+Oracle app2 frontend is normally exposed through the configured app2 route or
+through the app2 frontend container on port `3110` at the host level.
+
+## Local Development
+
+Start the local MiniMax deep research stack:
 
 ```bash
 ./scripts/run_minimax_deep_research.sh
 ```
 
-This clears any existing local backend/frontend listeners for this app, verifies the MiniMax/SearXNG/Scrapling workflow dependencies, starts SearXNG if needed, and launches:
-
-- Backend: `http://localhost:9000`
-- Frontend: `http://localhost:3000`
-- Workflow config: `configs/config_cli_minimax_ddgs.yml`
-
-Stop everything later with:
+Stop the local stack:
 
 ```bash
 FORCE_STOP_DEEP_RESEARCH=1 ./scripts/stop_deep_research.sh
 ```
 
-<!--
-SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-SPDX-License-Identifier: Apache-2.0
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
--->
-## Deep Research Local Run
-
-Start both the backend and frontend:
+Check backend health:
 
 ```bash
-./scripts/start_deep_research.sh
+curl -s http://127.0.0.1:9000/health
 ```
 
-Stop both local services:
+The local workspace root used by the current desktop workflow is:
+
+```text
+/Volumes/SrijanExt/Users/Srijan/Downloads/code/minimax/nvda-deep-research
+```
+
+## Oracle App2 Deployment
+
+The Oracle deployment is the main remote test target for the customized app.
+
+Typical Oracle root:
+
+```text
+/opt/stacks/app2/deep-research
+```
+
+Default sync and restart command:
 
 ```bash
-./scripts/stop_deep_research.sh
+./scripts/sync_app2_deep_research.sh --apply --restart all
 ```
 
-Defaults: backend `http://localhost:9000`, frontend `http://localhost:3000`, logs and PID files in `.deep-research-runtime/`. Override with environment variables when needed:
+Per `AGENTS.md`, after code or config changes that affect the deep-research app,
+sync to Oracle app2 and restart affected services. Backend, prompt, planner,
+research, or middleware changes should restart the backend. UI changes should
+restart the frontend. If impact is unclear, restart both.
+
+Common app2 containers include:
+
+```text
+app2-aiq-agent
+app2-aiq-blueprint-ui
+app2-aiq-postgres
+app2-aiq-searxng
+app2-aiq-websurfx
+app2-aiq-websurfx-redis
+app2-aiq-kokoro
+```
+
+App2 Compose file:
+
+```text
+deploy/compose/docker-compose.app2.yaml
+```
+
+The app2 deployment uses environment wiring for SearXNG, Websurfx, database
+state, MiniMax keys, and feature flags. Do not print secrets into logs or docs.
+
+## Configuration
+
+Primary active config:
+
+```text
+configs/config_cli_minimax_ddgs.yml
+```
+
+Important environment variables include:
+
+| Variable | Purpose |
+| --- | --- |
+| `MINIMAX_API_KEY` | MiniMax API credential. |
+| `SEARXNG_URL` | SearXNG endpoint used by standard web search. |
+| `WEBSURFX_URL` | Websurfx endpoint used by advanced discovery. |
+| `WEBSURFX_ENGINES` | Comma-separated Websurfx engine list. |
+| `AIQ_ADVANCED_DISCOVERY_BACKEND` | Selects advanced discovery backend behavior. |
+| `NAT_JOB_STORE_DB_URL` | Database URL for persisted job state. |
+| `EXA_API_KEY` | Optional specialist search provider key where configured. |
+
+Configuration is split between AI-Q/NAT YAML config, FastAPI settings, frontend
+environment files, Docker Compose files, and shell scripts. When debugging a
+behavior difference between local and Oracle, inspect both the YAML config and
+the app2 Compose environment.
+
+## Testing
+
+Run the Python test suite:
 
 ```bash
-AIQ_CONFIG_FILE=configs/config_cli_minimax_ddgs.yml BACKEND_PORT=9000 FRONTEND_PORT=3000 ./scripts/start_deep_research.sh
+.venv/bin/pytest
 ```
 
-<h1>NVIDIA AI-Q Blueprint</h1>
-
-> **🏆 BENCHMARK NOTE 🏆**
->
-> To obtain results consistent with the **nvidia-aiq** [DeepResearch Bench](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard) and [DeepResearch Bench II](https://agentresearchlab.com/benchmarks/deepresearch-bench-ii/index.html#leaderboard) leaderboard results, please use the [`drb1`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb1) and [`drb2`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb2) branches, respectively.
-
-
-## Table of Contents
-- [Overview](#overview)
-- [Software Components](#software-components)
-- [Target Audience](#target-audience)
-- [Prerequisites](#prerequisites)
-- [Architecture](#architecture)
-- [Getting Started](#getting-started)
-  - [Clone the Repository](#clone-the-repository)
-  - [Automated Setup](#automated-setup)
-  - [Obtain API Keys](#obtain-api-keys)
-  - [Set Up Environment Variables](#set-up-environment-variables)
-- [Configuration Files](#configuration-files)
-- [Ways to Run the Agents](#ways-to-run-the-agents)
-  - [Command-line interface (CLI)](#command-line-interface-cli)
-  - [Web UI](#web-ui)
-  - [Async Deep Research Jobs](#async-deep-research-jobs)
-  - [Benchmarks](#benchmarks)
-  - [Jupyter Notebooks](#jupyter-notebooks)
-- [Evaluating the Workflow](#evaluating-the-workflow)
-  - [Available Benchmarks](#available-benchmarks)
-  - [Running Evaluations](#running-evaluations)
-- [Development](#development)
-- [Roadmap](#roadmap)
-- [Security Considerations](#security-considerations)
-- [License](#license)
-
-## Overview
-
-The NVIDIA AI-Q Blueprint is an enterprise-grade research agent built on the [NVIDIA NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/) and uses [LangChain Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview). It gives you both **quick, cited answers** and **in-depth, report-style research** in one system, with benchmarks and evaluation harnesses so you can measure quality and improve over time.
-
-<p align="center">
-<img src="./docs/assets/AIQ-arch-light.png" alt="AI-Q Architecture" width="800">
-</p>
-
-**Key features:**
-
-- **Orchestration node** — One node classifies intent (meta vs. research), produces meta responses (for example, greetings, capabilities), and sets research depth (shallow vs. deep).
-- **Shallow research** — Bounded, faster researcher with tool-calling and source citation.
-- **Deep research** — Long-running multi-step planning and research to generate a long-form citation-backed report.
-- **Workflow configuration** — YAML configs define agents, tools, LLMs, and routing behavior so you can tune workflows without code changes.
-- **Modular workflows** — All agents (orchestration node, shallow researcher, deep researcher, clarifier) are composable; each can run standalone or as part of the full pipeline.
-- **Skills and sandbox execution** — Deep research can load built-in DeepAgents skills, including the `data-table-analysis` workflow, and run code-oriented work in a job-scoped Modal sandbox.
-- **Portable agent skill** — AI-Q ships `.agents/skills/aiq-research/` so compatible coding harnesses can call a local AI-Q server for routed chat and async deep research jobs.
-- **Data source registry** — UI toggles and request payloads can select web, paper, enterprise, collaboration, and knowledge-layer sources per message.
-- **Production API and auth** — REST endpoints, async job ownership, token validator entry points, and provider lifecycle hooks support authenticated deployments.
-- **Profiling and cost analysis** — Tokenomics reports combine NAT profiler traces with pricing configuration for cost, latency, and cache analysis.
-- **Evaluation harnesses** — Built-in benchmarks (for example, FreshQA, DeepResearch) and evaluation scripts to measure quality and iterate on prompts and agent architecture.
-- **Frontend options** — Run through CLI, web UI, or async jobs. Refer to [Getting started](#getting-started) and [Ways to run the agents](#ways-to-run-the-agents).
-- **Deployment options** - Deployment assets for a [docker compose](deploy/compose/) as well as [helm deployment](deploy/helm/deployment-k8s/).
-
-
-## Software Components
-
-The following are used by this project in the default configuration:
-
-- [NVIDIA NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/)
-- [NVIDIA nemotron-3-nano-30b-a3b](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) (agents, researcher)
-- [NVIDIA nemotron-3-super-120b-a12b](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) (optional, compatible but Build API has limited availability due to high demand)
-- [NVIDIA nemotron-3-nano-30b-a3b](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) (intent classifier)
-- [GPT-OSS-120B](https://build.nvidia.com/openai/gpt-oss-120b/modelcard) (agents)
-- [NVIDIA nemotron-mini-4b-instruct](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/modelcard) (document summary, if used)
-- [NVIDIA llama-nemotron-embed-vl-1b-v2](https://build.nvidia.com/nvidia/llama-nemotron-embed-vl-1b-v2) (embedding model for llamaindex knowledge layer implementation, if used)
-- [NVIDIA nemotron-nano-12b-v2-vl](https://build.nvidia.com/nvidia/nemotron-nano-12b-v2-vl) (vision-language model for llamaindex knowledge layer implementation, if used)
-- [Tavily Search API](https://tavily.com/) for web search
-- [Serper Search API](https://serper.dev/) for paper search (Google Scholar)
-
-## Target Audience
-
-This project is for:
-
-- **AI researchers and developers**: People building or extending agentic research workflows
-- **Enterprise teams**: Organizations needing tool-augmented research with citation-backed research
-- **NeMo Agent Toolkit users**: Developers looking to understand advanced multi-agent patterns
-
-## Prerequisites
-
-- Python 3.11–3.13
-- [uv](https://github.com/astral-sh/uv) package manager
-- NVIDIA API key from [NVIDIA AI](https://build.nvidia.com) (for NIM models)
-- Node.js 22+ and npm (optional, for web UI mode)
-
-
-**Optional requirements:**
-- Tavily API key (for web search functionality)
-- Serper API key (for academic paper search functionality)
-
-> **Note:** Configure at least one data source (Tavily web search, Serper search tool, or knowledge layer) to enable research functionality.
-
-If these optional API keys are not provided, the agent continues to operate without the corresponding search capabilities. Refer to [Obtain API Keys](#obtain-api-keys) for details.
-
-## Hardware Requirements
-
-When using [NVIDIA API Catalog](https://build.nvidia.com/) (the default), inference runs on NVIDIA-hosted infrastructure and there are no local GPU requirements. The hardware references below apply only when self-hosting models via [NVIDIA NIM](https://docs.nvidia.com/nim/).
-
-| Component | Default Model | Self-Hosted Hardware Reference |
-|-----------|---------------|-------------------------------|
-| LLM (research subagent) | `nvidia/nemotron-3-nano-30b-a3b` (default) or `nvidia/nemotron-3-super-120b-a12b` (optional) | [Nemotron 3 Nano support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#nvidia-nemotron-3-nano), [Nemotron 3 Super support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#nvidia-nemotron-3-super-120b-a12b) |
-| LLM (intent classifier) | `nvidia/nemotron-3-nano-30b-a3b` | [Nemotron 3 Nano support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#nvidia-nemotron-3-nano) |
-| LLM (deep research orchestrator, planner) | `openai/gpt-oss-120b` | [GPT OSS support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#gpt-oss-120b) |
-| Document summary (optional) | `nvidia/nemotron-mini-4b-instruct` | [Nemotron Mini 4B](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/) |
-| Text embedding | `nvidia/llama-nemotron-embed-vl-1b-v2` | [NeMo Retriever embedding support matrix](https://docs.nvidia.com/nim/nemo-retriever/text-embedding/latest/support-matrix.html) |
-| VLM (image/chart extraction, optional) | `nvidia/nemotron-nano-12b-v2-vl` | [Vision language model support matrix](https://docs.nvidia.com/nim/vision-language-models/latest/support-matrix.html#nemotron-nano-12b-v2-vl) |
-| Knowledge layer (Foundational RAG, optional) | -- | [RAG Blueprint support matrix](https://docs.nvidia.com/rag/latest/support-matrix.html) |
-
-For detailed installation instructions, refer to [Installation -- Hardware Requirements](docs/source/get-started/installation.md#hardware-requirements).
-
-## Architecture
-
-AI-Q uses a [LangGraph](https://www.langchain.com/langgraph)-based state machine with the following key components:
-
-- **Orchestration node**: Classifies intent (meta vs. research), produces meta responses when needed, and sets depth (shallow vs. deep) in one step
-- **Shallow research agent**: Bounded tool-augmented research optimized for speed
-- **Deep research agent**: Multi-phase research with planning, iteration, and citation management
-
-Each agent can be run individually or as part of the orchestrated workflow. For detailed architecture documentation, refer to [Architecture](docs/source/architecture/overview.md).
-
-## Getting Started
-
-### Clone the Repository
+Run lint:
 
 ```bash
-git clone https://github.com/NVIDIA-AI-Blueprints/aiq.git && cd aiq
+.venv/bin/ruff check src frontends/aiq_api/src tests
 ```
 
-### Automated Setup
-
-Run the setup script to initialize the environment:
+Useful targeted tests include:
 
 ```bash
-./scripts/setup.sh
+.venv/bin/pytest tests/aiq_agent/agents/deep_researcher/test_plan_tools.py
+.venv/bin/pytest tests/aiq_agent/agents/deep_researcher/test_custom_middleware.py
+.venv/bin/pytest tests/aiq_agent/jobs/test_runner.py
 ```
 
-This script:
-- Creates a Python virtual environment with uv
-- Installs all Python dependencies (core, frontends, benchmarks, data sources)
-- Installs UI dependencies (if Node.js is available)
+For frontend changes, run the relevant package scripts from `frontends/ui`.
+After significant UI changes, verify the app in a browser against the local or
+Oracle target.
 
-### Manual Installation
+## Repository Layout
 
-For selective installation, install packages individually:
+```text
+src/aiq_agent/
+  agents/
+    chat_researcher/
+    clarifier/
+    deep_researcher/
+    shallow_researcher/
+  common/
+    citation_verification.py
+    claude_code_specialist.py
+    evidence_packet.py
+    fact_ledger.py
+    report_fact_audit.py
+    research_artifacts.py
+    source_classification.py
+    source_quality_gates.py
+    source_scoring.py
 
-```bash
-# Create and activate virtual environment
-uv venv --python 3.13 .venv
-source .venv/bin/activate
+frontends/
+  aiq_api/       FastAPI backend, job runner, callbacks, persistence
+  ui/            Next.js frontend
 
-# Install core with development dependencies
-uv pip install -e ".[dev]"
+configs/
+  config_cli_minimax_ddgs.yml
 
-# Install frontends (pick what you need)
-uv pip install -e ./frontends/cli          # CLI frontend
-uv pip install -e ./frontends/debug        # Debug console
-uv pip install -e ./frontends/aiq_api      # Unified API (includes debug)
+deploy/
+  compose/
+    docker-compose.app2.yaml
 
-# Install benchmarks (pick what you need)
-uv pip install -e ./frontends/benchmarks/freshqa
+scripts/
+  run_minimax_deep_research.sh
+  stop_deep_research.sh
+  sync_app2_deep_research.sh
 
-# Install data sources (pick what you need)
-uv pip install -e ./sources/tavily_web_search
-uv pip install -e ./sources/google_scholar_paper_search
-uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
+tests/
+  aiq_agent/
 ```
 
-### Obtain API Keys
-
-
-| API        | Environment Variable | Purpose                   | Required                                                    |
-| ---------- | -------------------- | ------------------------- | ----------------------------------------------------------- |
-| NVIDIA API | `NVIDIA_API_KEY`     | LLM inference through NIM | Yes                                                         |
-| Tavily     | `TAVILY_API_KEY`     | Web search                | No (if not specified, agent continues without web search)   |
-| Serper     | `SERPER_API_KEY`     | Academic paper search     | No (if not specified, agent continues without paper search) |
-
-
-#### Obtain an NVIDIA API Key
-
-1. Sign in to [NVIDIA Build](https://build.nvidia.com/)
-2. Click on any model, then select "Deploy" > "Get API Key" > "Generate Key"
-
-#### Obtain a Tavily API Key
-
-1. Sign in to [Tavily](https://tavily.com/)
-2. Navigate to your dashboard
-3. Generate an API key
-
-#### Obtain a Serper API Key
-
-1. Sign in to [Serper](https://serper.dev/)
-2. Generate an API key from your dashboard
-
-### Set Up Environment Variables
-
-Create a `.env` file in `deploy/` directory:
-
-```bash
-cp deploy/.env.example deploy/.env
-```
-
-Replace your API keys.
-
-> **Note:** Depending on your usecase, deep research report quality can be enhanced by enabling searching across academic research papers. We use Serper for this. If you want to use paper search, follow the steps in the [Customization guide](docs/source/customization/tools-and-sources.md#disabling-a-tool) to enable it.
-
-## Configuration Files
-
-The `configs/` directory holds YAML workflow configs that define agents, tools, LLMs, and routing. Use the one that matches your run mode and data sources:
-
-| Config | Models | Description |
-|--------|--------|-------------|
-| `config_cli_default.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B | CLI default. Web search; optional paper search (requires `SERPER_API_KEY`); no knowledge retrieval. Nemotron Super is commented out but can be enabled for higher quality. |
-| `config_web_default_llamaindex.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron Mini 4B | Web default. LlamaIndex knowledge retrieval; web search; optional paper search (requires `SERPER_API_KEY`). Nemotron Super is commented out but can be enabled for higher quality. |
-| `config_web_frag.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B | Web + Foundational RAG (external RAG server). Helm default. See [RAG Blueprint](https://github.com/NVIDIA-AI-Blueprints/rag/tree/main) for an example RAG deployment. Nemotron Super is commented out but can be enabled for higher quality. |
-| `config_frontier_models.yml` | GPT-5.2 (orchestrator/planner), Nemotron 3 Nano 30B, Nemotron Mini 4B | Hybrid: frontier orchestrator/planner, open researcher. LlamaIndex; web search; optional paper search (requires `SERPER_API_KEY`). Requires `OPENAI_API_KEY`. Nemotron Super is commented out but can be enabled for higher quality. |
-
-## Ways to Run the Agents
-
-The `frontends/` directory contains different interfaces for interacting with the agents. You can also run agents directly through the NeMo Agent Toolkit CLI.
-
-### Command-line interface (CLI)
-
-The CLI provides an interactive research assistant in your terminal:
-
-```bash
-# Activate the virtual environment
-source .venv/bin/activate
-
-# Run with the convenience script
-./scripts/start_cli.sh
-
-# Verbose logging
-./scripts/start_cli.sh --verbose
-
-# Or run directly with the NeMo Agent Toolkit CLI (dotenv loads deploy/.env into the environment)
-dotenv -f deploy/.env run nat run --config_file configs/config_cli_default.yml --input "How do I install CUDA?"
-```
-
-The CLI frontend source is in `frontends/cli/`.
-
-### Web UI
-
-For a full web-based experience:
-
-```bash
-./scripts/start_e2e.sh
-```
-
-This starts:
-- Backend API server at `http://localhost:8000`
-- Frontend UI at `http://localhost:3000`
-
-The web UI source is in `frontends/ui/`. Refer to [frontends/ui/README.md](frontends/ui/README.md) for more details.
-
-#### Web UI with Docker Compose
-
-You can also run the backend and UI with Docker Compose:
-
-```bash
-cd deploy/compose
-
-# No-auth local setup (LlamaIndex default)
-docker compose --env-file ../.env -f docker-compose.yaml up -d --build
-
-# To select a different backend config, set BACKEND_CONFIG in deploy/.env, for example:
-# BACKEND_CONFIG=/app/configs/config_web_frag.yml
-```
-
-For more details, refer to:
-- `deploy/compose/README.md`
-
-### Async Deep Research Jobs
-
-Endpoints, SSE streaming, and debug console: refer to [frontends/aiq_api/README.md](frontends/aiq_api/README.md).
-For service integrations with MiniMax Deep Research, auth, startup commands, plan approval behavior, and copy-paste client examples, see [docs/deep-research-api.md](docs/deep-research-api.md).
-
-### Benchmarks
-
-To run agents in evaluation mode, refer to the [Evaluating the Workflow](#evaluating-the-workflow) section.
-
-### Jupyter Notebooks
-
-The `docs/notebooks/` directory contains a three-part series that walks through the blueprint from first run to full customization. Run them in order:
-
-| # | Notebook | What it covers | Prerequisites |
-|---|----------|----------------|---------------|
-| 0 | [Getting Started with AI-Q](docs/notebooks/0_Getting_Started_with_AIQ.ipynb) | Full blueprint overview — environment setup, orchestrated workflow (intent routing, shallow and deep research), and Docker Compose deployment | `NVIDIA_API_KEY`; optionally `TAVILY_API_KEY`, `SERPER_API_KEY` |
-| 1 | [Deep Researcher — Web Search](docs/notebooks/1_Deep_Researcher_Web_Search.ipynb) | Deep researcher in depth — Python API, `nat run`, and end-to-end evaluation against the DeepResearch Bench with `nat eval` | Notebook 0 completed; `NVIDIA_API_KEY`, `TAVILY_API_KEY`, `SERPER_API_KEY`; OpenAI or Gemini key for the judge model |
-| 2 | [Deep Researcher — Customization](docs/notebooks/2_Deep_Researcher_Customization.ipynb) | Extending the deep researcher — adding paper search, assigning different LLMs per agent role, editing prompts, and enabling the knowledge layer | Notebooks 0 and 1 completed; `NVIDIA_API_KEY`, `TAVILY_API_KEY`, `SERPER_API_KEY` |
-
-
-## Evaluating the Workflow
-
-The `frontends/benchmarks/` directory contains evaluation pipelines for assessing agent performance.
-
-### Available Benchmarks
-
-| Benchmark | Description | Location |
-|-----------|-------------|----------|
-| Deep Research Bench | RACE and FACT evaluation for research quality | `frontends/benchmarks/deepresearch_bench/` |
-| FreshQA | Factuality evaluation on time-sensitive questions | `frontends/benchmarks/freshqa/` |
-
-### Running Evaluations
-
-### Step 1: Install the dataset
-
-The dataset files are not included in the repository. We have included a script to retrieve them from the [Deep Research Bench Github Repository](https://github.com/Ayanami0730/deep_research_bench/tree/main) and format them for the NeMo Agent Toolkit evaluator.
-
-To download the dataset files, run the following script:
-
-```bash
-python frontends/benchmarks/deepresearch_bench/scripts/download_drb_dataset.py
-```
-
-### Step 2: Generate reports using NAT evaluation harness
-
-```bash
-dotenv -f deploy/.env run nat eval --config_file frontends/benchmarks/deepresearch_bench/configs/config_deep_research_bench.yml
-```
-
-### Step 3: Convert the output into a compatible format
-```bash
-python frontends/benchmarks/deepresearch_bench/scripts/export_drb_jsonl.py --input <path to your workflow_output.json> --output <path to the output file you want to create with .jsonl extension>
-```
-
-### Step 4: Run evaluation
-Follow instructions in the [Deep Research Bench Github Repository](https://github.com/Ayanami0730/deep_research_bench/tree/main) to run evaluation and obtain scores.
-
-
-### Optional: Phoenix Tracing
-
-If your config enables Phoenix tracing, start the Phoenix server before running `nat eval`.
-
-Start server (separate terminal):
-
-```bash
-source .venv/bin/activate
-phoenix serve
-```
-
-For detailed benchmark documentation, refer to:
-- [Deep Research Bench README](frontends/benchmarks/deepresearch_bench/README.md)
-- [FreshQA README](frontends/benchmarks/freshqa/README.md)
-
-## Development
-
-For development, contribution, and documentation, refer to:
-
-- **[Development and Contributing](docs/source/contributing/index.md)**: Setup, testing, PR workflow, sign-off/DCO
-- **[Tutorial Notebooks](docs/notebooks/)**: Getting started overview, deeper dive, and customization notebooks
-- **[Architecture](docs/source/architecture/overview.md)**: Component details and data flow
-- **[Customization](docs/source/customization/index.md)**: Configuration and customization options
-- **[Knowledge Layer Setup](sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md)**: RAG backends and document ingestion
-- **[Agent Skills](docs/source/integration/agent-skills.md)**: Install the portable AI-Q research skill in compatible coding harnesses
-- **[Skills and Sandbox Example](docs/source/examples/skills-sandbox/index.md)**: Run deep research with built-in skills and Modal sandbox execution
-- **[Profiling and Cost Analysis](docs/source/profiling/index.md)**: Generate tokenomics and latency reports from NAT profiler traces
-- **[Docs index](docs/README.md)**: Full documentation list and component docs
-- **[Changelog](docs/source/resources/changelog.md)**: Version history and changes
-
-## Roadmap
-
-- [ ] **[NeMo Guardrails](https://github.com/NVIDIA-NeMo/Guardrails) Integration:** Enhance safety and security guardrails.
-- [ ] **[NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo) Integration:** Reduce latency via priority scheduling at scale.
-- [ ] **MCP Authentication:** Implement secure login/auth for MCP connections.
-- [x] **Skills & Sandboxing:** Support built-in deep research skills with job-scoped sandbox execution.
-- [ ] **Custom Skill Management:** Add UI and lifecycle controls for user-provided skill bundles.
-- [ ] **Dynamic Model Routing:** Allow sub-agents to automatically select the optimal model per task.
-- [ ] **Resource Management:** Implement configurable token caps and tool-call budgets.
-- [ ] **Expanded Web Search:** Additional integration examples including Perplexity and You.com.
-- [ ] **Collaborative Rewriting:** Additional report rewriting agent and HITL Q&A.
-- [ ] **Multimedia Output:** Embed audio, video, and images directly into reports.
-- [ ] **Voice-to-Text Input:** Integrate [NVIDIA Riva](https://developer.nvidia.com/riva) for hands-free accessibility.
-
-## Security Considerations
-
-- The AI-Q Blueprint is shared as a reference and is provided "as is". The security in the production environment is the responsibility of the end users deploying it. When deploying in a production environment, please have security experts review any potential risks and threats; define the trust boundaries, implement logging and monitoring capabilities, secure the communication channels, integrate AuthN & AuthZ with appropriate access controls, keep the deployment up to date, ensure the containers/source code are secure and free of known vulnerabilities.
-- A robust frontend that handles AuthN & AuthZ is highly recommended. Missing AuthN & AuthZ will result in ungated access to customer models if directly exposed e.g. the internet, resulting in either cost to the customer, resource exhaustion, or denial of service.
-- End users are encouraged to add [NeMo Guardrails](https://github.com/NVIDIA-NeMo/Guardrails) and additional prompt content filtering to the blueprint. Guardrails will be native in upcoming release.
-- The AI-Q Blueprint doesn't require any privileged access to the system.
-- Deep research skills can invoke sandboxed code execution for analysis workflows. Keep sandbox credentials, quotas, lifecycle cleanup, and network policy aligned with your deployment's trust boundaries.
-- End users are responsible for ensuring the availability of their deployment.
-- End users are responsible for building, and patching, the container images to keep them up to date.
-- The end users are responsible for ensuring that OSS packages used by the developer blueprint are current.
-- The logs from middleware, backend, and demo app are printed to standard out. They can include input prompts and output completions for development purposes. The end users are advised to handle logging securely and avoid information leakage for production use cases.
-
+## Operational Notes
+
+- The shared `/shared/*` filesystem is agent state, not ordinary disk.
+- Research jobs can be interrupted by deploys and restarts. This is acceptable
+  when runtime changes are more important than preserving a bad in-flight job.
+- User-facing plan quality is part of the product, not a cosmetic detail. A
+  fallback-looking plan is considered a workflow failure.
+- Search budgets should be allocated across the actual modules in a query.
+  Over-spending on early broad tasks can starve later comparative or synthesis
+  tasks.
+- If a source is unknown, the system should not automatically discard it, but it
+  should avoid treating it like a primary source for hard factual claims.
+- Precise numbers that support the report's central thesis are the highest-risk
+  claims and should receive extra verification.
+
+## Known Limitations
+
+- Source classification is still incomplete for the open web. Many real sources
+  will initially appear as `unknown`.
+- Search quality depends on upstream engines, rate limits, and extraction
+  success. Websurfx and SearXNG improve discovery but do not guarantee source
+  authority.
+- LLM tool calling can still fail, stall, or claim that it wrote a file before a
+  valid artifact exists. Typed tools and schema checks reduce this risk but do
+  not eliminate it.
+- Long reports can still suffer from citation drift, stale business facts,
+  duplicated references, or malformed tails. The report audit and reference
+  rebuild layers are meant to catch these before delivery.
+- MiniMax M3 thinking improves some high-context reasoning tasks but can slow
+  down or destabilize short tool loops. Use it selectively.
+
+## Upstream Lineage
+
+This project began as a fork/customization of NVIDIA's AI-Q Blueprint research
+application. The upstream AI-Q and NeMo Agent Toolkit concepts still matter:
+workflow registration, tool configuration, agent runtime structure, and many
+original docs remain in the repository.
+
+However, the current product has evolved into a MiniMax-centered deep research
+system with custom planning, retrieval, source quality, verification, Oracle
+deployment, and frontend behavior. Treat this README as the current operational
+map for the app; treat older NVIDIA-specific documentation as upstream reference
+material unless it has been updated for the current MiniMax app.
 
 ## License
 
-This project will download and install additional third-party open source software projects. Review the license terms of these open source projects before use, found in [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY).
-
-GOVERNING TERMS: AIQ blueprint software and materials are governed by the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0)
+The inherited project uses the upstream license terms included in this
+repository. Check `LICENSE` and upstream notices before redistributing derived
+work.
