@@ -22,6 +22,7 @@ class ResearchDepthConfig:
     search_calls_per_task: int
     planner_search_limit: int
     advanced_web_search_limit: int
+    nominal_advanced_web_search_limit: int | None
     web_search_limit: int
     stock_quote_limit: int
     planner_guidance: str
@@ -40,8 +41,17 @@ class ResearchDepthConfig:
         evenly distributed.
         """
         total_search_calls = self.advanced_web_search_limit
+        nominal_search_calls = self.nominal_advanced_web_search_limit or total_search_calls
+        nominal_search_calls = max(1, min(total_search_calls, nominal_search_calls))
+        adaptive_reserve_search_calls = max(0, total_search_calls - nominal_search_calls)
+
+        def reserve_with_adaptive_extra(base_reserve: int) -> int:
+            if total_search_calls <= 1:
+                return 0
+            return min(total_search_calls - 1, adaptive_reserve_search_calls + base_reserve)
+
         if mode == "lesson_first":
-            reserve = max(8, round(total_search_calls * 0.20))
+            reserve = reserve_with_adaptive_extra(max(8, round(nominal_search_calls * 0.20)))
             active = max(1, total_search_calls - reserve)
             distribution = {
                 "broad_topic_foundations": 0.55,
@@ -51,10 +61,11 @@ class ResearchDepthConfig:
             }
             notes = (
                 "Spend most search effort on broad-topic foundations and examples first, keep the motion "
-                "bridge bounded, and leave a reserve for gap-filling and synthesis."
+                "bridge bounded, and leave the adaptive reserve for gap-filling, weak-source replacement, "
+                "and synthesis verification."
             )
         elif mode == "focused_screen":
-            reserve = max(2, round(total_search_calls * 0.10))
+            reserve = reserve_with_adaptive_extra(max(2, round(nominal_search_calls * 0.10)))
             active = max(1, total_search_calls - reserve)
             distribution = {
                 "candidate_screening": 0.70,
@@ -63,10 +74,10 @@ class ResearchDepthConfig:
             }
             notes = (
                 "Use a compact evidence budget: identify candidates quickly, verify current evidence, and "
-                "keep a small reserve for caveats or one targeted follow-up."
+                "keep the adaptive reserve for caveats, stale figures, or one targeted follow-up."
             )
         else:
-            reserve = max(6, round(total_search_calls * 0.15))
+            reserve = reserve_with_adaptive_extra(max(6, round(nominal_search_calls * 0.15)))
             active = max(1, total_search_calls - reserve)
             branch_count = max(3, min(5, section_count or 4))
             even_share = round(1.0 / branch_count, 2)
@@ -74,14 +85,17 @@ class ResearchDepthConfig:
             distribution["gap_fill_and_synthesis"] = round(reserve / max(1, total_search_calls), 2)
             notes = (
                 "Spread research roughly evenly across the main branches. No single branch should consume "
-                "most of the search budget while enough reserve remains for gap-filling and synthesis."
+                "most of the search budget while the adaptive reserve remains for gap-filling, replacing weak "
+                "sources, and verifying high-risk claims."
             )
 
         return {
             "mode": mode,
             "total_search_calls": total_search_calls,
+            "nominal_search_calls": nominal_search_calls,
             "active_search_calls": active,
             "reserve_search_calls": reserve,
+            "adaptive_reserve_search_calls": adaptive_reserve_search_calls,
             "planner_search_calls": self.planner_search_limit,
             "search_calls_per_task": self.search_calls_per_task,
             "max_researcher_tasks": self.max_researcher_tasks,
@@ -114,6 +128,7 @@ RESEARCH_DEPTH_CONFIGS: dict[ResearchDepthTier, ResearchDepthConfig] = {
         search_calls_per_task=8,
         planner_search_limit=1,
         advanced_web_search_limit=20,
+        nominal_advanced_web_search_limit=None,
         web_search_limit=12,
         stock_quote_limit=4,
         planner_guidance=(
@@ -125,16 +140,18 @@ RESEARCH_DEPTH_CONFIGS: dict[ResearchDepthTier, ResearchDepthConfig] = {
         label="Deeper",
         source_target="40-77",
         max_researcher_tasks=5,
-        max_parallel_researcher_tasks=3,
-        search_calls_per_task=14,
+        max_parallel_researcher_tasks=4,
+        search_calls_per_task=16,
         planner_search_limit=1,
-        advanced_web_search_limit=77,
-        web_search_limit=24,
-        stock_quote_limit=8,
+        advanced_web_search_limit=92,
+        nominal_advanced_web_search_limit=77,
+        web_search_limit=29,
+        stock_quote_limit=10,
         planner_guidance=(
             "Build a multi-angle plan, but pack related sections into 3-4 researcher tasks. "
-            "Use the larger per-task search budget for current evidence, primary sources, "
-            "independent analysis, comparisons, and caveats."
+            "Use the larger per-task search ceiling for current evidence, primary sources, "
+            "independent analysis, comparisons, and caveats, but treat the extra budget as adaptive "
+            "reserve rather than mandatory searching."
         ),
     ),
     "medium": ResearchDepthConfig(
@@ -143,14 +160,16 @@ RESEARCH_DEPTH_CONFIGS: dict[ResearchDepthTier, ResearchDepthConfig] = {
         source_target="32-64",
         max_researcher_tasks=5,
         max_parallel_researcher_tasks=3,
-        search_calls_per_task=12,
+        search_calls_per_task=14,
         planner_search_limit=1,
-        advanced_web_search_limit=64,
-        web_search_limit=20,
-        stock_quote_limit=8,
+        advanced_web_search_limit=77,
+        nominal_advanced_web_search_limit=64,
+        web_search_limit=24,
+        stock_quote_limit=10,
         planner_guidance=(
             "Use the deeper evidence budget with a latency-first execution style: keep planning compact, "
-            "run bounded researcher tasks in parallel, and reserve the synthesis step for heavier reasoning."
+            "run bounded researcher tasks in parallel, and spend the adaptive reserve only on gap-filling, "
+            "weak-source replacement, or high-risk claim verification."
         ),
     ),
     "deep": ResearchDepthConfig(
@@ -159,15 +178,17 @@ RESEARCH_DEPTH_CONFIGS: dict[ResearchDepthTier, ResearchDepthConfig] = {
         source_target="90-150+",
         max_researcher_tasks=10,
         max_parallel_researcher_tasks=3,
-        search_calls_per_task=14,
+        search_calls_per_task=16,
         planner_search_limit=2,
-        advanced_web_search_limit=140,
-        web_search_limit=48,
-        stock_quote_limit=16,
+        advanced_web_search_limit=168,
+        nominal_advanced_web_search_limit=140,
+        web_search_limit=58,
+        stock_quote_limit=19,
         planner_guidance=(
             "Build an exhaustive plan, but consolidate related queries into up to 8 broad researcher "
-            "tasks. Use the larger per-task search budget to cover primary sources, recent updates, "
-            "benchmarks, pricing, counterarguments, history, and edge cases."
+            "tasks. Use the larger per-task search ceiling to cover primary sources, recent updates, "
+            "benchmarks, pricing, counterarguments, history, and edge cases, while preserving the adaptive "
+            "reserve for verification and gap closure."
         ),
     ),
 }

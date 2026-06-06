@@ -82,8 +82,8 @@ class JobSubmitRequest(BaseModel):
     research_depth: ResearchDepthTier = Field(
         DEFAULT_RESEARCH_DEPTH,
         description=(
-            "Depth/source tier for research jobs: shallow targets 5-10 sources, "
-            "deeper targets 20-40, deep targets 60-100+."
+            "Depth/source tier for research jobs: shallow, medium, deeper, or deep. "
+            "Deeper and deep use larger adaptive reserve budgets for gap-filling and verification."
         ),
     )
     job_id: str | None = Field(
