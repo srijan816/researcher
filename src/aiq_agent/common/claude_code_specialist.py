@@ -132,6 +132,7 @@ async def run_claude_code_specialist(
 
     command = [
         executable,
+        "--bare",
         "--print",
         "--output-format",
         "text",
@@ -202,12 +203,18 @@ def _claude_code_env() -> dict[str, str]:
     if provider == "minimax":
         api_key = os.environ.get("AIQ_CLAUDE_CODE_API_KEY") or os.environ.get("MINIMAX_API_KEY")
         if api_key:
-            env["ANTHROPIC_API_KEY"] = api_key
+            env["ANTHROPIC_AUTH_TOKEN"] = api_key
         env["ANTHROPIC_BASE_URL"] = os.environ.get(
             "AIQ_CLAUDE_CODE_BASE_URL",
             "https://api.minimax.io/anthropic",
         )
-        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        env.pop("ANTHROPIC_API_KEY", None)
+        model = os.environ.get("AIQ_CLAUDE_CODE_MODEL", "MiniMax-M3")
+        env.setdefault("ANTHROPIC_MODEL", model)
+        env.setdefault("ANTHROPIC_DEFAULT_SONNET_MODEL", model)
+        env.setdefault("ANTHROPIC_DEFAULT_OPUS_MODEL", model)
+        env.setdefault("ANTHROPIC_DEFAULT_HAIKU_MODEL", model)
+        env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
         return env
 
     strip_api_env = os.environ.get("AIQ_CLAUDE_CODE_STRIP_API_ENV", "false").strip().lower()

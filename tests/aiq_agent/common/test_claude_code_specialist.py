@@ -46,12 +46,17 @@ def test_should_not_use_claude_code_for_simple_search():
 def test_claude_code_env_defaults_to_minimax(monkeypatch):
     monkeypatch.setenv("MINIMAX_API_KEY", "mini-key")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "stale-anthropic-key")
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
 
     env = _claude_code_env()
 
-    assert env["ANTHROPIC_API_KEY"] == "mini-key"  # pragma: allowlist secret
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "mini-key"  # pragma: allowlist secret
+    assert "ANTHROPIC_API_KEY" not in env
     assert env["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
+    assert env["ANTHROPIC_MODEL"] == "MiniMax-M3"
+    assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "MiniMax-M3"
+    assert env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
 
 
 def test_claude_code_prompt_requires_exact_plan_artifact_path(tmp_path):

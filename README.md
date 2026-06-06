@@ -373,6 +373,12 @@ and available tool descriptions.
 This keeps Claude Code useful as an orchestration and synthesis assistant
 instead of a second disconnected research agent.
 
+When Claude Code is backed by MiniMax, the subprocess environment must use
+`ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic` and
+`ANTHROPIC_AUTH_TOKEN=$MINIMAX_API_KEY`. Do not pass the MiniMax key as
+`ANTHROPIC_API_KEY`; Claude Code treats that as an external Anthropic API key
+and rejects it before the research bridge can write artifacts.
+
 ## Frontend Experience
 
 The browser interface supports:

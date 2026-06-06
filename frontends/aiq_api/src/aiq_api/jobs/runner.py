@@ -365,13 +365,11 @@ async def run_agent_job(
             if llm is None and hasattr(fn_config, "llm") and fn_config.llm:
                 llm = await builder.get_llm(fn_config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
 
-            # Resolve tools: use explicit list or auto-inherit from data_source_registry
-            tool_refs = fn_config.tools
-            if not tool_refs:
-                from aiq_agent.common import get_all_tool_refs
-
-                tool_refs = get_all_tool_refs()
-
+            # Resolve tools: use explicit list or auto-inherit from data_source_registry.
+            # Not every async agent is LangChain-tool bound. The Claude Code
+            # research bridge uses its own repo-local subprocess/tool contract,
+            # so its config intentionally has no ``tools`` field.
+            tool_refs = _resolve_tool_refs(fn_config)
             tools = await builder.get_tools(tool_names=tool_refs, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
 
             # Apply per-agent exclusions (e.g. deep_research excludes web_search_tool)
@@ -768,6 +766,25 @@ def _create_agent_instance(
 
     # Fallback: just callbacks
     return agent_cls(callbacks=callbacks)
+
+
+def _resolve_tool_refs(fn_config) -> list[str]:
+    """Resolve configured tool refs for async jobs.
+
+    Standard AIQ research configs expose a ``tools`` field and auto-inherit all
+    data-source tools when that field is empty. Tool-less async agents, such as
+    the Claude Code research bridge, intentionally omit the field and should not
+    trigger LangChain tool construction.
+    """
+    if not hasattr(fn_config, "tools"):
+        return []
+    tool_refs = fn_config.tools
+    if tool_refs:
+        return list(tool_refs)
+
+    from aiq_agent.common import get_all_tool_refs
+
+    return list(get_all_tool_refs())
 
 
 async def _run_agent(

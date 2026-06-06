@@ -2034,6 +2034,21 @@ class TestSQLAlchemyPoolFilter:
 class TestAsyncJobRunnerAgentFactory:
     """Tests for async job agent construction."""
 
+    def test_resolve_tool_refs_skips_toolless_agent_configs(self):
+        """Claude Code bridge configs should not trigger LangChain tool loading."""
+        from aiq_agent.agents.claude_researcher.register import ClaudeResearchAgentConfig
+        from aiq_api.jobs.runner import _resolve_tool_refs
+
+        assert _resolve_tool_refs(ClaudeResearchAgentConfig()) == []
+
+    def test_resolve_tool_refs_autoinherits_for_tool_aware_configs(self):
+        """Traditional AIQ configs still inherit registered source tools when empty."""
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_api.jobs.runner import _resolve_tool_refs
+
+        with patch("aiq_agent.common.get_all_tool_refs", return_value=["tool_a", "tool_b"]):
+            assert _resolve_tool_refs(DeepResearchAgentConfig(orchestrator_llm="llm")) == ["tool_a", "tool_b"]
+
     def test_create_agent_instance_passes_config_and_job_id_when_supported(self):
         """Async workers can receive generic function config without runner-specific agent knowledge."""
         from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig

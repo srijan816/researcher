@@ -102,9 +102,21 @@ class ClaudeResearcherAgent:
         env.setdefault("AIQ_CLAUDE_CODE_PROVIDER", "minimax")
         env.setdefault("AIQ_CLAUDE_CODE_BYPASS_PERMISSIONS", "true")
         env.setdefault("AIQ_CLAUDE_RESEARCH_DEPTH", depth)
-        env.setdefault("ANTHROPIC_BASE_URL", env.get("AIQ_CLAUDE_CODE_BASE_URL", "https://api.minimax.io/anthropic"))
         if env.get("AIQ_CLAUDE_CODE_PROVIDER", "minimax") == "minimax" and env.get("MINIMAX_API_KEY"):
-            env.setdefault("ANTHROPIC_API_KEY", env["MINIMAX_API_KEY"])
+            env["ANTHROPIC_BASE_URL"] = env.get("AIQ_CLAUDE_CODE_BASE_URL", "https://api.minimax.io/anthropic")
+            env["ANTHROPIC_AUTH_TOKEN"] = env.get("AIQ_CLAUDE_CODE_API_KEY") or env["MINIMAX_API_KEY"]
+            env.pop("ANTHROPIC_API_KEY", None)
+            model = env.get("AIQ_CLAUDE_CODE_MODEL", "MiniMax-M3")
+            env.setdefault("ANTHROPIC_MODEL", model)
+            env.setdefault("ANTHROPIC_DEFAULT_SONNET_MODEL", model)
+            env.setdefault("ANTHROPIC_DEFAULT_OPUS_MODEL", model)
+            env.setdefault("ANTHROPIC_DEFAULT_HAIKU_MODEL", model)
+            env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+            env.setdefault("API_TIMEOUT_MS", str(self.timeout_seconds * 1000))
+        else:
+            env.setdefault(
+                "ANTHROPIC_BASE_URL", env.get("AIQ_CLAUDE_CODE_BASE_URL", "https://api.minimax.io/anthropic")
+            )
 
         init_process = await asyncio.create_subprocess_exec(
             sys.executable,
@@ -138,6 +150,7 @@ class ClaudeResearcherAgent:
 
         process = await asyncio.create_subprocess_exec(
             claude_bin,
+            "--bare",
             "--print",
             "--output-format",
             "text",

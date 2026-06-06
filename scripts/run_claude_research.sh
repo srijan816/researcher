@@ -24,9 +24,10 @@ Usage:
   scripts/run_claude_research.sh --query-file prompt.txt [--run-id id]
 
 Environment:
-  MINIMAX_API_KEY                         Used as ANTHROPIC_API_KEY when provider=minimax.
+  MINIMAX_API_KEY                         Used as ANTHROPIC_AUTH_TOKEN when provider=minimax.
   AIQ_CLAUDE_CODE_PROVIDER=minimax         Default provider adapter.
   AIQ_CLAUDE_CODE_BASE_URL                 Default: https://api.minimax.io/anthropic
+  AIQ_CLAUDE_CODE_MODEL                    Default: MiniMax-M3
   AIQ_CLAUDE_CODE_BYPASS_PERMISSIONS=true  Adds --dangerously-skip-permissions.
   SEARXNG_URL                              Search endpoint.
   WEBSURFX_URL                             Websurfx endpoint.
@@ -90,7 +91,13 @@ fi
 
 export ANTHROPIC_BASE_URL="${AIQ_CLAUDE_CODE_BASE_URL:-https://api.minimax.io/anthropic}"
 if [[ "${AIQ_CLAUDE_CODE_PROVIDER:-minimax}" == "minimax" && -n "${MINIMAX_API_KEY:-}" ]]; then
-  export ANTHROPIC_API_KEY="$MINIMAX_API_KEY"
+  export ANTHROPIC_AUTH_TOKEN="${AIQ_CLAUDE_CODE_API_KEY:-$MINIMAX_API_KEY}"
+  unset ANTHROPIC_API_KEY
+  export ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-${AIQ_CLAUDE_CODE_MODEL:-MiniMax-M3}}"
+  export ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-$ANTHROPIC_MODEL}"
+  export ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-$ANTHROPIC_MODEL}"
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-$ANTHROPIC_MODEL}"
+  export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-1}"
 fi
 
 PERMISSION_ARGS=("--permission-mode" "${AIQ_CLAUDE_CODE_PERMISSION_MODE:-auto}")
@@ -132,6 +139,7 @@ PROMPT_EOF
 )"
 
 printf '%s' "$PROMPT" | "$CLAUDE_BIN" \
+  --bare \
   --print \
   --output-format text \
   --input-format text \
