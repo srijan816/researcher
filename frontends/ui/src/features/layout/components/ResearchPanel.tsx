@@ -18,6 +18,7 @@ import { Close, Generate, StopCircle } from '@/adapters/ui/icons'
 import { useCancelDeepResearchJob, useChatStore, useLoadJobData } from '@/features/chat'
 import { useReducedMotion } from '@/hooks/use-reduced-motion'
 import { useLayoutStore } from '../store'
+import { BatchResearchQueue } from './BatchResearchQueue'
 import { PlanTab } from './PlanTab'
 import { TasksTab } from './TasksTab'
 import { ThinkingTab } from './ThinkingTab'
@@ -237,6 +238,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
               size="medium"
               items={[
                 { value: 'plan', children: 'Plan' },
+                { value: 'batch', children: 'Batch' },
                 { value: 'tasks', children: 'Tasks' },
                 { value: 'thinking', children: 'Thinking' },
                 { value: 'citations', children: 'Citations' },
@@ -333,6 +335,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
           ) : (
             <>
               {researchPanelTab === 'plan' && <PlanTab />}
+              {researchPanelTab === 'batch' && <BatchResearchQueue />}
               {researchPanelTab === 'tasks' && <TasksTab />}
               {researchPanelTab === 'thinking' && <ThinkingTab />}
               {researchPanelTab === 'citations' && <CitationsTab />}

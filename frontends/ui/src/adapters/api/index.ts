@@ -105,6 +105,7 @@ export type {
 // Deep Research Client (SSE Streaming for async jobs)
 export {
   createDeepResearchClient,
+  submitDeepResearchJob,
   getJobStatus,
   getJobState,
   getJobReport,
@@ -117,6 +118,7 @@ export type {
   DeepResearchJobStatus,
   DeepResearchJobStatusResponse,
   DeepResearchJobReportResponse,
+  DeepResearchJobSubmitRequest,
   JobHistoryItem,
   JobHistoryResponse,
   DeepResearchEventType,

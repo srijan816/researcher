@@ -7,6 +7,8 @@
  * Type definitions for chat messages, conversations, and state.
  */
 
+import type { ResearchDepth } from '@/features/layout/types'
+
 /** Message role types */
 export type MessageRole = 'user' | 'assistant' | 'system'
 
@@ -27,6 +29,37 @@ export type DeepResearchBannerType = 'starting' | 'success' | 'failure' | 'cance
 
 /** Research execution engine selected for an async run */
 export type ResearchEngine = 'aiq' | 'claude_code'
+
+/** Queue status for batch deep research tasks */
+export type BatchResearchItemStatus =
+  | 'pending'
+  | 'approved'
+  | 'running'
+  | 'complete'
+  | 'failed'
+  | 'cancelled'
+
+/** Batch research queue item */
+export interface BatchResearchItem {
+  id: string
+  conversationId: string
+  query: string
+  researchDepth: ResearchDepth
+  researchEngine: ResearchEngine
+  enabledDataSources: string[]
+  messageFiles: Array<{ id: string; fileName: string }>
+  title: string
+  status: BatchResearchItemStatus
+  createdAt: string
+  updatedAt: string
+  approvedAt?: string
+  autoApproveAt?: string
+  startedAt?: string
+  completedAt?: string
+  jobId?: string
+  messageId?: string
+  error?: string
+}
 
 /** File upload status types for banner messages */
 export type FileUploadStatusType = 'uploaded' | 'pending_warning'
@@ -453,6 +486,10 @@ export interface ChatState {
   /** Latest human-readable activity from the deep research stream */
   deepResearchActivity: DeepResearchActivity | null
 
+  // Batch research queue state
+  /** Persisted queue of batch deep research tasks */
+  batchResearchQueue: BatchResearchItem[]
+
   // Plan state (for PlanTab in ResearchPanel)
   /** Messages for the PlanTab (clarification questions, plan preview, etc.) */
   planMessages: PlanMessage[]
@@ -664,6 +701,41 @@ export interface ChatActions {
     activity: Omit<DeepResearchActivity, 'timestamp'> | null,
     options?: { preserveMessage?: boolean }
   ) => void
+
+  // Batch research queue actions
+
+  /** Add a new batch research task to the queue */
+  enqueueBatchResearchItem: (item: {
+    conversationId: string
+    query: string
+    researchDepth: ResearchDepth
+    researchEngine: ResearchEngine
+    enabledDataSources: string[]
+    messageFiles: Array<{ id: string; fileName: string }>
+    title?: string
+    autoApproveAfterMs?: number
+  }) => string
+  /** Update a batch queue item */
+  updateBatchResearchItem: (
+    itemId: string,
+    patch: Partial<Omit<BatchResearchItem, 'id' | 'conversationId' | 'createdAt' | 'updatedAt'>>
+  ) => void
+  /** Approve a queued item so it can be submitted */
+  approveBatchResearchItem: (itemId: string) => void
+  /** Mark a queued item as running */
+  markBatchResearchItemRunning: (itemId: string, jobId: string, messageId: string) => void
+  /** Mark a queued item as complete/cancelled/failed */
+  markBatchResearchItemComplete: (
+    itemId: string,
+    status: Extract<BatchResearchItemStatus, 'complete' | 'failed' | 'cancelled'>,
+    error?: string
+  ) => void
+  /** Remove a queued item */
+  removeBatchResearchItem: (itemId: string) => void
+  /** Remove queued items for a conversation */
+  clearBatchResearchQueueForConversation: (conversationId: string) => void
+  /** Clear the entire queue */
+  clearBatchResearchQueue: () => void
 
   // Deep research ThinkingTab actions (LLM steps, agents, tool calls, files)
 

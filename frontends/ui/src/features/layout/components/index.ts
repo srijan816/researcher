@@ -17,6 +17,7 @@ export { DocsPanel } from './DocsPanel'
 // Research panel and tabs
 export { ResearchPanel } from './ResearchPanel'
 export { PlanTab } from './PlanTab'
+export { BatchResearchQueue } from './BatchResearchQueue'
 export { TasksTab } from './TasksTab'
 export { ThinkingTab } from './ThinkingTab'
 export { CitationsTab } from './CitationsTab'

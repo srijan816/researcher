@@ -22,8 +22,9 @@ import { useCancelDeepResearchJob, useWebSocketChat, useChatStore, useIsCurrentS
 import { useLayoutStore } from '../store'
 import { useAppConfig } from '@/shared/context'
 import { useFileUpload, useFileDragDrop, useFileUploadBanners } from '@/features/documents'
-import { Globe, Document, Paperclip, Paperplane, Cancel, StopCircle } from '@/adapters/ui/icons'
+import { Globe, Document, Paperclip, Paperplane, Cancel, StopCircle, Clock } from '@/adapters/ui/icons'
 import type { ResearchDepth, ResearchEngine } from '../types'
+import { BatchResearchQueue } from './BatchResearchQueue'
 
 /** Connection mode for the chat */
 export type ConnectionMode = 'sse' | 'websocket'
@@ -87,6 +88,8 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   // Get current conversation for filtering files and ensureSession for auto-creation
   const currentConversation = useChatStore((state) => state.currentConversation)
   const ensureSession = useChatStore((state) => state.ensureSession)
+  const enqueueBatchResearchItem = useChatStore((state) => state.enqueueBatchResearchItem)
+  const batchResearchQueue = useChatStore((state) => state.batchResearchQueue)
 
   // Deep research completion state - disables new submissions after research completes
   const deepResearchStatus = useChatStore((state) => state.deepResearchStatus)
@@ -221,6 +224,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   const openRightPanel = useLayoutStore((s) => s.openRightPanel)
   const closeRightPanel = useLayoutStore((s) => s.closeRightPanel)
   const setDataSourcesPanelTab = useLayoutStore((s) => s.setDataSourcesPanelTab)
+  const setResearchPanelTab = useLayoutStore((s) => s.setResearchPanelTab)
   const researchDepth = useLayoutStore((s) => s.researchDepth)
   const setResearchDepth = useLayoutStore((s) => s.setResearchDepth)
   const researchEngine = useLayoutStore((s) => s.researchEngine)
@@ -228,6 +232,9 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
 
   // Check if we're in response mode (responding to a HITL prompt)
   const isResponseMode = !!pendingInteraction
+  const queuedResearchCount = batchResearchQueue.filter(
+    (item) => item.conversationId === currentConversation?.id
+  ).length
 
   // DISABLE LOGIC
   // Disable input when:
@@ -236,7 +243,11 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   // 3. Deep research has completed/failed
 
   const isDisabledByAuth = !isAuthenticated
-  const disabled = isDisabledByAuth || (isBusy && !isResponseMode) || isResearchSessionComplete
+  const hasQueuedBatchForSession = queuedResearchCount > 0
+  const disabled =
+    isDisabledByAuth ||
+    (isBusy && !isResponseMode) ||
+    (isResearchSessionComplete && !hasQueuedBatchForSession)
 
   // Dynamic placeholder based on state
   // Note: isResponseMode is checked before isBusy because the user needs to
@@ -292,6 +303,71 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
     pendingFilesWarningActive,
     addFileUploadStatusCard,
     removeFileUploadWarning,
+  ])
+
+  const handleQueueResearch = useCallback(() => {
+    if (!message.trim() || isDisabledByAuth || isResponseMode) return
+
+    if (pendingCount > 0 && !pendingFilesWarningActive) {
+      addFileUploadStatusCard('pending_warning', pendingCount, `pending-warning-${Date.now()}`)
+      setPendingFilesWarningActive(true)
+      return
+    }
+
+    if (pendingFilesWarningActive) {
+      removeFileUploadWarning()
+      setPendingFilesWarningActive(false)
+    }
+
+    const currentMessage = message.trim()
+    const sessionId = ensureSession()
+    if (!sessionId) return
+
+    const sessionFilesSnapshot = sessionFiles.filter(
+      (f) => f.status === 'uploading' || f.status === 'ingesting' || f.status === 'success'
+    )
+    const hasSessionFiles = sessionFilesSnapshot.length > 0
+    const dataSourcesForMessage = hasSessionFiles && knowledgeLayerAvailable
+      ? [...enabledDataSourceIds, 'knowledge_layer']
+      : enabledDataSourceIds
+
+    const messageFiles = sessionFilesSnapshot.map((f) => ({
+      id: f.id,
+      fileName: f.fileName,
+    }))
+
+    enqueueBatchResearchItem({
+      conversationId: sessionId,
+      query: currentMessage,
+      researchDepth,
+      researchEngine,
+      enabledDataSources: dataSourcesForMessage,
+      messageFiles,
+      title: currentMessage,
+    })
+
+    setMessage('')
+    setResearchPanelTab('batch')
+    openRightPanel('research')
+  }, [
+    addFileUploadStatusCard,
+    disabled,
+    enabledDataSourceIds,
+    enqueueBatchResearchItem,
+    ensureSession,
+    knowledgeLayerAvailable,
+    message,
+    openRightPanel,
+    pendingCount,
+    pendingFilesWarningActive,
+    removeFileUploadWarning,
+    researchDepth,
+    researchEngine,
+    isDisabledByAuth,
+    isResponseMode,
+    sessionFiles,
+    setMessage,
+    setResearchPanelTab,
   ])
 
   const handleKeyDown = useCallback(
@@ -620,6 +696,18 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
             {/* Send button - wrapped in Popover when research session is complete/in-progress.
                 Exception: isResponseMode always shows the normal send button so users can
                 submit HITL responses (approve/reject) even during active research. */}
+            <Button
+              kind="secondary"
+              size="small"
+              onClick={handleQueueResearch}
+              disabled={!message.trim() || isDisabledByAuth || isResponseMode}
+              aria-label="Queue research task"
+              title="Add this query to the batch queue"
+            >
+              <Clock className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Queue</span>
+            </Button>
+
             {isResearchSessionComplete && !isResponseMode ? (
               <Popover
                 side="top"
@@ -666,6 +754,12 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
             )}
           </Flex>
         </Flex>
+
+        {queuedResearchCount > 0 && (
+          <div className="mt-3">
+            <BatchResearchQueue compact />
+          </div>
+        )}
       </Flex>
     </Flex>
   )

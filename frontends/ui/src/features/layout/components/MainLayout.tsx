@@ -28,7 +28,7 @@ import { ResearchPanel } from './ResearchPanel'
 import { DataSourcesPanel } from './DataSourcesPanel'
 import { SettingsPanel } from './SettingsPanel'
 import { DocsPanel } from './DocsPanel'
-import { useChatStore, useDeepResearch, NoSourcesBanner } from '@/features/chat'
+import { useChatStore, useDeepResearch, useBatchResearchQueue, NoSourcesBanner } from '@/features/chat'
 import { hasActiveDeepResearchJob } from '@/features/chat/lib/session-activity'
 import { deleteAllConversationSnapshots, deleteConversationSnapshot } from '@/adapters/api'
 import { useLayoutStore } from '../store'
@@ -109,6 +109,8 @@ export const MainLayout: FC<MainLayoutProps> = ({
 
   // Deep research SSE hook - manages connection when deep research starts
   useDeepResearch()
+  // Batch research queue runner - submits approved queue items one by one
+  useBatchResearchQueue()
 
   // Sync session state with URL query parameters
   const { updateSessionUrl, clearSessionUrl } = useSessionUrl({ isAuthenticated })

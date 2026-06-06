@@ -10,6 +10,7 @@ import { InputArea } from './InputArea'
 const mockSendMessage = vi.fn()
 const mockRespondToInteraction = vi.fn()
 const mockCancelDeepResearchJob = vi.fn()
+const mockEnqueueBatchResearchItem = vi.fn(() => 'batch-1')
 
 let mockIsDeepResearchStreaming = false
 let mockDeepResearchStatus: string | null = null
@@ -40,6 +41,8 @@ vi.mock('@/features/chat', () => ({
       deepResearchJobId: 'job-123',
       isDeepResearchStreaming: mockIsDeepResearchStreaming,
       deepResearchOwnerConversationId: mockDeepResearchOwnerConversationId,
+      batchResearchQueue: [],
+      enqueueBatchResearchItem: mockEnqueueBatchResearchItem,
     }
     return selector(state)
   }),
@@ -54,6 +57,7 @@ vi.mock('@/features/chat', () => ({
 const mockOpenRightPanel = vi.fn()
 const mockSetDataSourcePanelTab = vi.fn()
 const mockSetResearchDepth = vi.fn()
+const mockSetResearchPanelTab = vi.fn()
 
 vi.mock('../store', () => ({
   useLayoutStore: Object.assign(
@@ -64,11 +68,14 @@ vi.mock('../store', () => ({
         closeRightPanel: vi.fn(),
         setDataSourcesPanelTab: mockSetDataSourcePanelTab,
         setDataSourcePanelTab: mockSetDataSourcePanelTab,
+        setResearchPanelTab: mockSetResearchPanelTab,
         enabledDataSourceIds: ['source-1', 'source-2'],
         knowledgeLayerAvailable: true,
         availableDataSources: [{ id: 'source-1' }, { id: 'source-2' }],
         researchDepth: 'deeper',
+        researchEngine: 'aiq',
         setResearchDepth: mockSetResearchDepth,
+        setResearchEngine: vi.fn(),
       }
       return typeof selector === 'function' ? selector(state) : state
     }),
@@ -79,11 +86,14 @@ vi.mock('../store', () => ({
         closeRightPanel: vi.fn(),
         setDataSourcesPanelTab: mockSetDataSourcePanelTab,
         setDataSourcePanelTab: mockSetDataSourcePanelTab,
+        setResearchPanelTab: mockSetResearchPanelTab,
         enabledDataSourceIds: ['source-1', 'source-2'],
         knowledgeLayerAvailable: true,
         availableDataSources: [{ id: 'source-1' }, { id: 'source-2' }],
         researchDepth: 'deeper',
+        researchEngine: 'aiq',
         setResearchDepth: mockSetResearchDepth,
+        setResearchEngine: vi.fn(),
       })),
     }
   ),
@@ -138,6 +148,8 @@ describe('InputArea', () => {
     mockDeepResearchStatus = null
     mockDeepResearchOwnerConversationId = null
     mockConversationMessages = []
+    mockEnqueueBatchResearchItem.mockClear()
+    mockSetResearchPanelTab.mockClear()
     // Reset mocks to defaults - clearAllMocks doesn't reset mockReturnValue
     vi.mocked(useIsCurrentSessionBusy).mockReturnValue(false)
     vi.mocked(useChat).mockReturnValue({
@@ -221,6 +233,12 @@ describe('InputArea', () => {
     expect(screen.getByRole('button', { name: /send message/i })).toBeDisabled()
   })
 
+  test('renders queue button', () => {
+    render(<InputArea isAuthenticated={true} />)
+
+    expect(screen.getByRole('button', { name: /queue research task/i })).toBeInTheDocument()
+  })
+
   test('enables send button when message is typed', async () => {
     const user = userEvent.setup()
     render(<InputArea isAuthenticated={true} />)
@@ -240,6 +258,18 @@ describe('InputArea', () => {
     await user.click(screen.getByRole('button', { name: /send message/i }))
 
     expect(mockSendMessage).toHaveBeenCalledWith('Hello world')
+  })
+
+  test('queues a research task when queue button is clicked', async () => {
+    const user = userEvent.setup()
+    render(<InputArea isAuthenticated={true} connectionMode="sse" />)
+
+    const input = screen.getByRole('textbox')
+    await user.type(input, 'Queue this research')
+    await user.click(screen.getByRole('button', { name: /queue research task/i }))
+
+    expect(mockEnqueueBatchResearchItem).toHaveBeenCalled()
+    expect(mockOpenRightPanel).toHaveBeenCalledWith('research')
   })
 
   test('clears input after sending message', async () => {

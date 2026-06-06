@@ -88,6 +88,16 @@ export interface DeepResearchJobReportResponse {
   cited_urls?: string[] | null
 }
 
+/** Async job submission payload for deep research. */
+export interface DeepResearchJobSubmitRequest {
+  agent_type: string
+  input: string
+  data_sources?: string[] | null
+  research_depth?: 'shallow' | 'medium' | 'deeper' | 'deep'
+  job_id?: string | null
+  expiry_seconds?: number | null
+}
+
 /** SSE event types from the deep research stream */
 export type DeepResearchEventType =
   | 'stream.start'
@@ -839,6 +849,26 @@ export const listJobs = async (
 
   if (!response.ok) {
     throw new Error(`Failed to list jobs: ${response.status}`)
+  }
+
+  return response.json()
+}
+
+/** Submit a deep research job through the same-origin proxy. */
+export const submitDeepResearchJob = async (
+  payload: DeepResearchJobSubmitRequest
+): Promise<DeepResearchJobStatusResponse> => {
+  const response = await fetch('/api/jobs/async/submit', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '')
+    throw new Error(`Failed to submit deep research job: ${response.status}${errorText ? ` ${errorText}` : ''}`)
   }
 
   return response.json()

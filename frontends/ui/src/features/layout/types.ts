@@ -22,7 +22,7 @@ export type ResearchEngine = 'aiq' | 'claude_code'
 export type RightPanelType = 'research' | 'data-sources' | 'settings' | 'docs' | null
 
 /** Tabs within the Research panel */
-export type ResearchPanelTab = 'plan' | 'tasks' | 'thinking' | 'citations' | 'report'
+export type ResearchPanelTab = 'plan' | 'batch' | 'tasks' | 'thinking' | 'citations' | 'report'
 
 /** Tabs within the DataSources panel */
 export type DataSourcesPanelTab = 'connections' | 'files'

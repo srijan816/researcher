@@ -14,6 +14,7 @@ export {
   SessionsPanel,
   ChatArea,
   InputArea,
+  BatchResearchQueue,
   SettingsPanel,
 } from './components'
 

@@ -52,6 +52,7 @@ vi.mock('@/features/chat', () => ({
       deepResearchAgents: [],
       deepResearchToolCalls: [],
       deepResearchFiles: [],
+      batchResearchQueue: [],
     }),
   useLoadJobData: () => ({
     importStreamOnly: mockImportJobStream,
@@ -124,6 +125,7 @@ describe('ResearchPanel', () => {
       render(<ResearchPanel isAuthenticated={true} />)
 
       expect(screen.getByText('Plan')).toBeInTheDocument()
+      expect(screen.getByText('Batch')).toBeInTheDocument()
       expect(screen.getByText('Tasks')).toBeInTheDocument()
       expect(screen.getByText('Thinking')).toBeInTheDocument()
       expect(screen.getByText('Citations')).toBeInTheDocument()
@@ -138,6 +140,9 @@ describe('ResearchPanel', () => {
       await user.click(screen.getByText('Plan'))
       expect(mockSetResearchPanelTab).toHaveBeenCalledWith('plan')
 
+      await user.click(screen.getByText('Batch'))
+      expect(mockSetResearchPanelTab).toHaveBeenCalledWith('batch')
+
       await user.click(screen.getByText('Thinking'))
       expect(mockSetResearchPanelTab).toHaveBeenCalledWith('thinking')
 
@@ -146,11 +151,15 @@ describe('ResearchPanel', () => {
     })
 
     test('displays correct tab content based on researchPanelTab', () => {
-      const tabs = ['tasks', 'plan', 'thinking', 'citations', 'report'] as const
+      const tabs = ['tasks', 'plan', 'batch', 'thinking', 'citations', 'report'] as const
       for (const tab of tabs) {
         mockResearchPanelTab = tab
         const { unmount } = render(<ResearchPanel isAuthenticated={true} />)
-        expect(screen.getByTestId(`${tab}-tab`)).toBeInTheDocument()
+        if (tab === 'batch') {
+          expect(screen.getByText('No queued tasks yet')).toBeInTheDocument()
+        } else {
+          expect(screen.getByTestId(`${tab}-tab`)).toBeInTheDocument()
+        }
         unmount()
       }
     })
@@ -251,6 +260,7 @@ describe('ResearchPanel', () => {
       render(<ResearchPanel isAuthenticated={true} />)
 
       expect(screen.getByText('Plan')).toBeInTheDocument()
+      expect(screen.getByText('Batch')).toBeInTheDocument()
       expect(screen.getByText('Tasks')).toBeInTheDocument()
       expect(screen.getByText('Thinking')).toBeInTheDocument()
       expect(screen.getByText('Citations')).toBeInTheDocument()

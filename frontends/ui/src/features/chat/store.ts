@@ -11,6 +11,7 @@
 import { create } from 'zustand'
 import { devtools, persist, createJSONStorage, type StorageValue, type PersistStorage } from 'zustand/middleware'
 import { v4 as uuidv4 } from 'uuid'
+import type { ResearchDepth } from '@/features/layout/types'
 import type {
   ChatStore,
   ChatState,
@@ -32,6 +33,7 @@ import type {
   DeepResearchFile,
   DeepResearchActivity,
   DeepResearchBannerType,
+  BatchResearchItem,
   ResearchEngine,
   ResearchHistoryJob,
 } from './types'
@@ -106,6 +108,7 @@ type PersistedChatState = {
   conversations: ChatState['conversations']
   currentConversation: ChatState['currentConversation']
   pendingInteraction: ChatState['pendingInteraction']
+  batchResearchQueue: ChatState['batchResearchQueue']
 }
 
 type PersistedChatStorageValue = StorageValue<PersistedChatState>
@@ -130,6 +133,7 @@ const prunePersistedChatState = (value: PersistedChatStorageValue): PersistedCha
       conversations,
       currentConversation: currentConversationId as unknown as Conversation | null,
       pendingInteraction: state.pendingInteraction ?? null,
+      batchResearchQueue: state.batchResearchQueue ?? [],
     },
   }
 }
@@ -187,6 +191,7 @@ const createResilientStorage = (): PersistStorage<PersistedChatState> | undefine
               conversations: [],
               currentConversation: null,
               pendingInteraction: null,
+              batchResearchQueue: [],
             },
           })
 
@@ -239,8 +244,49 @@ const initialState: ChatState = {
   deepResearchFiles: [],
   deepResearchStreamLoaded: false,
   deepResearchActivity: null,
+  batchResearchQueue: [],
   // State for PlanTab
   planMessages: [],
+}
+
+const DEFAULT_BATCH_APPROVAL_DELAY_MS = 90_000
+
+const createBatchTitle = (query: string): string => {
+  const trimmed = query.trim()
+  if (trimmed.length <= 64) return trimmed || 'Queued research'
+  return `${trimmed.slice(0, 61).trimEnd()}...`
+}
+
+const createBatchQueueItem = (item: {
+  conversationId: string
+  query: string
+  researchDepth: ResearchDepth
+  researchEngine: ResearchEngine
+  enabledDataSources: string[]
+  messageFiles: Array<{ id: string; fileName: string }>
+  title?: string
+  autoApproveAfterMs?: number
+}): BatchResearchItem => {
+  const now = new Date()
+  const autoApproveAt =
+    item.autoApproveAfterMs && item.autoApproveAfterMs > 0
+      ? new Date(now.getTime() + item.autoApproveAfterMs).toISOString()
+      : new Date(now.getTime() + DEFAULT_BATCH_APPROVAL_DELAY_MS).toISOString()
+
+  return {
+    id: `batch_${uuidv4().replace(/-/g, '_')}`,
+    conversationId: item.conversationId,
+    query: item.query.trim(),
+    researchDepth: item.researchDepth,
+    researchEngine: item.researchEngine,
+    enabledDataSources: [...item.enabledDataSources],
+    messageFiles: [...item.messageFiles],
+    title: item.title || createBatchTitle(item.query),
+    status: 'pending',
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    autoApproveAt,
+  }
 }
 
 /**
@@ -507,11 +553,12 @@ export const useChatStore = create<ChatStore>()(
                 deepResearchTodos: [],
                 deepResearchLLMSteps: [],
                 deepResearchAgents: [],
-                deepResearchToolCalls: [],
-                deepResearchFiles: [],
-                deepResearchStreamLoaded: false,
-                // Clear deep research job state
-                deepResearchJobId: null,
+              deepResearchToolCalls: [],
+              deepResearchFiles: [],
+              deepResearchStreamLoaded: false,
+              batchResearchQueue: [],
+              // Clear deep research job state
+              deepResearchJobId: null,
                 deepResearchLastEventId: null,
                 isDeepResearchStreaming: false,
                 deepResearchStatus: null,
@@ -949,6 +996,9 @@ export const useChatStore = create<ChatStore>()(
           set(
             {
               conversations: updatedConversations,
+              batchResearchQueue: get().batchResearchQueue.filter(
+                (item) => item.conversationId !== conversationId
+              ),
               currentConversation:
                 currentConversation?.id === conversationId ? null : currentConversation,
               // Clear deep research state if deleting current conversation with active job
@@ -995,6 +1045,10 @@ export const useChatStore = create<ChatStore>()(
           set(
             {
               conversations: remainingConversations,
+              batchResearchQueue: get().batchResearchQueue.filter(
+                (item) =>
+                  !conversationsToDelete.some((conversation) => conversation.id === item.conversationId)
+              ),
               currentConversation: shouldClearCurrent ? null : currentConversation,
               // Clear all deep research state
               deepResearchJobId: null,
@@ -1044,6 +1098,9 @@ export const useChatStore = create<ChatStore>()(
             set(
               {
                 conversations: remaining,
+                batchResearchQueue: get().batchResearchQueue.filter(
+                  (item) => !deletedSet.has(item.conversationId)
+                ),
                 currentConversation: null,
                 thinkingSteps: [],
                 activeThinkingStepId: null,
@@ -1070,7 +1127,16 @@ export const useChatStore = create<ChatStore>()(
               'pruneExpiredSessions:currentWasDeleted'
             )
           } else {
-            set({ conversations: remaining }, false, 'pruneExpiredSessions')
+            set(
+              {
+                conversations: remaining,
+                batchResearchQueue: get().batchResearchQueue.filter(
+                  (item) => !deletedSet.has(item.conversationId)
+                ),
+              },
+              false,
+              'pruneExpiredSessions'
+            )
           }
 
           return deletedIds
@@ -2283,6 +2349,125 @@ export const useChatStore = create<ChatStore>()(
           )
         },
 
+        enqueueBatchResearchItem: (item) => {
+          const queueItem = createBatchQueueItem(item)
+          set(
+            (state) => ({
+              batchResearchQueue: [...state.batchResearchQueue, queueItem],
+            }),
+            false,
+            'enqueueBatchResearchItem'
+          )
+          return queueItem.id
+        },
+
+        updateBatchResearchItem: (itemId, patch) => {
+          set(
+            (state) => ({
+              batchResearchQueue: state.batchResearchQueue.map((item) =>
+                item.id === itemId
+                  ? {
+                      ...item,
+                      ...patch,
+                      updatedAt: new Date().toISOString(),
+                    }
+                  : item
+              ),
+            }),
+            false,
+            'updateBatchResearchItem'
+          )
+        },
+
+        approveBatchResearchItem: (itemId) => {
+          const now = new Date().toISOString()
+          set(
+            (state) => ({
+              batchResearchQueue: state.batchResearchQueue.map((item) =>
+                item.id === itemId
+                  ? {
+                      ...item,
+                      status: 'approved',
+                      approvedAt: item.approvedAt || now,
+                      updatedAt: now,
+                    }
+                  : item
+              ),
+            }),
+            false,
+            'approveBatchResearchItem'
+          )
+        },
+
+        markBatchResearchItemRunning: (itemId, jobId, messageId) => {
+          const now = new Date().toISOString()
+          set(
+            (state) => ({
+              batchResearchQueue: state.batchResearchQueue.map((item) =>
+                item.id === itemId
+                  ? {
+                      ...item,
+                      status: 'running',
+                      jobId,
+                      messageId,
+                      startedAt: item.startedAt || now,
+                      updatedAt: now,
+                    }
+                  : item
+              ),
+            }),
+            false,
+            'markBatchResearchItemRunning'
+          )
+        },
+
+        markBatchResearchItemComplete: (itemId, status, error) => {
+          const now = new Date().toISOString()
+          set(
+            (state) => ({
+              batchResearchQueue: state.batchResearchQueue.map((item) =>
+                item.id === itemId
+                  ? {
+                      ...item,
+                      status,
+                      error,
+                      completedAt: now,
+                      updatedAt: now,
+                    }
+                  : item
+              ),
+            }),
+            false,
+            'markBatchResearchItemComplete'
+          )
+        },
+
+        removeBatchResearchItem: (itemId) => {
+          set(
+            (state) => ({
+              batchResearchQueue: state.batchResearchQueue.filter((item) => item.id !== itemId),
+            }),
+            false,
+            'removeBatchResearchItem'
+          )
+        },
+
+        clearBatchResearchQueueForConversation: (conversationId) => {
+          set(
+            (state) => ({
+              batchResearchQueue: state.batchResearchQueue.filter(
+                (item) => item.conversationId !== conversationId
+              ),
+            }),
+            false,
+            'clearBatchResearchQueueForConversation'
+          )
+        },
+
+        clearBatchResearchQueue: () => {
+          set({ batchResearchQueue: [] }, false, 'clearBatchResearchQueue')
+        },
+
         setDeepResearchLastEventId: (eventId: string | null) => {
           set({ deepResearchLastEventId: eventId }, false, 'setDeepResearchLastEventId')
         },
@@ -3002,6 +3187,7 @@ export const useChatStore = create<ChatStore>()(
           currentConversation: state.currentConversation,
           // Persist pending HITL interaction for page refresh recovery
           pendingInteraction: state.pendingInteraction,
+          batchResearchQueue: state.batchResearchQueue,
         }),
         // After rehydration, prune sessions that exceed the backend job TTL
         // (24h). Microtask defers until the rehydrated state is committed so
