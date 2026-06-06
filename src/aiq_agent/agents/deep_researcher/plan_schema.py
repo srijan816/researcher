@@ -199,7 +199,37 @@ class PlanTargetClaim(BaseModel):
                 normalized["claim"] = text
                 return normalized
             return {"claim": text}
+        if isinstance(value, dict):
+            normalized = dict(value)
+            compact_parts: list[str] = []
+            for key, item in normalized.items():
+                if key in {"claim_id", "claim_type", "required_source_class"}:
+                    continue
+                item_text = _textish(item)
+                if item_text is None and isinstance(item, (str, int, float, bool)):
+                    item_text = str(item)
+                if item_text:
+                    compact_parts.append(item_text)
+            if compact_parts:
+                normalized["claim"] = _shorten_text(" ".join(compact_parts), 360)
+            else:
+                claim_id = str(normalized.get("claim_id") or "this claim").strip()
+                normalized["claim"] = f"Research and verify {claim_id}"
+            return normalized
+        if isinstance(value, list):
+            text = " ".join(str(item) for item in _as_list(value) if str(item).strip())
+            return {"claim": _shorten_text(text or "Research and verify this claim", 360)}
         return value
+
+    @field_validator("claim", mode="before")
+    @classmethod
+    def _claim_is_textish(cls, value: Any) -> str:
+        text = _textish(value)
+        if text is not None:
+            return text
+        if isinstance(value, list):
+            return " ".join(str(item) for item in _as_list(value) if str(item).strip())
+        return str(value)
 
     @field_validator("claim")
     @classmethod
@@ -445,7 +475,11 @@ class WritePlanInput(BaseModel):
     report_title: str
     report_toc: list[PlanTocItem]
     queries: list[PlanQuery]
-    constraints: list[PlanConstraint | str]
+    constraints: list[PlanConstraint | str] = Field(
+        default_factory=lambda: [
+            "Satisfy the user request with source-backed evidence and clearly note uncertainty or gaps."
+        ]
+    )
     output_style: PlanOutputStyle | dict[str, Any] | None = None
     task_analysis: PlanTaskAnalysis | dict[str, Any] | None = None
     fact_ledger_targets: dict[str, Any] | list[dict[str, Any]] | None = None

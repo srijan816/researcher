@@ -261,6 +261,43 @@ def test_plan_json_from_tool_args_coerces_numeric_strings_and_mode_aliases():
     assert plan["queries"][1]["search_budget"] == 6
 
 
+def test_plan_json_from_tool_args_salvages_malformed_target_claim_items():
+    plan_json = plan_json_from_tool_args(
+        report_title="Malformed Claim Plan",
+        report_toc=[{"title": "Evidence"}],
+        queries=[
+            {
+                "query": "research malformed claim evidence",
+                "target_sections": ["Evidence"],
+                "target_claims": [
+                    {
+                        "claim_id": "C1",
+                        "claim_type": "quantitative",
+                        "$text": "Verify the quantitative finding even when the provider emits text in $text.",
+                        "required_source_class": "academic",
+                    },
+                    {
+                        "claim_id": "C2",
+                        "claim_type": "discovery",
+                        "unexpected_extension": {"item": "Recover useful text from nested provider wrappers."},
+                    },
+                    {
+                        "claim_id": "C3",
+                        "claim_type": "discovery",
+                    },
+                ],
+            }
+        ],
+    )
+
+    plan = json.loads(plan_json)
+    assert PlanFileValidationMiddleware._validate_plan_payload(plan_json) == []
+    claims = plan["queries"][0]["target_claims"]
+    assert claims[0]["claim"] == "Verify the quantitative finding even when the provider emits text in $text."
+    assert claims[1]["claim"] == "Recover useful text from nested provider wrappers."
+    assert claims[2]["claim"] == "Research and verify C3"
+
+
 def test_plan_json_from_tool_args_accepts_prose_source_strategy_and_compacts_payload():
     long_text = " ".join(["detailed planner prose"] * 80)
     plan_json = plan_json_from_tool_args(
@@ -512,10 +549,24 @@ def test_plan_json_from_tool_args_accepts_minimax_text_wrappers():
 
 
 def test_write_plan_tool_schema_does_not_expose_runtime_argument():
-    schema_fields = create_write_plan_tool().args_schema.model_fields
+    args_schema = create_write_plan_tool().args_schema
+    schema_fields = args_schema.model_fields
 
     assert "runtime" not in schema_fields
     assert {"report_title", "report_toc", "queries", "constraints"}.issubset(schema_fields)
+    assert "constraints" not in args_schema.model_json_schema().get("required", [])
+
+
+def test_plan_json_from_tool_args_defaults_missing_constraints():
+    plan_json = plan_json_from_tool_args(
+        report_title="Plan Without Explicit Constraints",
+        report_toc=[{"title": "Main Section"}],
+        queries=[{"query": "source-backed evidence for the main section"}],
+    )
+
+    plan = json.loads(plan_json)
+    assert PlanFileValidationMiddleware._validate_plan_payload(plan_json) == []
+    assert plan["constraints"][0]["constraint"].startswith("Satisfy the user request")
 
 
 def test_plan_json_from_tool_args_rejects_missing_queries():

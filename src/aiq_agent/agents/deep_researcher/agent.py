@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
 from collections.abc import Sequence
 from datetime import UTC
 from datetime import datetime
@@ -3186,9 +3187,17 @@ class DeepResearcherAgent:
             for attempt in range(max_retries):
                 try:
                     attempt_started_at = perf_counter()
+                    invoke_config: dict[str, Any] = {
+                        "configurable": {
+                            "thread_id": self.job_id or f"deep-research-{uuid.uuid4()}",
+                            "checkpoint_ns": "deep_research",
+                        }
+                    }
+                    if self.callbacks:
+                        invoke_config["callbacks"] = self.callbacks
                     result = await agent.ainvoke(
                         state,
-                        config={"callbacks": self.callbacks} if self.callbacks else None,
+                        config=invoke_config,
                     )
                     logger.info(
                         "Deep Research timing: primary agent attempt %d completed in %.1fs",

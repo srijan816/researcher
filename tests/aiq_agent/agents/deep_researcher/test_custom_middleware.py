@@ -213,6 +213,44 @@ class TestToolArgumentNormalizationMiddleware:
         assert result.result[0].content[0]["input"]["queries"][0]["query"] == "AI use cases ROI 2026 analyst report"
 
     @pytest.mark.asyncio
+    async def test_defaults_missing_write_plan_constraints(self, middleware):
+        ai_msg = AIMessage(
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "tc1",
+                    "name": "write_plan",
+                    "input": {
+                        "report_title": "High-Leverage Debate Content",
+                        "report_toc": [{"title": "Evidence Base"}],
+                        "queries": [{"query": "secondary debate pedagogy evidence content blocks"}],
+                    },
+                }
+            ],
+            tool_calls=[
+                {
+                    "name": "write_plan",
+                    "args": {
+                        "report_title": "High-Leverage Debate Content",
+                        "report_toc": [{"title": "Evidence Base"}],
+                        "queries": [{"query": "secondary debate pedagogy evidence content blocks"}],
+                    },
+                    "id": "tc1",
+                }
+            ],
+        )
+        handler = AsyncMock(return_value=ModelResponse(result=[ai_msg]))
+        request = MagicMock()
+
+        result = await middleware.awrap_model_call(request, handler)
+
+        args = result.result[0].tool_calls[0]["args"]
+        assert args["constraints"] == [
+            "Satisfy the user request with source-backed evidence and clearly note uncertainty or gaps."
+        ]
+        assert result.result[0].content[0]["input"]["constraints"] == args["constraints"]
+
+    @pytest.mark.asyncio
     async def test_flattens_nested_write_plan_list_wrappers(self, middleware):
         ai_msg = AIMessage(
             content=[

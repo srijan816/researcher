@@ -29,24 +29,25 @@ def plan_json_from_tool_args(
     report_title: str,
     report_toc: list[PlanTocItem | dict[str, Any]],
     queries: list[PlanQuery | dict[str, Any]],
-    constraints: list[PlanConstraint | str | dict[str, Any]],
+    constraints: list[PlanConstraint | str | dict[str, Any]] | None = None,
     output_style: PlanOutputStyle | dict[str, Any] | None = None,
     task_analysis: PlanTaskAnalysis | dict[str, Any] | None = None,
     fact_ledger_targets: dict[str, list[dict[str, Any]]] | None = None,
 ) -> str:
     """Build canonical plan JSON from typed tool arguments."""
 
-    input_data = WritePlanInput.model_validate(
-        {
-            "report_title": report_title,
-            "report_toc": report_toc,
-            "queries": queries,
-            "constraints": constraints,
-            "output_style": output_style,
-            "task_analysis": task_analysis,
-            "fact_ledger_targets": fact_ledger_targets,
-        }
-    )
+    payload: dict[str, Any] = {
+        "report_title": report_title,
+        "report_toc": report_toc,
+        "queries": queries,
+        "output_style": output_style,
+        "task_analysis": task_analysis,
+        "fact_ledger_targets": fact_ledger_targets,
+    }
+    if constraints is not None:
+        payload["constraints"] = constraints
+
+    input_data = WritePlanInput.model_validate(payload)
     return json.dumps(build_plan_payload(input_data), indent=2, ensure_ascii=False)
 
 
@@ -74,7 +75,10 @@ def create_write_plan_tool() -> BaseTool:
         report_title: Annotated[str, "Concise report title."],
         report_toc: Annotated[list[dict[str, Any]], "Final report sections. Each item needs a title."],
         queries: Annotated[list[dict[str, Any]], "Self-contained researcher assignments."],
-        constraints: Annotated[list[dict[str, Any] | str], "Acceptance criteria for the final report."],
+        constraints: Annotated[
+            list[dict[str, Any] | str] | None,
+            "Acceptance criteria for the final report. If omitted, the runtime will add a source-backed default.",
+        ] = None,
         output_style: Annotated[dict[str, Any] | None, "Optional final report style hints."] = None,
         task_analysis: Annotated[dict[str, Any] | None, "Optional compact task analysis."] = None,
         fact_ledger_targets: Annotated[
@@ -106,7 +110,10 @@ def create_write_plan_tool() -> BaseTool:
         report_title: Annotated[str, "Concise report title."],
         report_toc: Annotated[list[dict[str, Any]], "Final report sections. Each item needs a title."],
         queries: Annotated[list[dict[str, Any]], "Self-contained researcher assignments."],
-        constraints: Annotated[list[dict[str, Any] | str], "Acceptance criteria for the final report."],
+        constraints: Annotated[
+            list[dict[str, Any] | str] | None,
+            "Acceptance criteria for the final report. If omitted, the runtime will add a source-backed default.",
+        ] = None,
         output_style: Annotated[dict[str, Any] | None, "Optional final report style hints."] = None,
         task_analysis: Annotated[dict[str, Any] | None, "Optional compact task analysis."] = None,
         fact_ledger_targets: Annotated[

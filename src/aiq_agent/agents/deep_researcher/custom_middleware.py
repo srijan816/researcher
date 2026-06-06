@@ -665,6 +665,10 @@ class ToolArgumentNormalizationMiddleware(AgentMiddleware):
             normalized["queries"] = [cls._normalize_plan_query(item) for item in cls._as_list(normalized["queries"])]
         if "constraints" in normalized and not isinstance(normalized["constraints"], list):
             normalized["constraints"] = cls._as_list(normalized["constraints"])
+        if not normalized.get("constraints"):
+            normalized["constraints"] = [
+                "Satisfy the user request with source-backed evidence and clearly note uncertainty or gaps."
+            ]
         if "output_style" in normalized and isinstance(normalized["output_style"], dict):
             output_style = dict(normalized["output_style"])
             while isinstance(output_style, dict) and set(output_style) == {"item"}:
