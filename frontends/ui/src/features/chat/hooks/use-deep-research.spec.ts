@@ -831,6 +831,32 @@ describe('useDeepResearch', () => {
       expect(mockSetCurrentStatus).not.toHaveBeenCalledWith('writing')
     })
 
+    test('onFileUpdate surfaces Claude Code artifacts as chat thinking actions', async () => {
+      await setupConnectedHook()
+
+      act(() => {
+        mockClient?.callbacks.onFileUpdate?.(
+          '/claude_research/job-1/logs/progress.md',
+          '# Claude Research Progress\n\n- Planning started.',
+          '2026-06-06T18:38:38.000Z'
+        )
+      })
+
+      expect(mockAddThinkingStep).toHaveBeenCalledWith({
+        category: 'agents',
+        functionName: 'claude_artifact:/claude_research/job-1/logs/progress.md:2026-06-06T18:38:38.000Z',
+        displayName: 'Claude Code updated progress.md',
+        content: expect.stringContaining('Planning started.'),
+        isComplete: false,
+      })
+      expect(mockCompleteThinkingStep).toHaveBeenCalledWith('step-1')
+      expect(mockSetDeepResearchActivity).toHaveBeenCalledWith({
+        kind: 'file',
+        message: 'Claude Code updated progress.md',
+        detail: '/claude_research/job-1/logs/progress.md',
+      })
+    })
+
     test('onOutputUpdate sets report content', async () => {
       await setupConnectedHook()
 

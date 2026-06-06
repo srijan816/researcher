@@ -63,11 +63,25 @@ const isRecoverableInterruptedStatus = (
 const TRANSPORT_RECONNECT_DELAY_MS = 3000
 const TRANSPORT_RECONNECT_MAX_DELAY_MS = 30000
 const AUTO_RESUME_MAX_ATTEMPTS = 2
+const CLAUDE_ARTIFACT_PREVIEW_CHARS = 1600
 
 const parseEventDate = (timestamp?: string): Date => {
   if (!timestamp) return new Date()
   const parsed = new Date(timestamp)
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed
+}
+
+const isClaudeResearchFile = (filename: string): boolean => filename.startsWith('/claude_research/')
+
+const basename = (path: string): string => path.split('/').filter(Boolean).pop() || path
+
+const buildClaudeArtifactPreview = (filename: string, content: string): string => {
+  const trimmed = content.trim()
+  const preview =
+    trimmed.length > CLAUDE_ARTIFACT_PREVIEW_CHARS
+      ? `${trimmed.slice(0, CLAUDE_ARTIFACT_PREVIEW_CHARS).trimEnd()}\n\n[Preview truncated. Open Files for the full artifact.]`
+      : trimmed
+  return `File: ${filename}\n\n${preview || '[empty file]'}`
 }
 
 type ActiveToolIds = {
@@ -728,15 +742,32 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               content,
               ...(timestamp ? { timestamp: parseEventDate(timestamp) } : {}),
             })
+            if (isClaudeResearchFile(filename)) {
+              const hasUserMsg = Boolean(useChatStore.getState().currentUserMessageId)
+              if (hasUserMsg) {
+                const stepId = addThinkingStep({
+                  category: 'agents',
+                  functionName: `claude_artifact:${filename}:${timestamp || Date.now()}`,
+                  displayName: `Claude Code updated ${basename(filename)}`,
+                  content: buildClaudeArtifactPreview(filename, content),
+                  isComplete: false,
+                })
+                if (stepId) completeThinkingStep(stepId)
+              }
+            }
             setDeepResearchActivity({
-              kind: filename.endsWith('report.md') ? 'report' : 'file',
-              message: filename.endsWith('report.md') ? 'Rendering report draft' : 'Saved research file',
+              kind: filename.endsWith('report.md') || filename.endsWith('final.md') ? 'report' : 'file',
+              message: isClaudeResearchFile(filename)
+                ? `Claude Code updated ${basename(filename)}`
+                : filename.endsWith('report.md')
+                  ? 'Rendering report draft'
+                  : 'Saved research file',
               detail: filename,
             })
             // report.md artifact arrives 1-2 min before the final_report output event —
             // render it immediately so the final report panel never stays blank
             // if the terminal assistant message is only a short status line.
-            if (filename.endsWith('report.md')) {
+            if (filename.endsWith('report.md') || filename.endsWith('final.md')) {
               setReportContent(content, 'final_report')
               setCurrentStatus('writing')
             }

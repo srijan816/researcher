@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import re
 import sys
@@ -32,11 +33,74 @@ RUN_ARTIFACTS = (
     "plan.md",
     "queries.json",
     "sources.json",
+    "logs/progress.md",
     "contradictions.md",
     "gaps.md",
     "research.md",
     "final.md",
 )
+
+DEPTH_PROFILES = {
+    "shallow": {
+        "modules": "2-4",
+        "searches": "4-8",
+        "sources": "6-12 candidate sources",
+        "reads": "4-8 source summaries",
+        "notes": "concise answer with explicit gaps",
+        "min_modules": 2,
+        "min_sources": 4,
+        "min_summaries": 2,
+        "min_research_chars": 1000,
+        "min_final_chars": 1200,
+    },
+    "medium": {
+        "modules": "4-6",
+        "searches": "8-14",
+        "sources": "16-28 candidate sources",
+        "reads": "10-16 source summaries",
+        "notes": "balanced research compile with source table and gap check",
+        "min_modules": 4,
+        "min_sources": 8,
+        "min_summaries": 4,
+        "min_research_chars": 2000,
+        "min_final_chars": 2500,
+    },
+    "deeper": {
+        "modules": "5-7",
+        "searches": "18-32",
+        "sources": "35-70 candidate sources",
+        "reads": "20-35 source summaries",
+        "notes": "module-by-module evidence, contradictions, gap-fill pass, and calibrated final report",
+        "min_modules": 5,
+        "min_sources": 18,
+        "min_summaries": 8,
+        "min_research_chars": 4000,
+        "min_final_chars": 5000,
+    },
+    "deep": {
+        "modules": "7-10",
+        "searches": "35-60",
+        "sources": "70-140 candidate sources",
+        "reads": "40-70 source summaries",
+        "notes": "exhaustive evidence dossier, counterevidence, contradiction table, and validation pass",
+        "min_modules": 7,
+        "min_sources": 35,
+        "min_summaries": 15,
+        "min_research_chars": 7000,
+        "min_final_chars": 9000,
+    },
+}
+
+PLACEHOLDER_CONTENT = {
+    "README.md": "# Claude Research Run",
+    "plan.md": "# Research Plan",
+    "queries.json": '"modules": []',
+    "sources.json": '"sources": []',
+    "contradictions.md": "# Contradictions",
+    "gaps.md": "# Gaps",
+    "research.md": "# Research Compile",
+    "final.md": "# Final Report",
+}
 
 
 class ClaudeResearcherAgent:
@@ -62,6 +126,9 @@ class ClaudeResearcherAgent:
         ).expanduser()
         self.default_depth: ResearchDepthTier = getattr(config, "default_depth", DEFAULT_RESEARCH_DEPTH)
         self.timeout_seconds = int(getattr(config, "timeout_seconds", 3600))
+        self.artifact_watch_interval = float(
+            getattr(config, "artifact_watch_interval", os.environ.get("AIQ_CLAUDE_RESEARCH_WATCH_INTERVAL", "5"))
+        )
 
     async def run(self, state: ClaudeResearchAgentState) -> ClaudeResearchAgentState:
         """Execute Claude Code and return a state whose last message is the report."""
@@ -135,6 +202,7 @@ class ClaudeResearcherAgent:
                 "Claude research run-folder initialization failed: "
                 + init_stdout.decode("utf-8", errors="replace")[-2000:]
             )
+        self._write_initial_progress(run_dir=run_dir, depth=str(depth))
 
         permission_args = ["--permission-mode", os.environ.get("AIQ_CLAUDE_CODE_PERMISSION_MODE", "auto")]
         if re.fullmatch(r"(?i)(1|true|yes|on)", env.get("AIQ_CLAUDE_CODE_BYPASS_PERMISSIONS", "")):
@@ -148,6 +216,7 @@ class ClaudeResearcherAgent:
             guide=guide,
         )
 
+        self._emit_status("claude_research.launch", "Launching Claude Code subprocess")
         process = await asyncio.create_subprocess_exec(
             claude_bin,
             "--bare",
@@ -173,6 +242,8 @@ class ClaudeResearcherAgent:
             process.stdin.close()
 
         output_chunks: list[str] = []
+        stop_watcher = asyncio.Event()
+        watcher_task = asyncio.create_task(self._watch_run_artifacts(run_dir, stop_watcher))
         try:
             assert process.stdout is not None
             async with asyncio.timeout(self.timeout_seconds):
@@ -184,6 +255,9 @@ class ClaudeResearcherAgent:
                     output_chunks.append(text)
                     with log_file.open("a", encoding="utf-8") as fh:
                         fh.write(text)
+                    stripped = text.strip()
+                    if stripped:
+                        self._emit_status("claude_research.stdout", self._truncate_status(stripped))
                 return_code = await process.wait()
         except BaseException:
             if process.returncode is None:
@@ -193,16 +267,20 @@ class ClaudeResearcherAgent:
                 except TimeoutError:
                     process.kill()
             raise
+        finally:
+            stop_watcher.set()
+            try:
+                await asyncio.wait_for(watcher_task, timeout=3)
+            except TimeoutError:
+                watcher_task.cancel()
 
         if return_code != 0:
             tail = "".join(output_chunks)[-4000:]
             raise RuntimeError(f"Claude research failed with exit code {return_code}: {tail}")
 
-        final_path = run_dir / "final.md"
-        if not final_path.exists() or not final_path.read_text(encoding="utf-8").strip():
-            tail = "".join(output_chunks)[-4000:]
-            raise RuntimeError(f"Claude research completed without final.md. Output tail: {tail}")
+        self._validate_depth_artifacts(run_dir=run_dir, depth=str(depth), output_tail="".join(output_chunks)[-4000:])
 
+        final_path = run_dir / "final.md"
         return final_path.read_text(encoding="utf-8").strip()
 
     def _build_claude_prompt(
@@ -214,6 +292,7 @@ class ClaudeResearcherAgent:
         tool_script: Path,
         guide: Path,
     ) -> str:
+        depth_contract = self._depth_contract(str(depth))
         return f"""You are Claude Code running the concurrent Claude Research engine for this repository.
 
 Read and obey this operating guide:
@@ -225,6 +304,9 @@ Run folder:
 Research depth:
 {depth}
 
+Depth accountability contract:
+{depth_contract}
+
 User query:
 {query}
 
@@ -235,12 +317,21 @@ Required final artifacts:
 - {run_dir}/plan.md
 - {run_dir}/queries.json
 - {run_dir}/sources.json
+- {run_dir}/logs/progress.md
 - {run_dir}/contradictions.md
 - {run_dir}/gaps.md
 - {run_dir}/research.md
 - {run_dir}/final.md
 
+While working, update {run_dir}/logs/progress.md after each phase with short,
+user-visible progress notes. The app streams this file into the UI. Do not put
+hidden chain-of-thought there; write observable actions, sources considered,
+modules completed, gaps found, and next actions.
+
 Do not treat stdout as the deliverable. The app will inspect the files above.
+Your first file write after reading this prompt must be {run_dir}/logs/progress.md
+with one sentence saying that planning has started. Keep updating it during the
+run.
 When all required artifacts are complete, print exactly:
 CLAUDE_RESEARCH_COMPLETE {run_dir}
 """
@@ -256,6 +347,202 @@ CLAUDE_RESEARCH_COMPLETE {run_dir}
             virtual_path = f"/claude_research/{run_dir.name}/{filename}"
             self._emit_file(virtual_path, content)
 
+    async def _watch_run_artifacts(self, run_dir: Path, stop_event: asyncio.Event) -> None:
+        """Stream Claude's run-folder work into the normal artifact channel."""
+        seen: dict[Path, tuple[int, int]] = {}
+        for path in self._iter_watch_files(run_dir):
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+            seen[path] = (stat.st_size, stat.st_mtime_ns)
+
+        loop = asyncio.get_running_loop()
+        last_status_at = loop.time()
+        latest_artifact = "run folder initialized"
+        while not stop_event.is_set():
+            await asyncio.sleep(self.artifact_watch_interval)
+            changed = False
+            for path in self._iter_watch_files(run_dir):
+                try:
+                    stat = path.stat()
+                except FileNotFoundError:
+                    continue
+                fingerprint = (stat.st_size, stat.st_mtime_ns)
+                if seen.get(path) == fingerprint:
+                    continue
+                seen[path] = fingerprint
+                if stat.st_size == 0:
+                    continue
+                content = path.read_text(encoding="utf-8", errors="replace")
+                if not content.strip() or self._looks_like_placeholder(path, content):
+                    continue
+                relative = path.relative_to(run_dir)
+                latest_artifact = relative.as_posix()
+                changed = True
+                virtual_path = f"/claude_research/{run_dir.name}/{relative.as_posix()}"
+                self._emit_file(
+                    virtual_path,
+                    content,
+                    workflow_source="claude_research",
+                    agent_id="claude-code",
+                    in_progress=True,
+                )
+                self._emit_status(
+                    "claude_research.artifact",
+                    f"Claude updated {relative.as_posix()} ({len(content):,} chars)",
+                )
+            now = loop.time()
+            if changed:
+                last_status_at = now
+            elif now - last_status_at >= 30:
+                self._emit_status(
+                    "claude_research.progress",
+                    f"Claude Code is still running; latest observed artifact: {latest_artifact}",
+                )
+                last_status_at = now
+
+    def _write_initial_progress(self, *, run_dir: Path, depth: str) -> None:
+        progress_path = run_dir / "logs" / "progress.md"
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        content = (
+            "# Claude Research Progress\n\n"
+            f"- Backend initialized the run folder for `{depth}` research.\n"
+            "- Claude Code subprocess is being launched; waiting for planning artifacts.\n"
+        )
+        progress_path.write_text(content, encoding="utf-8")
+        self._emit_file(
+            f"/claude_research/{run_dir.name}/logs/progress.md",
+            content,
+            workflow_source="claude_research",
+            agent_id="claude-code",
+            in_progress=True,
+        )
+        self._emit_status("claude_research.progress", "Initialized Claude research progress tracking")
+
+    def _validate_depth_artifacts(self, *, run_dir: Path, depth: str, output_tail: str) -> None:
+        """Reject placeholder or materially under-depth Claude runs."""
+        profile = DEPTH_PROFILES.get(depth, DEPTH_PROFILES["deeper"])
+        failures: list[str] = []
+
+        required_files = ("plan.md", "queries.json", "sources.json", "research.md", "final.md")
+        for filename in required_files:
+            path = run_dir / filename
+            if not path.exists():
+                failures.append(f"{filename} is missing")
+                continue
+            content = path.read_text(encoding="utf-8", errors="replace").strip()
+            if not content or self._looks_like_placeholder(path, content):
+                failures.append(f"{filename} still contains only placeholder content")
+
+        gaps_path = run_dir / "gaps.md"
+        gaps_content = gaps_path.read_text(encoding="utf-8", errors="replace").strip() if gaps_path.exists() else ""
+        has_depth_exception = len(gaps_content) >= 200 and not self._looks_like_placeholder(
+            run_dir / "gaps.md",
+            gaps_content,
+        )
+
+        module_count = self._count_query_modules(run_dir / "queries.json")
+        source_count = self._count_sources(run_dir / "sources.json")
+        summaries_dir = run_dir / "source_summaries"
+        summary_count = len(list(summaries_dir.glob("*.md"))) if summaries_dir.exists() else 0
+        research_chars = self._non_placeholder_length(run_dir / "research.md")
+        final_chars = self._non_placeholder_length(run_dir / "final.md")
+
+        if module_count < int(profile["min_modules"]) and not has_depth_exception:
+            failures.append(
+                f"queries.json has {module_count} modules; expected at least {profile['min_modules']} for {depth}"
+            )
+        if source_count < int(profile["min_sources"]) and not has_depth_exception:
+            failures.append(
+                f"sources.json has {source_count} sources; expected at least {profile['min_sources']} for {depth}"
+            )
+        if summary_count < int(profile["min_summaries"]) and not has_depth_exception:
+            failures.append(
+                f"source_summaries has {summary_count} files; expected at least {profile['min_summaries']} for {depth}"
+            )
+        if research_chars < int(profile["min_research_chars"]) and not has_depth_exception:
+            failures.append(
+                f"research.md has {research_chars} substantive chars; expected at least {profile['min_research_chars']}"
+            )
+        if final_chars < int(profile["min_final_chars"]):
+            failures.append(
+                f"final.md has {final_chars} substantive chars; expected at least {profile['min_final_chars']}"
+            )
+
+        if failures:
+            summary = "\n".join(f"- {failure}" for failure in failures)
+            self._emit_status("claude_research.depth_failure", summary)
+            raise RuntimeError(
+                "Claude research did not satisfy the depth accountability contract:\n"
+                f"{summary}\n\nClaude output tail:\n{output_tail}"
+            )
+
+    @staticmethod
+    def _count_query_modules(path: Path) -> int:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return 0
+        modules = data.get("modules") if isinstance(data, dict) else None
+        if isinstance(modules, list):
+            return len(modules)
+        queries = data.get("queries") if isinstance(data, dict) else None
+        return len(queries) if isinstance(queries, list) else 0
+
+    @staticmethod
+    def _count_sources(path: Path) -> int:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return 0
+        sources = data.get("sources") if isinstance(data, dict) else None
+        return len(sources) if isinstance(sources, list) else 0
+
+    def _non_placeholder_length(self, path: Path) -> int:
+        if not path.exists():
+            return 0
+        content = path.read_text(encoding="utf-8", errors="replace").strip()
+        if self._looks_like_placeholder(path, content):
+            return 0
+        return len(content)
+
+    def _iter_watch_files(self, run_dir: Path) -> list[Path]:
+        paths = [run_dir / filename for filename in RUN_ARTIFACTS]
+        paths.extend(
+            [
+                run_dir / "logs" / "progress.md",
+                run_dir / "logs" / "search_failures.md",
+                run_dir / "logs" / "scrape_failures.md",
+                run_dir / "logs" / "claude-code.log",
+            ]
+        )
+        for folder in ("notes", "source_summaries"):
+            directory = run_dir / folder
+            if directory.exists():
+                paths.extend(sorted(path for path in directory.glob("*.md") if path.is_file()))
+        return paths
+
+    @staticmethod
+    def _looks_like_placeholder(path: Path, content: str) -> bool:
+        marker = PLACEHOLDER_CONTENT.get(path.name)
+        stripped = content.strip()
+        return bool(marker and stripped == marker) or stripped in {"{}", "[]"}
+
+    @staticmethod
+    def _depth_contract(depth: str) -> str:
+        profile = DEPTH_PROFILES.get(depth, DEPTH_PROFILES["deeper"])
+        return (
+            f"- Plan {profile['modules']} self-contained modules.\n"
+            f"- Run roughly {profile['searches']} targeted searches unless the user explicitly requested a tiny task.\n"
+            f"- Consider {profile['sources']} and scrape/read {profile['reads']}.\n"
+            f"- Expected rigor: {profile['notes']}.\n"
+            "- Every major module in queries.json must be represented in notes/ or research.md.\n"
+            "- High-risk numbers, rankings, claims about recency, or named entities need authoritative support.\n"
+            "- If you intentionally undershoot this depth because the query is narrow, sources are unavailable, "
+            "or the user imposed a smaller budget, explain that exception in gaps.md."
+        )
+
     def _emit_final_report(self, report: str) -> None:
         emitted = False
         for callback in self.callbacks:
@@ -266,7 +553,7 @@ CLAUDE_RESEARCH_COMPLETE {run_dir}
         if not emitted:
             self._emit_file("/report.md", report)
 
-    def _emit_file(self, path: str, content: str) -> None:
+    def _emit_file(self, path: str, content: str, **extra_data: Any) -> None:
         try:
             from aiq_api.jobs.callbacks import ArtifactType
         except Exception:
@@ -281,6 +568,7 @@ CLAUDE_RESEARCH_COMPLETE {run_dir}
                     file_path=path,
                     path=path,
                     filename=Path(path).name,
+                    **extra_data,
                 )
 
     def _emit_status(self, name: str, message: str) -> None:
@@ -302,6 +590,13 @@ CLAUDE_RESEARCH_COMPLETE {run_dir}
                         data=EventData(output=message),
                     )
                 )
+
+    @staticmethod
+    def _truncate_status(value: str, limit: int = 1200) -> str:
+        value = value.strip()
+        if len(value) <= limit:
+            return value
+        return value[:limit].rstrip() + "\n[...truncated...]"
 
     @staticmethod
     def _latest_user_text(state: ClaudeResearchAgentState) -> str:

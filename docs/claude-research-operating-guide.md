@@ -31,6 +31,39 @@ runs/<job-or-topic>/
 The app must not trust stdout as the result. Stdout is progress only. The app
 reads files from the run folder.
 
+During the run, update `logs/progress.md` after each phase with short,
+observable progress notes. Do not put hidden chain-of-thought there. Record what
+was done, which modules/sources changed state, what gaps remain, and what will
+happen next. The UI streams this file while Claude Code is still running.
+After receiving a run prompt, your first file write should be
+`logs/progress.md` with a one-sentence note that planning has started.
+
+## Depth Accountability
+
+Depth is a contract, not a label. Use the selected tier to size the plan, source
+collection, and verification effort. These are targets and floors for normal
+queries; if a query is genuinely narrow or the user explicitly requests a tiny
+run, explain the undershoot in `gaps.md`.
+
+| Tier | Modules | Target searches | Candidate sources | Sources read/summarized | Expected rigor |
+| --- | ---: | ---: | ---: | ---: | --- |
+| shallow | 2-4 | 4-8 | 6-12 | 4-8 | concise answer with explicit gaps |
+| medium | 4-6 | 8-14 | 16-28 | 10-16 | balanced research compile with source table and gap check |
+| deeper | 5-7 | 18-32 | 35-70 | 20-35 | module evidence, contradictions, gap-fill pass, calibrated final report |
+| deep | 7-10 | 35-60 | 70-140 | 40-70 | exhaustive dossier, counterevidence, contradiction table, validation pass |
+
+For all tiers:
+
+- every major module in `queries.json` must be represented in `notes/` or
+  `research.md`
+- high-risk numbers, rankings, recency claims, and named-entity facts need
+  authoritative support
+- source quality matters more than raw count; prefer official, academic,
+  primary-data, standards, regulator, analyst, and reputable-news sources over
+  generic blogs
+- use `gaps.md` to justify any missing module, weak source, or intentional
+  depth reduction
+
 ## What Claude Code Owns
 
 Claude Code owns:

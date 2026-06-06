@@ -197,6 +197,24 @@ describe('ChatThinking', () => {
       expect(screen.getByText('Tool Step')).toBeVisible()
     })
 
+    test('renders expandable Claude Code artifact previews', async () => {
+      const user = userEvent.setup()
+      const steps = [
+        createStep({
+          functionName: 'claude_artifact:/claude_research/job-1/logs/progress.md:123',
+          displayName: 'Claude Code updated progress.md',
+          content: 'File: /claude_research/job-1/logs/progress.md\n\n- Planning started.',
+        }),
+      ]
+
+      render(<ChatThinking steps={steps} />)
+
+      await user.click(screen.getByText(/Show thinking/))
+      await user.click(screen.getByText('View Artifact'))
+
+      expect(screen.getByText(/Planning started/)).toBeInTheDocument()
+    })
+
     test('step list has correct ARIA role', async () => {
       const user = userEvent.setup()
       const steps = [createStep()]

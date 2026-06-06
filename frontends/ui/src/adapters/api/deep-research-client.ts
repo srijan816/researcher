@@ -634,11 +634,11 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
             callbacks.onCitationUpdate?.(artifactData.url || '', coerceSSEText(artifactData.content), true, artifactTimestamp)
             break
           case 'file': {
-            // file artifacts are written during research — extract filename from path
+            // file artifacts are written during research. Preserve the virtual
+            // path so Claude Code run-folder files can be surfaced in chat.
             const raw = artifactData as Record<string, unknown>
             const filePath = (raw.file_path || raw.path || artifactData.url || 'unknown') as string
-            const fileName = filePath.split('/').pop() || filePath
-            callbacks.onFileUpdate?.(fileName, coerceSSEText(artifactData.content), artifactTimestamp)
+            callbacks.onFileUpdate?.(filePath, coerceSSEText(artifactData.content), artifactTimestamp)
             break
           }
           case 'output':

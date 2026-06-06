@@ -117,6 +117,12 @@ $RUN_DIR
 Research depth:
 $DEPTH
 
+Depth accountability:
+Follow the tier table in the operating guide for "$DEPTH". Treat it as the
+normal floor for modules, searches, candidate sources, source summaries, and
+gap closure. If the task is intentionally too narrow for that depth, explain the
+exception in $RUN_DIR/gaps.md.
+
 User query:
 $QUERY
 
@@ -127,10 +133,14 @@ Required final artifacts:
 - $RUN_DIR/plan.md
 - $RUN_DIR/queries.json
 - $RUN_DIR/sources.json
+- $RUN_DIR/logs/progress.md
 - $RUN_DIR/contradictions.md
 - $RUN_DIR/gaps.md
 - $RUN_DIR/research.md
 - $RUN_DIR/final.md
+
+While working, update $RUN_DIR/logs/progress.md after each phase with
+observable progress notes. Do not put hidden chain-of-thought there.
 
 Do not treat stdout as the deliverable. The app will inspect the files above.
 When all required artifacts are complete, print exactly:

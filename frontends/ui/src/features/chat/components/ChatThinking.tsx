@@ -148,6 +148,7 @@ export const ChatThinking: FC<ChatThinkingProps> = ({
                 : 'pl-8 border-l-2 border-base ml-1'
 
             const isTool = step.category === 'tools' || step.functionName.includes('search') || step.displayName.includes('Tool')
+            const isClaudeArtifact = step.functionName.startsWith('claude_artifact:')
             const inputQuery = isTool ? extractFunctionInput(step.rawPayload) : null
             const outputText = isTool ? extractFunctionOutput(step.rawPayload) : null
 
@@ -182,6 +183,18 @@ export const ChatThinking: FC<ChatThinkingProps> = ({
                     </summary>
                     <pre className="mt-2 p-2 bg-surface-raised rounded text-xs text-primary font-mono whitespace-pre-wrap max-h-48 overflow-y-auto border border-base">
                       {outputText}
+                    </pre>
+                  </details>
+                )}
+
+                {/* Claude Code artifact preview */}
+                {isClaudeArtifact && step.content.trim() && (
+                  <details className="mt-1 group">
+                    <summary className="text-xs text-brand cursor-pointer list-none flex items-center gap-1 select-none">
+                      <span className="text-[10px] group-open:rotate-90 transition-transform">▶</span> View Artifact
+                    </summary>
+                    <pre className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap rounded border border-base bg-surface-raised p-2 font-mono text-xs text-primary">
+                      {step.content}
                     </pre>
                   </details>
                 )}
