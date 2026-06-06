@@ -35,8 +35,14 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     tzdata \
     build-essential \
     curl \
+    file \
     git \
+    jq \
+    procps \
+    ripgrep \
     software-properties-common \
+    unzip \
+    wget \
     && add-apt-repository ppa:deadsnakes/ppa \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -90,8 +96,10 @@ RUN uv pip install --no-deps -e . \
 RUN /app/.venv/bin/python -c "import aiq_api; import knowledge_layer; import debate_transcript_search; print('✓ Base packages installed')"
 
 RUN chmod +x /app/deploy/start_web.py /app/scripts/claude_research_tool.py /app/scripts/run_claude_research.sh \
-    && mkdir -p /app/data \
-    && chown 1000:1000 /app/data
+    && (getent group 1000 >/dev/null || groupadd -g 1000 aiq) \
+    && (getent passwd 1000 >/dev/null || useradd -u 1000 -g 1000 -m -d /home/aiq -s /bin/bash aiq) \
+    && mkdir -p /app/data /app/runs/claude_research /home/aiq \
+    && chown -R 1000:1000 /app/data /app/runs /home/aiq
 
 # =============================================================================
 # Stage 2: Development (includes CLI)
@@ -107,38 +115,37 @@ RUN /app/.venv/bin/python -c "import aiq_api; import aiq_research_cli; import ai
 # =============================================================================
 # Stage 3: Development runtime
 # =============================================================================
-FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.5 AS dev
+FROM dev-builder AS dev
 
 WORKDIR /app
-
-COPY --from=dev-builder /app /app
-
-USER 1000:1000
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PATH="/app/.venv/bin:$PATH"
+ENV SHELL=/bin/bash
+ENV HOME=/home/aiq
+
+USER 1000:1000
 
 EXPOSE 8000
 
 ENTRYPOINT ["python", "/app/deploy/entrypoint.py"]
 
 # =============================================================================
-# Stage 4: Release (production - no CLI)
+# Stage 4: Release (production - Claude Code capable)
 # =============================================================================
-FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.5 AS release
+FROM builder AS release
 
 WORKDIR /app
-
-# Copy from base builder (no CLI)
-COPY --from=builder /app /app
-
-USER 1000:1000
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PATH="/app/.venv/bin:$PATH"
+ENV SHELL=/bin/bash
+ENV HOME=/home/aiq
 ENV APP_ENV=production
+
+USER 1000:1000
 
 EXPOSE 8000
 

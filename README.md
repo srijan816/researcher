@@ -375,9 +375,9 @@ instead of a second disconnected research agent.
 
 When Claude Code is backed by MiniMax, the subprocess environment must use
 `ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic` and
-`ANTHROPIC_AUTH_TOKEN=$MINIMAX_API_KEY`. Do not pass the MiniMax key as
-`ANTHROPIC_API_KEY`; Claude Code treats that as an external Anthropic API key
-and rejects it before the research bridge can write artifacts.
+`ANTHROPIC_AUTH_TOKEN=$MINIMAX_API_KEY`. The current Claude Code `--bare`
+runtime also requires `ANTHROPIC_API_KEY=$MINIMAX_API_KEY`, even when requests
+are routed through the MiniMax Anthropic-compatible base URL.
 
 ## Frontend Experience
 

@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import uuid
 from pathlib import Path
@@ -166,13 +167,26 @@ class ClaudeResearcherAgent:
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
         env = os.environ.copy()
+        shell_path = self._find_posix_shell()
+        if shell_path is None:
+            message = (
+                "Claude Code research requires a POSIX shell so it can run the repo-local "
+                "search/scrape tool, but neither /bin/bash nor /bin/sh is available in "
+                "the backend runtime."
+            )
+            self._emit_status("claude_research.environment_error", message)
+            raise RuntimeError(message)
+        env.setdefault("SHELL", shell_path)
         env.setdefault("AIQ_CLAUDE_CODE_PROVIDER", "minimax")
         env.setdefault("AIQ_CLAUDE_CODE_BYPASS_PERMISSIONS", "true")
         env.setdefault("AIQ_CLAUDE_RESEARCH_DEPTH", depth)
         if env.get("AIQ_CLAUDE_CODE_PROVIDER", "minimax") == "minimax" and env.get("MINIMAX_API_KEY"):
             env["ANTHROPIC_BASE_URL"] = env.get("AIQ_CLAUDE_CODE_BASE_URL", "https://api.minimax.io/anthropic")
-            env["ANTHROPIC_AUTH_TOKEN"] = env.get("AIQ_CLAUDE_CODE_API_KEY") or env["MINIMAX_API_KEY"]
-            env.pop("ANTHROPIC_API_KEY", None)
+            api_key = env.get("AIQ_CLAUDE_CODE_API_KEY") or env["MINIMAX_API_KEY"]
+            env["ANTHROPIC_AUTH_TOKEN"] = api_key
+            # Claude Code --bare (2.1.x) ignores ANTHROPIC_AUTH_TOKEN and
+            # requires ANTHROPIC_API_KEY even for Anthropic-compatible gateways.
+            env["ANTHROPIC_API_KEY"] = api_key
             model = env.get("AIQ_CLAUDE_CODE_MODEL", "MiniMax-M3")
             env.setdefault("ANTHROPIC_MODEL", model)
             env.setdefault("ANTHROPIC_DEFAULT_SONNET_MODEL", model)
@@ -282,6 +296,17 @@ class ClaudeResearcherAgent:
 
         final_path = run_dir / "final.md"
         return final_path.read_text(encoding="utf-8").strip()
+
+    @staticmethod
+    def _find_posix_shell() -> str | None:
+        for candidate in ("/bin/bash", "/usr/bin/bash", "/bin/sh", "/usr/bin/sh"):
+            if Path(candidate).exists():
+                return candidate
+        for candidate in ("bash", "sh"):
+            found = shutil.which(candidate)
+            if found:
+                return found
+        return None
 
     def _build_claude_prompt(
         self,
@@ -469,6 +494,8 @@ CLAUDE_RESEARCH_COMPLETE {run_dir}
             failures.append(
                 f"final.md has {final_chars} substantive chars; expected at least {profile['min_final_chars']}"
             )
+        if self._declares_tool_execution_failure(run_dir):
+            failures.append("run artifacts declare that live search/scrape tooling was unavailable")
 
         if failures:
             summary = "\n".join(f"- {failure}" for failure in failures)
@@ -497,7 +524,20 @@ CLAUDE_RESEARCH_COMPLETE {run_dir}
         except Exception:
             return 0
         sources = data.get("sources") if isinstance(data, dict) else None
-        return len(sources) if isinstance(sources, list) else 0
+        if not isinstance(sources, list):
+            return 0
+        return sum(1 for source in sources if ClaudeResearcherAgent._is_usable_source(source))
+
+    @staticmethod
+    def _is_usable_source(source: Any) -> bool:
+        if not isinstance(source, dict):
+            return False
+        status = str(source.get("status") or "").strip().lower().replace("_", "-")
+        if status in {"targeted-not-verified", "not-verified", "unverified"}:
+            return False
+        if str(source.get("url") or "").startswith(("http://", "https://")):
+            return True
+        return False
 
     def _non_placeholder_length(self, path: Path) -> int:
         if not path.exists():
@@ -506,6 +546,32 @@ CLAUDE_RESEARCH_COMPLETE {run_dir}
         if self._looks_like_placeholder(path, content):
             return 0
         return len(content)
+
+    def _declares_tool_execution_failure(self, run_dir: Path) -> bool:
+        failure_markers = (
+            "no suitable shell found",
+            "bash tool returned",
+            "shell/bash tool",
+            "could not run `scripts/claude_research_tool.py`",
+            "could not run scripts/claude_research_tool.py",
+            "without live web search or scraping",
+            "live search and scraping were not possible",
+            "all `sources.json` entries are therefore marked `targeted-not-verified`",
+        )
+        for relative in (
+            "logs/progress.md",
+            "logs/claude-code.log",
+            "gaps.md",
+            "research.md",
+            "final.md",
+        ):
+            path = run_dir / relative
+            if not path.exists():
+                continue
+            content = path.read_text(encoding="utf-8", errors="replace").lower()
+            if any(marker in content for marker in failure_markers):
+                return True
+        return False
 
     def _iter_watch_files(self, run_dir: Path) -> list[Path]:
         paths = [run_dir / filename for filename in RUN_ARTIFACTS]

@@ -91,3 +91,55 @@ def test_depth_validation_rejects_placeholder_report(tmp_path):
 
     workflow_names = [call.args[0].name for call in callback._emit.call_args_list]
     assert "claude_research.depth_failure" in workflow_names
+
+
+def test_source_count_excludes_targeted_not_verified_sources(tmp_path):
+    path = tmp_path / "sources.json"
+    path.write_text(
+        """{
+  "sources": [
+    {"url": "https://example.com/verified", "backend": "websurfx"},
+    {"url": "https://example.com/guessed", "status": "targeted-not-verified"},
+    {"url": "not-a-url", "backend": "websurfx"}
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+
+    assert ClaudeResearcherAgent._count_sources(path) == 1
+
+
+def test_depth_validation_rejects_no_shell_knowledge_only_run(tmp_path):
+    callback = MagicMock()
+    agent = ClaudeResearcherAgent(callbacks=[callback], config=SimpleNamespace(artifact_watch_interval=0.01))
+    run_dir = tmp_path / "run"
+    (run_dir / "logs").mkdir(parents=True)
+    (run_dir / "source_summaries").mkdir()
+    (run_dir / "plan.md").write_text("# Plan\n\nA real plan.\n", encoding="utf-8")
+    (run_dir / "queries.json").write_text(
+        '{"modules": [{"title": "A"}, {"title": "B"}, {"title": "C"}, {"title": "D"}, {"title": "E"}]}',
+        encoding="utf-8",
+    )
+    (run_dir / "sources.json").write_text(
+        '{"sources": ['
+        + ",".join(
+            f'{{"url": "https://example.com/{index}", "status": "targeted-not-verified"}}' for index in range(30)
+        )
+        + "]}",
+        encoding="utf-8",
+    )
+    for index in range(8):
+        (run_dir / "source_summaries" / f"S{index}.md").write_text(
+            "# Summary\n\nA source summary.\n",
+            encoding="utf-8",
+        )
+    (run_dir / "gaps.md").write_text(
+        "# Gaps\n\nThe Bash tool returned `No suitable shell found`, so live search and scraping were not possible.\n",
+        encoding="utf-8",
+    )
+    (run_dir / "research.md").write_text("# Research\n\n" + "Evidence. " * 700, encoding="utf-8")
+    (run_dir / "final.md").write_text("# Final\n\n" + "Report. " * 900, encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="live search/scrape tooling was unavailable"):
+        agent._validate_depth_artifacts(run_dir=run_dir, depth="deeper", output_tail="")

@@ -52,7 +52,7 @@ def test_claude_code_env_defaults_to_minimax(monkeypatch):
     env = _claude_code_env()
 
     assert env["ANTHROPIC_AUTH_TOKEN"] == "mini-key"  # pragma: allowlist secret
-    assert "ANTHROPIC_API_KEY" not in env
+    assert env["ANTHROPIC_API_KEY"] == "mini-key"  # pragma: allowlist secret
     assert env["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
     assert env["ANTHROPIC_MODEL"] == "MiniMax-M3"
     assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "MiniMax-M3"

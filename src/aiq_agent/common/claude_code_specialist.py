@@ -204,11 +204,13 @@ def _claude_code_env() -> dict[str, str]:
         api_key = os.environ.get("AIQ_CLAUDE_CODE_API_KEY") or os.environ.get("MINIMAX_API_KEY")
         if api_key:
             env["ANTHROPIC_AUTH_TOKEN"] = api_key
+            # Claude Code --bare (2.1.x) authenticates strictly through
+            # ANTHROPIC_API_KEY; keep AUTH_TOKEN too for non-bare compatibility.
+            env["ANTHROPIC_API_KEY"] = api_key
         env["ANTHROPIC_BASE_URL"] = os.environ.get(
             "AIQ_CLAUDE_CODE_BASE_URL",
             "https://api.minimax.io/anthropic",
         )
-        env.pop("ANTHROPIC_API_KEY", None)
         model = os.environ.get("AIQ_CLAUDE_CODE_MODEL", "MiniMax-M3")
         env.setdefault("ANTHROPIC_MODEL", model)
         env.setdefault("ANTHROPIC_DEFAULT_SONNET_MODEL", model)
