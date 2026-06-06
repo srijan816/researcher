@@ -130,6 +130,7 @@ describe('NATWebSocketClient auth observability', () => {
       query: 'University education',
       data_sources: ['web_search'],
       research_depth: 'shallow',
+      agent_type: 'deep_researcher',
       force_deep_research: false,
     })
   })
@@ -155,10 +156,36 @@ describe('NATWebSocketClient auth observability', () => {
 
     expect(deeperPayload).toMatchObject({
       research_depth: 'deeper',
+      agent_type: 'deep_researcher',
       force_deep_research: true,
     })
     expect(deepPayload).toMatchObject({
       research_depth: 'deep',
+      agent_type: 'deep_researcher',
+      force_deep_research: true,
+    })
+  })
+
+  test('sends Claude Code research engine as claude_researcher agent type', async () => {
+    const client = new NATWebSocketClient({
+      conversationId: 'conv-1',
+      websocketUrl: 'ws://localhost/websocket',
+      callbacks: {},
+    })
+
+    await client.connect()
+    const ws = MockWebSocket.instances[0]
+    ws.onopen?.(new Event('open'))
+
+    client.sendMessage('Audit the research workflow', ['web_search'], 'deeper', 'claude_code')
+
+    const envelope = JSON.parse(ws.send.mock.calls[0][0])
+    const payload = JSON.parse(envelope.content.messages[0].content[0].text)
+
+    expect(payload).toMatchObject({
+      query: 'Audit the research workflow',
+      research_depth: 'deeper',
+      agent_type: 'claude_researcher',
       force_deep_research: true,
     })
   })

@@ -131,10 +131,10 @@ CLAUDE_RESEARCH_COMPLETE $RUN_DIR
 PROMPT_EOF
 )"
 
-exec "$CLAUDE_BIN" \
+printf '%s' "$PROMPT" | "$CLAUDE_BIN" \
   --print \
   --output-format text \
+  --input-format text \
   "${PERMISSION_ARGS[@]}" \
   --add-dir "$ROOT_DIR" \
-  --add-dir "$RUN_DIR" \
-  "$PROMPT"
+  --add-dir "$RUN_DIR"

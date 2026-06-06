@@ -23,7 +23,7 @@ import { useLayoutStore } from '../store'
 import { useAppConfig } from '@/shared/context'
 import { useFileUpload, useFileDragDrop, useFileUploadBanners } from '@/features/documents'
 import { Globe, Document, Paperclip, Paperplane, Cancel, StopCircle } from '@/adapters/ui/icons'
-import type { ResearchDepth } from '../types'
+import type { ResearchDepth, ResearchEngine } from '../types'
 
 /** Connection mode for the chat */
 export type ConnectionMode = 'sse' | 'websocket'
@@ -34,6 +34,11 @@ const RESEARCH_DEPTH_OPTIONS: Array<{ value: ResearchDepth; label: string; title
   { value: 'medium', label: 'Medium', title: 'Target 32-64 sources, faster thinking-off research' },
   { value: 'deeper', label: 'Deeper', title: 'Target 32-64 sources' },
   { value: 'deep', label: 'Deep', title: 'Target 90-150+ sources' },
+]
+
+const RESEARCH_ENGINE_OPTIONS: Array<{ value: ResearchEngine; label: string; title: string }> = [
+  { value: 'aiq', label: 'AIQ', title: 'Use the standard AIQ deep research pipeline' },
+  { value: 'claude_code', label: 'Claude Code', title: 'Use the Claude Code research lane with run-folder artifacts' },
 ]
 
 interface InputAreaProps {
@@ -218,6 +223,8 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   const setDataSourcesPanelTab = useLayoutStore((s) => s.setDataSourcesPanelTab)
   const researchDepth = useLayoutStore((s) => s.researchDepth)
   const setResearchDepth = useLayoutStore((s) => s.setResearchDepth)
+  const researchEngine = useLayoutStore((s) => s.researchEngine)
+  const setResearchEngine = useLayoutStore((s) => s.setResearchEngine)
 
   // Check if we're in response mode (responding to a HITL prompt)
   const isResponseMode = !!pendingInteraction
@@ -475,6 +482,44 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                           : 'text-subtle hover:bg-surface-raised hover:text-primary'
                       } disabled:cursor-not-allowed disabled:opacity-60`}
                       aria-label={`Research mode: ${option.label}`}
+                      aria-pressed={selected}
+                      title={option.title}
+                    >
+                      <span className="block min-w-0 truncate">{option.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            <div
+              className={`flex min-w-0 items-center gap-2 rounded-md border border-base p-1 max-sm:w-full ${
+                isHero ? 'bg-surface-raised-30' : 'bg-surface-base'
+              }`}
+            >
+              <span className="shrink-0 px-1 text-[11px] font-semibold uppercase tracking-normal text-subtle">
+                Engine
+              </span>
+              <div
+                className={`grid min-w-0 flex-1 grid-cols-2 rounded border border-base p-0.5 sm:w-[10.5rem] sm:flex-none ${
+                  isHero ? 'bg-surface-raised-30' : 'bg-surface-base'
+                }`}
+                role="group"
+                aria-label="Research engine"
+              >
+                {RESEARCH_ENGINE_OPTIONS.map((option) => {
+                  const selected = researchEngine === option.value
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setResearchEngine(option.value)}
+                      disabled={disabled || isResearchSessionInProgress}
+                      className={`h-7 min-w-0 rounded px-1 text-[11px] font-medium leading-none transition-colors sm:h-6 sm:text-xs ${
+                        selected
+                          ? 'bg-surface-sunken text-primary shadow-sm'
+                          : 'text-subtle hover:bg-surface-raised hover:text-primary'
+                      } disabled:cursor-not-allowed disabled:opacity-60`}
+                      aria-label={`Research engine: ${option.label}`}
                       aria-pressed={selected}
                       title={option.title}
                     >

@@ -48,6 +48,7 @@ class ChatResearcherState(BaseModel):
         clarifier_result: Log from clarifier agent dialog.
         original_query: The latest user query, preserved for deep research.
         available_documents: User-uploaded documents with summaries for context.
+        agent_type: Async research agent to submit when deep research is forced.
         force_deep_research: When True, research queries skip shallow routing and
             go directly to deep research. Meta queries are still answered as meta.
         skip_clarifier: When True the clarifier node is bypassed regardless of
@@ -66,5 +67,6 @@ class ChatResearcherState(BaseModel):
     clarifier_result: str | None = None
     original_query: str | None = None
     available_documents: list[AvailableDocument] | None = None
+    agent_type: str = "deep_researcher"
     force_deep_research: bool = False
     skip_clarifier: bool = False

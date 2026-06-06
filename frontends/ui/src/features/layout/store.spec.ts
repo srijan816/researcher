@@ -13,6 +13,7 @@ describe('useLayoutStore', () => {
       researchPanelTab: 'plan',
       dataSourcesPanelTab: 'connections',
       researchDepth: 'deeper',
+      researchEngine: 'aiq',
       theme: 'system',
     })
   })
@@ -26,6 +27,7 @@ describe('useLayoutStore', () => {
       expect(state.researchPanelTab).toBe('plan')
       expect(state.dataSourcesPanelTab).toBe('connections')
       expect(state.researchDepth).toBe('deeper')
+      expect(state.researchEngine).toBe('aiq')
     })
   })
 
@@ -189,6 +191,14 @@ describe('useLayoutStore', () => {
       useLayoutStore.getState().setResearchDepth('medium')
 
       expect(useLayoutStore.getState().researchDepth).toBe('medium')
+    })
+  })
+
+  describe('setResearchEngine', () => {
+    test('sets research engine', () => {
+      useLayoutStore.getState().setResearchEngine('claude_code')
+
+      expect(useLayoutStore.getState().researchEngine).toBe('claude_code')
     })
   })
 })

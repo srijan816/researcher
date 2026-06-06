@@ -280,7 +280,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                     )
 
                 return await submit_agent_job(
-                    agent_type="deep_researcher",
+                    agent_type=state.agent_type,
                     input_text=input_text,
                     owner=owner,
                     available_documents=available_docs,
@@ -370,11 +370,14 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 pass
         logger.info("skip_clarifier=%s", skip_clarifier)
 
-        query_text, data_sources, force_deep_research, research_depth = _extract_query_sources_force_depth(query)
+        query_text, data_sources, force_deep_research, research_depth, agent_type = _extract_query_sources_force_depth(
+            query
+        )
         logger.info("ChatDeepResearcherAgent: %s", query_text)
         logger.info("ChatDeepResearcherAgent: Data sources: %s", data_sources)
         logger.info("ChatDeepResearcherAgent: Force deep research: %s", force_deep_research)
         logger.info("ChatDeepResearcherAgent: Research depth: %s", research_depth)
+        logger.info("ChatDeepResearcherAgent: Agent type: %s", agent_type)
 
         # Fetch available documents with summaries from SQLite registry
         # The registry is populated by backends during ingestion (backend-agnostic)
@@ -412,6 +415,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 user_info=user_info_dict,
                 data_sources=data_sources,
                 research_depth=research_depth,
+                agent_type=agent_type,
                 available_documents=available_documents,
                 force_deep_research=force_deep_research,
                 skip_clarifier=skip_clarifier,

@@ -136,37 +136,50 @@ def _parse_force_deep(value: Any) -> bool:
     return False
 
 
+def _parse_agent_type(value: Any) -> str:
+    """Parse the requested async research agent from JSON payloads."""
+    if not isinstance(value, str):
+        return "deep_researcher"
+    normalized = value.strip().lower()
+    if normalized in {"deep_researcher", "claude_researcher"}:
+        return normalized
+    return "deep_researcher"
+
+
 def _extract_query_sources_force_depth_from_text(
     text: str,
-) -> tuple[str, list[str] | None, bool, ResearchDepthTier]:
+) -> tuple[str, list[str] | None, bool, ResearchDepthTier, str]:
     if not text:
-        return ("", None, False, DEFAULT_RESEARCH_DEPTH)
+        return ("", None, False, DEFAULT_RESEARCH_DEPTH, "deep_researcher")
     trimmed = text.strip()
     if trimmed.startswith("{") and trimmed.endswith("}"):
         try:
             payload = json.loads(trimmed)
         except json.JSONDecodeError:
-            return (text, None, False, DEFAULT_RESEARCH_DEPTH)
+            return (text, None, False, DEFAULT_RESEARCH_DEPTH, "deep_researcher")
         if isinstance(payload, dict):
             data_sources = parse_data_sources(payload.get("data_sources"))
             query_text = payload.get("query") or payload.get("text")
             force_deep = _parse_force_deep(payload.get("force_deep_research"))
             research_depth = normalize_research_depth(payload.get("research_depth"))
+            agent_type = _parse_agent_type(payload.get("agent_type"))
             if isinstance(query_text, str) and query_text.strip():
-                return (query_text.strip(), data_sources, force_deep, research_depth)
-    return (text, None, False, DEFAULT_RESEARCH_DEPTH)
+                return (query_text.strip(), data_sources, force_deep, research_depth, agent_type)
+    return (text, None, False, DEFAULT_RESEARCH_DEPTH, "deep_researcher")
 
 
 def _extract_query_sources_force_from_text(text: str) -> tuple[str, list[str] | None, bool]:
     """Backward-compatible helper returning query, sources, and force-deep."""
-    query_text, data_sources, force_deep, _research_depth = _extract_query_sources_force_depth_from_text(text)
+    query_text, data_sources, force_deep, _research_depth, _agent_type = _extract_query_sources_force_depth_from_text(
+        text
+    )
     return (query_text, data_sources, force_deep)
 
 
 def _extract_query_sources_force_depth(
     payload: Any,
-) -> tuple[str, list[str] | None, bool, ResearchDepthTier]:
-    """Extract query, data sources, force-deep flag, and selected research-depth tier."""
+) -> tuple[str, list[str] | None, bool, ResearchDepthTier, str]:
+    """Extract query, sources, force-deep flag, depth tier, and async agent type."""
     if isinstance(payload, dict):
         content = payload.get("content", {}) if isinstance(payload.get("content"), dict) else {}
         data_sources = parse_data_sources(payload.get("data_sources")) or parse_data_sources(
@@ -176,6 +189,7 @@ def _extract_query_sources_force_depth(
             content.get("force_deep_research")
         )
         research_depth = normalize_research_depth(payload.get("research_depth") or content.get("research_depth"))
+        agent_type = _parse_agent_type(payload.get("agent_type") or content.get("agent_type"))
         messages = content.get("messages", [])
         query_text = None
         if isinstance(messages, list) and messages:
@@ -191,20 +205,22 @@ def _extract_query_sources_force_depth(
                 payload.get("text")
             )
         if query_text:
-            inline_query, inline_sources, inline_force_deep, inline_depth = (
+            inline_query, inline_sources, inline_force_deep, inline_depth, inline_agent_type = (
                 _extract_query_sources_force_depth_from_text(query_text)
             )
             query_text = inline_query
             data_sources = data_sources or inline_sources
             force_deep = force_deep or inline_force_deep
             research_depth = inline_depth if inline_depth != DEFAULT_RESEARCH_DEPTH else research_depth
-        return (query_text or "", data_sources, force_deep, research_depth)
+            agent_type = inline_agent_type if inline_agent_type != "deep_researcher" else agent_type
+        return (query_text or "", data_sources, force_deep, research_depth, agent_type)
 
     messages = getattr(payload, "messages", None)
     if isinstance(messages, list):
         data_sources = parse_data_sources(getattr(payload, "data_sources", None))
         force_deep = _parse_force_deep(getattr(payload, "force_deep_research", None))
         research_depth = normalize_research_depth(getattr(payload, "research_depth", None))
+        agent_type = _parse_agent_type(getattr(payload, "agent_type", None))
         query_text = None
         for msg in reversed(messages):
             if _is_user_role(getattr(msg, "role", None)):
@@ -214,14 +230,15 @@ def _extract_query_sources_force_depth(
         if not query_text and messages:
             query_text = _extract_text_from_message(messages[-1])
         if query_text:
-            inline_query, inline_sources, inline_force_deep, inline_depth = (
+            inline_query, inline_sources, inline_force_deep, inline_depth, inline_agent_type = (
                 _extract_query_sources_force_depth_from_text(query_text)
             )
             query_text = inline_query
             data_sources = data_sources or inline_sources
             force_deep = force_deep or inline_force_deep
             research_depth = inline_depth if inline_depth != DEFAULT_RESEARCH_DEPTH else research_depth
-        return (query_text or "", data_sources, force_deep, research_depth)
+            agent_type = inline_agent_type if inline_agent_type != "deep_researcher" else agent_type
+        return (query_text or "", data_sources, force_deep, research_depth, agent_type)
 
     query_text = str(payload)
     return _extract_query_sources_force_depth_from_text(query_text)
@@ -235,7 +252,7 @@ def _extract_query_sources_and_force_deep(payload: Any) -> tuple[str, list[str] 
         - data_sources is None if not specified, meaning use all configured tools
         - data_sources is a list if explicitly specified (use only those)
     """
-    query_text, data_sources, force_deep, _research_depth = _extract_query_sources_force_depth(payload)
+    query_text, data_sources, force_deep, _research_depth, _agent_type = _extract_query_sources_force_depth(payload)
     return (query_text, data_sources, force_deep)
 
 

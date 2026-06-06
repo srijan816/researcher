@@ -631,6 +631,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       const enabledDataSources =
         layoutState.enabledDataSourceIds.length > 0 ? layoutState.enabledDataSourceIds : ['web_search']
       const researchDepth = layoutState.researchDepth
+      const researchEngine = layoutState.researchEngine ?? 'aiq'
 
       // Get session files
       const sessionId = useChatStore.getState().currentConversation?.id
@@ -681,7 +682,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       // Helper to actually send the message
       const doSend = () => {
         if (wsClientRef.current?.isConnected()) {
-          wsClientRef.current.sendMessage(content, dataSourcesForMessage, researchDepth)
+          wsClientRef.current.sendMessage(content, dataSourcesForMessage, researchDepth, researchEngine)
           setLoading(false)
         } else {
           addErrorCard('connection.failed', 'WebSocket connection failed')

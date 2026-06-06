@@ -27,6 +27,7 @@ import {
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 type ResearchDepth = 'shallow' | 'medium' | 'deeper' | 'deep'
+type ResearchEngine = 'aiq' | 'claude_code'
 
 /** Context passed with connection status changes */
 export interface ConnectionChangeContext {
@@ -135,16 +136,23 @@ export class NATWebSocketClient {
    * @param enabledDataSources - Optional array of enabled data source IDs to include in the query
    * @param researchDepth - Optional source/depth tier for deep research
    */
-  sendMessage = (content: string, enabledDataSources?: string[], researchDepth: ResearchDepth = 'deeper'): void => {
+  sendMessage = (
+    content: string,
+    enabledDataSources?: string[],
+    researchDepth: ResearchDepth = 'deeper',
+    researchEngine: ResearchEngine = 'aiq'
+  ): void => {
     const forceDeepResearch =
       apiConfig.forceDeepResearch || researchDepth === 'medium' || researchDepth === 'deeper' || researchDepth === 'deep'
     const dataSources = enabledDataSources && enabledDataSources.length > 0 ? enabledDataSources : ['web_search']
+    const agentType = researchEngine === 'claude_code' ? 'claude_researcher' : 'deep_researcher'
 
     // Format the text content as JSON with query and data_sources
     const textContent = JSON.stringify({
       query: content,
       data_sources: dataSources,
       research_depth: researchDepth,
+      agent_type: agentType,
       force_deep_research: forceDeepResearch,
     })
 

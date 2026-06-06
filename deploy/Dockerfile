@@ -91,7 +91,7 @@ RUN /app/.venv/bin/python -c "import aiq_api; import knowledge_layer; import deb
 
 RUN chmod +x /app/deploy/start_web.py /app/scripts/claude_research_tool.py /app/scripts/run_claude_research.sh \
     && mkdir -p /app/data \
-    && chown -R 1000:1000 /app
+    && chown 1000:1000 /app/data
 
 # =============================================================================
 # Stage 2: Development (includes CLI)

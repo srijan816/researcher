@@ -231,9 +231,34 @@ class TestExtractQueryAndSources:
             }
         }
 
-        query, sources, force_deep, research_depth = _extract_query_sources_force_depth(payload)
+        query, sources, force_deep, research_depth, agent_type = _extract_query_sources_force_depth(payload)
 
         assert query == "AI model pricing"
         assert sources is None
         assert force_deep is False
         assert research_depth == "deep"
+        assert agent_type == "deep_researcher"
+
+    def test_extract_claude_research_agent_type_from_json_text(self):
+        """Test extracting the Claude research agent type from the UI payload."""
+        payload = {
+            "content": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            '{"query": "Audit workflow", "research_depth": "deeper", '
+                            '"agent_type": "claude_researcher", "force_deep_research": true}'
+                        ),
+                    }
+                ],
+            }
+        }
+
+        query, sources, force_deep, research_depth, agent_type = _extract_query_sources_force_depth(payload)
+
+        assert query == "Audit workflow"
+        assert sources is None
+        assert force_deep is True
+        assert research_depth == "deeper"
+        assert agent_type == "claude_researcher"

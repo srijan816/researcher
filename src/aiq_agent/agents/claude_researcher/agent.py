@@ -141,17 +141,23 @@ class ClaudeResearcherAgent:
             "--print",
             "--output-format",
             "text",
+            "--input-format",
+            "text",
             *permission_args,
             "--add-dir",
             str(self.repo_root),
             "--add-dir",
             str(run_dir),
-            prompt,
             cwd=str(self.repo_root),
             env=env,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
+        if process.stdin is not None:
+            process.stdin.write(prompt.encode("utf-8"))
+            await process.stdin.drain()
+            process.stdin.close()
 
         output_chunks: list[str] = []
         try:

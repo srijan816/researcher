@@ -15,6 +15,9 @@ export type ThemeMode = 'light' | 'dark' | 'system'
 /** Research source/depth tiers */
 export type ResearchDepth = 'shallow' | 'medium' | 'deeper' | 'deep'
 
+/** Research execution engine options */
+export type ResearchEngine = 'aiq' | 'claude_code'
+
 /** Panels that can be opened on the right side */
 export type RightPanelType = 'research' | 'data-sources' | 'settings' | 'docs' | null
 
@@ -38,6 +41,8 @@ export interface LayoutState {
   enabledDataSourceIds: string[]
   /** Selected research source/depth tier */
   researchDepth: ResearchDepth
+  /** Selected research execution engine */
+  researchEngine: ResearchEngine
   /** Current theme mode */
   theme: ThemeMode
   /** Dynamic data sources from API (null = not loaded yet) */
@@ -78,6 +83,8 @@ export interface LayoutActions {
   setEnabledDataSources: (ids: string[]) => void
   /** Set the research source/depth tier */
   setResearchDepth: (depth: ResearchDepth) => void
+  /** Set the research execution engine */
+  setResearchEngine: (engine: ResearchEngine) => void
   /** Set the theme mode */
   setTheme: (theme: ThemeMode) => void
   /** Fetch data sources from API. Only web_search is enabled by default */
