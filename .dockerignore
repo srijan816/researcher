@@ -59,6 +59,8 @@ frontends/benchmarks/
 # ---- Documentation (not needed at runtime) ----
 *.md
 docs/
+!docs/
+!docs/claude-research-operating-guide.md
 LICENSE
 license_report.pdf
 

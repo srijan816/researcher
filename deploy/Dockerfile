@@ -66,6 +66,8 @@ COPY frontends/aiq_api/ ./frontends/aiq_api/
 COPY frontends/cli/ ./frontends/cli/
 COPY frontends/debug/ ./frontends/debug/
 COPY configs/ ./configs/
+COPY docs/claude-research-operating-guide.md ./docs/claude-research-operating-guide.md
+COPY scripts/claude_research_tool.py scripts/run_claude_research.sh ./scripts/
 # Only copy runtime scripts from deploy/ — never copy the full directory
 # to avoid leaking .env, Helm charts, compose files, or other dev artifacts.
 COPY deploy/entrypoint.py deploy/start_web.py ./deploy/
@@ -87,7 +89,7 @@ RUN uv pip install --no-deps -e . \
 
 RUN /app/.venv/bin/python -c "import aiq_api; import knowledge_layer; import debate_transcript_search; print('✓ Base packages installed')"
 
-RUN chmod +x /app/deploy/start_web.py \
+RUN chmod +x /app/deploy/start_web.py /app/scripts/claude_research_tool.py /app/scripts/run_claude_research.sh \
     && mkdir -p /app/data \
     && chown -R 1000:1000 /app
 

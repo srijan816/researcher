@@ -110,3 +110,10 @@ register_agent(
     config_name="shallow_research_agent",
     description="Performs quick single-turn research",
 )
+
+register_agent(
+    agent_type="claude_researcher",
+    class_path="aiq_agent.agents.claude_researcher.agent.ClaudeResearcherAgent",
+    config_name="claude_research_agent",
+    description="Runs a Claude Code driven concurrent research lane with SearXNG/Websurfx/Scrapling tools",
+)

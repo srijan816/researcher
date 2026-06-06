@@ -287,6 +287,11 @@ functions:
     max_llm_turns: 20
     max_tool_iterations: 10
 
+  claude_research_agent:
+    _type: claude_research_agent
+    timeout_seconds: ${AIQ_CLAUDE_RESEARCH_TIMEOUT_SECONDS:-3600}
+    default_depth: deeper
+
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: minimax_m3_synthesis_llm
