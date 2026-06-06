@@ -21,13 +21,15 @@ import { useLayoutStore } from '@/features/layout/store'
 import { useChatStore } from '../store'
 import { useCancelDeepResearchJob } from '../hooks/use-cancel-deep-research'
 import { useLoadJobData } from '../hooks/use-load-job-data'
-import type { DeepResearchBannerType } from '../types'
+import type { DeepResearchBannerType, ResearchEngine } from '../types'
 
 export interface DeepResearchBannerProps {
   /** Type of banner: success or failure */
   bannerType: DeepResearchBannerType
   /** Job ID for identification */
   jobId: string
+  /** Execution engine selected for this job */
+  researchEngine?: ResearchEngine
   /** Total tokens used (for success banner) */
   totalTokens?: number
   /** Number of tool calls (for success banner) */
@@ -61,9 +63,12 @@ const formatTokens = (count: number): string => {
 const getBannerConfig = (
   bannerType: DeepResearchBannerType,
   jobId: string,
+  researchEngine: ResearchEngine = 'aiq',
   stats?: { totalTokens?: number; toolCallCount?: number }
 ): BannerConfig => {
   const jobIdLine = `Job ID: ${jobId}\n`
+  const engineName = researchEngine === 'claude_code' ? 'Claude Code' : 'AIQ'
+  const engineLine = `Engine: ${engineName}\n`
 
   switch (bannerType) {
     case 'success': {
@@ -79,7 +84,7 @@ const getBannerConfig = (
 
       return {
         heading: `Report Completed!${statsText}`,
-        subheading: `Research has finished and a report is ready to view in the research panel. (${jobIdLine})`,
+        subheading: `Research has finished and a report is ready to view in the research panel. (${engineLine}${jobIdLine})`,
         buttonText: 'View Report',
         buttonTab: 'report',
         status: 'success',
@@ -88,7 +93,7 @@ const getBannerConfig = (
     case 'failure':
       return {
         heading: 'Report Failed to Complete',
-        subheading: `Something prevented the research report from completing. Check the thinking for details. (${jobIdLine})`,
+        subheading: `Something prevented the research report from completing. Check the thinking for details. (${engineLine}${jobIdLine})`,
         buttonText: 'View Thinking',
         buttonTab: 'thinking',
         status: 'error',
@@ -96,15 +101,15 @@ const getBannerConfig = (
     case 'cancelled':
       return {
         heading: 'Research Cancelled',
-        subheading: `Research was stopped by user. You can view any partial progress in the research panel. (${jobIdLine})`,
+        subheading: `Research was stopped by user. You can view any partial progress in the research panel. (${engineLine}${jobIdLine})`,
         buttonText: 'View Progress',
         buttonTab: 'tasks',
         status: 'warning',
       }
     case 'starting':
       return {
-        heading: 'Starting Deep Research',
-        subheading: `Chat is paused while the report is created to prevent generating multiple reports. You can click away while this runs. This may take several minutes. (${jobIdLine})`,
+        heading: `Starting ${engineName} Research`,
+        subheading: `Chat is paused while the report is created to prevent generating multiple reports. You can click away while this runs. This may take several minutes. (${engineLine}${jobIdLine})`,
         buttonText: 'View Progress',
         buttonTab: 'tasks',
         status: 'info',
@@ -118,6 +123,7 @@ const getBannerConfig = (
 export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
   bannerType,
   jobId,
+  researchEngine = 'aiq',
   totalTokens,
   toolCallCount,
   timestamp,
@@ -129,7 +135,7 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
   const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)
   const { cancelDeepResearchJob, isCancelling } = useCancelDeepResearchJob()
   const { loadReport, importStreamOnly, isLoading: isStreamLoading } = useLoadJobData()
-  const baseConfig = getBannerConfig(bannerType, jobId, { totalTokens, toolCallCount })
+  const baseConfig = getBannerConfig(bannerType, jobId, researchEngine, { totalTokens, toolCallCount })
   const hasReport = Boolean(reportContent.trim())
   const config =
     bannerType === 'failure' && hasReport

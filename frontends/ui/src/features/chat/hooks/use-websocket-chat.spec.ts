@@ -826,7 +826,7 @@ describe('useWebSocketChat', () => {
     })
 
     // Should detect deep research and call banner with 'starting' status
-    expect(mockAddDeepResearchBanner).toHaveBeenCalledWith('starting', 'abc123-def456')
+    expect(mockAddDeepResearchBanner).toHaveBeenCalledWith('starting', 'abc123-def456', undefined, undefined, 'aiq')
     // Should add tracking message with empty content and job metadata
     expect(localMockAddAgentResponseWithMeta).toHaveBeenCalledWith(
       '',
@@ -837,6 +837,6 @@ describe('useWebSocketChat', () => {
         isDeepResearchActive: true,
       })
     )
-    expect(mockStartDeepResearch).toHaveBeenCalledWith('abc123-def456', 'msg-1')
+    expect(mockStartDeepResearch).toHaveBeenCalledWith('abc123-def456', 'msg-1', 'aiq')
   })
 })

@@ -449,6 +449,7 @@ class ChatResearcherAgent:
                 "user_info": state.user_info,
                 "data_sources": state.data_sources,
                 "research_depth": state.research_depth,
+                "agent_type": state.agent_type,
                 "available_documents": state.available_documents,
                 "force_deep_research": state.force_deep_research,
                 "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state

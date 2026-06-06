@@ -25,6 +25,9 @@ export type MessageType =
 /** Deep research banner types for status notifications */
 export type DeepResearchBannerType = 'starting' | 'success' | 'failure' | 'cancelled'
 
+/** Research execution engine selected for an async run */
+export type ResearchEngine = 'aiq' | 'claude_code'
+
 /** File upload status types for banner messages */
 export type FileUploadStatusType = 'uploaded' | 'pending_warning'
 
@@ -95,6 +98,8 @@ export interface DeepResearchBannerData {
   bannerType: DeepResearchBannerType
   /** Job ID for identification */
   jobId: string
+  /** Execution engine selected when the job was submitted */
+  researchEngine?: ResearchEngine
   /** Total tokens used (for success banner) */
   totalTokens?: number
   /** Number of tool calls (for success banner) */
@@ -425,6 +430,8 @@ export interface ChatState {
   isDeepResearchStreaming: boolean
   /** Current deep research job status */
   deepResearchStatus: DeepResearchJobStatus | null
+  /** Execution engine selected for the current deep research job */
+  deepResearchEngine: ResearchEngine
   /** Conversation ID that owns the current deep research stream (for session isolation) */
   deepResearchOwnerConversationId: string | null
   /** Message ID of the originating deep research message (for patching on completion) */
@@ -616,13 +623,14 @@ export interface ChatActions {
     bannerType: DeepResearchBannerType,
     jobId: string,
     conversationId?: string,
-    stats?: { totalTokens?: number; toolCallCount?: number }
+    stats?: { totalTokens?: number; toolCallCount?: number },
+    researchEngine?: ResearchEngine
   ) => void
 
   // Deep research SSE actions
 
   /** Start deep research streaming with a job ID and optional originating message ID */
-  startDeepResearch: (jobId: string, messageId?: string) => void
+  startDeepResearch: (jobId: string, messageId?: string, researchEngine?: ResearchEngine) => void
   /** Update deep research job status */
   updateDeepResearchStatus: (status: DeepResearchJobStatus) => void
   /** Update the last received SSE event ID (for reconnection) */

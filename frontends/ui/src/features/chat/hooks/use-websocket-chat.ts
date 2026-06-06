@@ -350,7 +350,8 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           }
 
           // Add 'starting' banner as a persistent message
-          addDeepResearchBanner('starting', jobId)
+          const selectedResearchEngine = useLayoutStore.getState().researchEngine ?? 'aiq'
+          addDeepResearchBanner('starting', jobId, undefined, undefined, selectedResearchEngine)
 
           // Create tracking message with empty content (won't render due to content guard)
           // This message carries job metadata for session restoration
@@ -365,7 +366,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
             }
           )
           // Start deep research SSE streaming bound to this message
-          startDeepResearch(jobId, messageId)
+          startDeepResearch(jobId, messageId, selectedResearchEngine)
           // Keep isStreaming=true to block input - deep research will release it on completion
           setLoading(false)
           // Don't add this as final response - let SSE handle the rest

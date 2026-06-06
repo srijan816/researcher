@@ -32,6 +32,7 @@ import type {
   DeepResearchFile,
   DeepResearchActivity,
   DeepResearchBannerType,
+  ResearchEngine,
   ResearchHistoryJob,
 } from './types'
 import { getErrorMeta } from './lib/error-registry'
@@ -226,6 +227,7 @@ const initialState: ChatState = {
   deepResearchLastEventId: null,
   isDeepResearchStreaming: false,
   deepResearchStatus: null,
+  deepResearchEngine: 'aiq',
   deepResearchOwnerConversationId: null,
   activeDeepResearchMessageId: null,
   deepResearchCitations: [],
@@ -1979,9 +1981,11 @@ export const useChatStore = create<ChatStore>()(
           bannerType: DeepResearchBannerType,
           jobId: string,
           conversationId?: string,
-          stats?: { totalTokens?: number; toolCallCount?: number }
+          stats?: { totalTokens?: number; toolCallCount?: number },
+          researchEngine?: ResearchEngine
         ) => {
-          const { currentConversation, conversations } = get()
+          const { currentConversation, conversations, deepResearchEngine } = get()
+          const resolvedResearchEngine = researchEngine ?? deepResearchEngine
 
           // Find target conversation: use conversationId if provided, otherwise currentConversation
           const targetConversation = conversationId
@@ -2015,6 +2019,7 @@ export const useChatStore = create<ChatStore>()(
             deepResearchBannerData: {
               bannerType,
               jobId,
+              researchEngine: resolvedResearchEngine,
               totalTokens: stats?.totalTokens,
               toolCallCount: stats?.toolCallCount,
             },
@@ -2054,7 +2059,7 @@ export const useChatStore = create<ChatStore>()(
         // Actions for deep research SSE streaming
         // ============================================================
 
-        startDeepResearch: (jobId: string, messageId?: string) => {
+        startDeepResearch: (jobId: string, messageId?: string, researchEngine: ResearchEngine = 'aiq') => {
           const { currentConversation } = get()
           set(
             {
@@ -2062,6 +2067,7 @@ export const useChatStore = create<ChatStore>()(
               deepResearchLastEventId: null,
               isDeepResearchStreaming: true,
               deepResearchStatus: 'submitted',
+              deepResearchEngine: researchEngine,
               deepResearchOwnerConversationId: currentConversation?.id || null,
               activeDeepResearchMessageId: messageId || null,
               // Clear deep research execution content (but keep planMessages from planning phase)

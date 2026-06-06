@@ -64,6 +64,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
   const deepResearchJobId = useChatStore((state) => state.deepResearchJobId)
   const deepResearchStreamLoaded = useChatStore((state) => state.deepResearchStreamLoaded)
   const deepResearchStatus = useChatStore((state) => state.deepResearchStatus)
+  const deepResearchEngine = useChatStore((state) => state.deepResearchEngine)
   const deepResearchActivity = useChatStore((state) => state.deepResearchActivity)
   const deepResearchAgents = useChatStore((state) => state.deepResearchAgents)
   const deepResearchToolCalls = useChatStore((state) => state.deepResearchToolCalls)
@@ -96,6 +97,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
     const completedTools = deepResearchToolCalls.filter((tool) => tool.status === 'complete').length
     return { runningAgents, completedAgents, runningTools, completedTools, files: deepResearchFiles.length }
   }, [deepResearchAgents, deepResearchToolCalls, deepResearchFiles])
+  const researchEngineLabel = deepResearchEngine === 'claude_code' ? 'Claude Code' : 'AIQ'
 
   const handleClose = useCallback(() => {
     closeRightPanel()
@@ -281,7 +283,10 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
                 )}
                 <Flex direction="col" gap="0" className="min-w-0 flex-1">
                   <Text kind="label/semibold/sm" className="truncate text-primary">
-                    {deepResearchActivity?.message || (deepResearchStatus === 'submitted' ? 'Research job queued' : 'Research activity')}
+                    {deepResearchActivity?.message ||
+                      (deepResearchStatus === 'submitted'
+                        ? `${researchEngineLabel} research job queued`
+                        : `${researchEngineLabel} research activity`)}
                   </Text>
                   <Text kind="body/regular/xs" className="truncate text-subtle">
                     {deepResearchActivity?.detail || 'Waiting for the next research event'}

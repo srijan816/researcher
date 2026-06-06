@@ -323,6 +323,41 @@ class TestChatResearcherAgent:
         assert calls == {"shallow": 0, "deep": 1}
 
     @pytest.mark.asyncio
+    async def test_async_deep_submission_preserves_selected_agent_type(
+        self,
+        mock_intent_classifier,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        """The UI-selected async research engine must survive graph invocation."""
+        submitted_agent_types: list[str] = []
+
+        async def submit_job(state):
+            submitted_agent_types.append(state.agent_type)
+            return "job-123"
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=mock_intent_classifier,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+            deep_research_job_submitter=submit_job,
+        )
+
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Audit the research workflow")],
+            research_depth="deeper",
+            agent_type="claude_researcher",
+            force_deep_research=True,
+        )
+        result = await agent.run(state, thread_id="test-thread")
+
+        assert result is not None
+        assert submitted_agent_types == ["claude_researcher"]
+
+    @pytest.mark.asyncio
     async def test_run_with_empty_messages(
         self,
         mock_intent_classifier,

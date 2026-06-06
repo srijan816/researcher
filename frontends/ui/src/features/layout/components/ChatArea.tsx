@@ -340,6 +340,7 @@ const MessageRenderer: FC<MessageRendererProps> = ({
         <DeepResearchBanner
           bannerType={message.deepResearchBannerData.bannerType}
           jobId={message.deepResearchBannerData.jobId}
+          researchEngine={message.deepResearchBannerData.researchEngine}
           totalTokens={message.deepResearchBannerData.totalTokens}
           toolCallCount={message.deepResearchBannerData.toolCallCount}
           timestamp={message.timestamp}
