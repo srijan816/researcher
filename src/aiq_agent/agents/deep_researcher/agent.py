@@ -61,6 +61,7 @@ from .custom_middleware import EmptyContentFixMiddleware
 from .custom_middleware import PlanFileValidationMiddleware
 from .custom_middleware import PlannerCommitGuardMiddleware
 from .custom_middleware import PostWriteReadbackGuardMiddleware
+from .custom_middleware import ReportEditCircuitBreakerMiddleware
 from .custom_middleware import SearchBudgetExhaustionRepairMiddleware
 from .custom_middleware import SequentialSearchMiddleware
 from .custom_middleware import SourceRegistryMiddleware
@@ -78,6 +79,7 @@ from .custom_middleware import reset_session_parallel_tool_limits
 from .custom_middleware import reset_session_plan_validation_failures
 from .custom_middleware import reset_session_planner_model_turns
 from .custom_middleware import reset_session_recent_artifact_writes
+from .custom_middleware import reset_session_report_edit_failures
 from .custom_middleware import reset_session_task_search_counts
 from .custom_middleware import reset_session_tool_counts
 from .custom_middleware import reset_session_tool_limits
@@ -86,6 +88,7 @@ from .custom_middleware import set_session_parallel_tool_limits
 from .custom_middleware import set_session_plan_validation_failures
 from .custom_middleware import set_session_planner_model_turns
 from .custom_middleware import set_session_recent_artifact_writes
+from .custom_middleware import set_session_report_edit_failures
 from .custom_middleware import set_session_task_search_counts
 from .custom_middleware import set_session_tool_counts
 from .custom_middleware import set_session_tool_limits
@@ -532,6 +535,7 @@ class DeepResearcherAgent:
             ToolArgumentNormalizationMiddleware(),
             PlanFileValidationMiddleware(),
             ArtifactWriteValidationMiddleware(),
+            ReportEditCircuitBreakerMiddleware(),
             PostWriteReadbackGuardMiddleware(),
             TaskBatchLimitMiddleware(task_tool_name="task", defer_tool_name="defer_task"),
             SequentialSearchMiddleware(
@@ -3165,6 +3169,7 @@ class DeepResearcherAgent:
         plan_validation_failures_token = set_session_plan_validation_failures(0)
         planner_model_turns_token = set_session_planner_model_turns(0)
         recent_artifact_writes_token = set_session_recent_artifact_writes({})
+        report_edit_failures_token = set_session_report_edit_failures(0)
         task_search_counts_token = set_session_task_search_counts({})
 
         messages = state.messages
@@ -3507,4 +3512,5 @@ class DeepResearcherAgent:
             reset_session_plan_validation_failures(plan_validation_failures_token)
             reset_session_planner_model_turns(planner_model_turns_token)
             reset_session_recent_artifact_writes(recent_artifact_writes_token)
+            reset_session_report_edit_failures(report_edit_failures_token)
             reset_session_task_search_counts(task_search_counts_token)

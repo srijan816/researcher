@@ -62,6 +62,9 @@ _session_recent_artifact_writes: contextvars.ContextVar[dict[str, int] | None] =
 _session_task_search_counts: contextvars.ContextVar[dict[str, int] | None] = contextvars.ContextVar(
     "_deep_research_session_task_search_counts", default=None
 )
+_session_report_edit_failures: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+    "_deep_research_session_report_edit_failures", default=None
+)
 
 _SEARCH_TOOL_FAMILY = {"advanced_web_search_tool", "web_search_tool", "exa_web_search_tool"}
 _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
@@ -145,6 +148,16 @@ def set_session_task_search_counts(counts: dict[str, int] | None) -> contextvars
 def reset_session_task_search_counts(token: contextvars.Token) -> None:
     """Restore previous per-researcher-task search counts."""
     _session_task_search_counts.reset(token)
+
+
+def set_session_report_edit_failures(count: int | None) -> contextvars.Token:
+    """Set the per-run failed `/report.md` edit counter."""
+    return _session_report_edit_failures.set(count)
+
+
+def reset_session_report_edit_failures(token: contextvars.Token) -> None:
+    """Restore the previous failed `/report.md` edit counter."""
+    _session_report_edit_failures.reset(token)
 
 
 def _budget_key(tool_name: str, scope: str | None = None) -> str:
@@ -1071,6 +1084,93 @@ class PostWriteReadbackGuardMiddleware(AgentMiddleware):
                 recent_writes = {}
             recent_writes[path] = self.suppress_read_count
             _session_recent_artifact_writes.set(recent_writes)
+        return result
+
+
+class ReportEditCircuitBreakerMiddleware(AgentMiddleware):
+    """Prevent `/report.md` repair loops from burning turns on brittle edits.
+
+    DeepAgents' `edit_file` requires an exact `old_string`. During final report
+    repair, models often try to edit huge source/reference blocks or long body
+    paragraphs that differ by whitespace, escaped entities, or duplicate
+    occurrences. A failed large edit then causes read/grep/think/debug loops.
+    Reports should be verified before the first write; after a report exists,
+    repeated or high-risk edit attempts should stop and ship the existing
+    artifact for deterministic post-processing.
+    """
+
+    def __init__(self, *, max_failed_edits: int = 2, max_safe_edit_chars: int = 2500) -> None:
+        self.max_failed_edits = max(1, max_failed_edits)
+        self.max_safe_edit_chars = max(200, max_safe_edit_chars)
+
+    @staticmethod
+    def _target_path(args: dict) -> str:
+        return str(args.get("file_path") or args.get("path") or args.get("filename") or "").strip()
+
+    @staticmethod
+    def _is_report_edit(tool_name: str, args: dict) -> bool:
+        return tool_name == "edit_file" and ReportEditCircuitBreakerMiddleware._target_path(args) == "/report.md"
+
+    @staticmethod
+    def _edit_failed(result: ToolMessage) -> bool:
+        content = str(result.content or "")
+        return (
+            "Error:" in content
+            or "String not found" in content
+            or "validation error" in content.lower()
+            or "missing" in content.lower()
+        )
+
+    @staticmethod
+    def _stop_message(reason: str, tool_call: dict) -> ToolMessage:
+        return ToolMessage(
+            content=(
+                f"REPORT_EDIT_BLOCKED: {reason}\n\n"
+                "Do not debug `/report.md` with more read_file, grep, think, or edit_file calls. "
+                "The report artifact already exists. Stop repair attempts now and return exactly "
+                "`REPORT_WRITTEN:/report.md`. The runtime will perform deterministic citation/reference "
+                "post-processing after the agent returns."
+            ),
+            tool_call_id=tool_call.get("id", ""),
+            name=tool_call.get("name", "edit_file"),
+        )
+
+    async def awrap_tool_call(self, request, handler):
+        tool_call = request.tool_call if hasattr(request, "tool_call") else {}
+        tool_name = tool_call.get("name", "")
+        args = tool_call.get("args") or {}
+        if not isinstance(args, dict) or not self._is_report_edit(tool_name, args):
+            return await handler(request)
+
+        old_string = str(args.get("old_string") or "")
+        new_string = str(args.get("new_string") or "")
+        failures = _session_report_edit_failures.get()
+        failures = 0 if failures is None else failures
+
+        if failures >= self.max_failed_edits:
+            logger.warning("Blocked /report.md edit after %d failed attempts", failures)
+            return self._stop_message(f"{failures} previous report edit attempts failed.", tool_call)
+
+        if len(old_string) > self.max_safe_edit_chars or len(new_string) > self.max_safe_edit_chars:
+            logger.warning(
+                "Blocked large /report.md edit attempt old=%d chars new=%d chars",
+                len(old_string),
+                len(new_string),
+            )
+            return self._stop_message(
+                "The proposed report edit is too large for exact-string replacement and is likely to fail.",
+                tool_call,
+            )
+
+        result = await handler(request)
+        if isinstance(result, ToolMessage) and self._edit_failed(result):
+            failures += 1
+            _session_report_edit_failures.set(failures)
+            if failures >= self.max_failed_edits:
+                logger.warning("Report edit circuit breaker tripped after %d failed attempts", failures)
+                return self._stop_message(f"{failures} report edit attempts failed.", tool_call)
+        elif isinstance(result, ToolMessage):
+            _session_report_edit_failures.set(0)
         return result
 
 

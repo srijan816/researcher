@@ -30,6 +30,7 @@ from aiq_agent.agents.deep_researcher.custom_middleware import ArtifactWriteVali
 from aiq_agent.agents.deep_researcher.custom_middleware import PlanFileValidationMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import PlannerCommitGuardMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import PostWriteReadbackGuardMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import ReportEditCircuitBreakerMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SearchBudgetExhaustionRepairMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import TaskSearchBudgetMiddleware
@@ -45,6 +46,7 @@ from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_exh
 from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_plan_validation_failures
 from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_planner_model_turns
 from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_recent_artifact_writes
+from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_report_edit_failures
 from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_task_search_counts
 from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_tool_counts
 from aiq_agent.agents.deep_researcher.custom_middleware import reset_session_tool_limits
@@ -52,6 +54,7 @@ from aiq_agent.agents.deep_researcher.custom_middleware import set_session_exhau
 from aiq_agent.agents.deep_researcher.custom_middleware import set_session_plan_validation_failures
 from aiq_agent.agents.deep_researcher.custom_middleware import set_session_planner_model_turns
 from aiq_agent.agents.deep_researcher.custom_middleware import set_session_recent_artifact_writes
+from aiq_agent.agents.deep_researcher.custom_middleware import set_session_report_edit_failures
 from aiq_agent.agents.deep_researcher.custom_middleware import set_session_task_search_counts
 from aiq_agent.agents.deep_researcher.custom_middleware import set_session_tool_counts
 from aiq_agent.agents.deep_researcher.custom_middleware import set_session_tool_limits
@@ -936,6 +939,72 @@ class TestPostWriteReadbackGuardMiddleware:
             assert handler.await_count == 1
         finally:
             reset_session_recent_artifact_writes(token)
+
+
+class TestReportEditCircuitBreakerMiddleware:
+    """Tests for preventing runaway `/report.md` exact-string edit loops."""
+
+    class Request:
+        def __init__(self, *, old_string: str = "old", new_string: str = "new"):
+            self.tool_call = {
+                "name": "edit_file",
+                "id": "report-edit",
+                "args": {
+                    "file_path": "/report.md",
+                    "old_string": old_string,
+                    "new_string": new_string,
+                },
+            }
+
+    @pytest.mark.asyncio
+    async def test_blocks_large_report_edit_before_tool_execution(self):
+        middleware = ReportEditCircuitBreakerMiddleware(max_safe_edit_chars=200)
+        token = set_session_report_edit_failures(0)
+        handler = AsyncMock(return_value=ToolMessage(content="edited", tool_call_id="report-edit"))
+        try:
+            result = await middleware.awrap_tool_call(
+                self.Request(old_string="x" * 300, new_string="replacement"),
+                handler,
+            )
+
+            assert handler.await_count == 0
+            assert "REPORT_EDIT_BLOCKED" in result.content
+            assert "REPORT_WRITTEN:/report.md" in result.content
+        finally:
+            reset_session_report_edit_failures(token)
+
+    @pytest.mark.asyncio
+    async def test_allows_small_successful_report_edit(self):
+        middleware = ReportEditCircuitBreakerMiddleware(max_safe_edit_chars=100)
+        token = set_session_report_edit_failures(0)
+        handler = AsyncMock(return_value=ToolMessage(content="Edited file /report.md", tool_call_id="report-edit"))
+        try:
+            result = await middleware.awrap_tool_call(self.Request(), handler)
+
+            assert handler.await_count == 1
+            assert result.content == "Edited file /report.md"
+        finally:
+            reset_session_report_edit_failures(token)
+
+    @pytest.mark.asyncio
+    async def test_trips_after_repeated_report_edit_failures(self):
+        middleware = ReportEditCircuitBreakerMiddleware(max_failed_edits=2, max_safe_edit_chars=100)
+        token = set_session_report_edit_failures(0)
+        handler = AsyncMock(
+            side_effect=[
+                ToolMessage(content="Error: String not found in file: old", tool_call_id="report-edit"),
+                ToolMessage(content="Error: String not found in file: old", tool_call_id="report-edit"),
+            ]
+        )
+        try:
+            first = await middleware.awrap_tool_call(self.Request(), handler)
+            second = await middleware.awrap_tool_call(self.Request(), handler)
+
+            assert "String not found" in first.content
+            assert "REPORT_EDIT_BLOCKED" in second.content
+            assert handler.await_count == 2
+        finally:
+            reset_session_report_edit_failures(token)
 
 
 class TestPlannerCommitGuardMiddleware:
