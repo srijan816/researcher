@@ -931,6 +931,51 @@ class TestClarifierAgentPlanScopeGuards:
         assert sections[0] == "Executive Summary and Ranking Criteria"
         assert "Ranked Top 10 AI Use Cases" in sections
 
+    def test_debate_training_prompt_gets_query_contract_before_llm(self, agent):
+        """Lesson/debate prompts should not be reduced to the format label or generic buckets."""
+        query = (
+            "Create a complete slide-deck-ready research document on social change, social justice, "
+            "and social movements to create a world-class WSDC/BP competitive debate training session. "
+            "Cover definitions and philosophy, major social movement theories, success/failure metrics, "
+            "tactics, digital media, intersectionality, comparative case studies, backlash, and debate "
+            "applications with sample motions and speaker notes."
+        )
+
+        title, sections, source = agent._plan_contract_from_query(query)
+
+        assert source == "training"
+        assert title == "Social Change, Social Justice, and Social Movements Training Research Dossier"
+        assert "Definitions, Philosophical Foundations, and Core Terms" in sections
+        assert "Comparative Case Studies and Debate Applications" in sections
+
+    def test_generic_training_plan_violates_query_contract(self, agent):
+        """Generic plans for rich training requests should be repaired or replaced before approval."""
+        query = (
+            "Create a complete slide-deck-ready research document on social change, social justice, "
+            "and social movements to create a world-class WSDC/BP competitive debate training session. "
+            "Cover definitions and philosophy, major social movement theories, success/failure metrics, "
+            "tactics, digital media, intersectionality, comparative case studies, backlash, and debate "
+            "applications with sample motions and speaker notes."
+        )
+        contract_title, contract_sections, contract_source = agent._plan_contract_from_query(query)
+
+        issue = agent._plan_quality_issue(
+            "WSDC/BP Debate Training Plan",
+            [
+                "Training Landscape",
+                "Recent Evidence and Signals",
+                "Capability Gaps",
+                "Adoption Risks and Recommendations",
+            ],
+            query,
+            contract_title=contract_title,
+            contract_sections=contract_sections,
+            contract_source=contract_source,
+        )
+
+        assert issue is not None
+        assert "plan contract" in issue or "fallback-like" in issue
+
 
 class TestClarifierAgentPlanApproval:
     """Tests for plan approval workflow."""
@@ -1054,6 +1099,69 @@ class TestClarifierAgentPlanApproval:
             "Adaptive Teaching Loops",
             "RAG and Knowledge Graph Stack",
             "Content Verification and Evaluation",
+        ]
+        assert mock_planner_llm.ainvoke.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_training_plan_uses_contract_when_model_and_repair_are_generic(
+        self, mock_llm_provider, mock_llm, mock_planner_llm
+    ):
+        """The approval UI should show the query contract if the planner keeps underfitting."""
+        complete_response = ClarificationResponse(needs_clarification=False, clarification_question=None)
+        mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content=complete_response.model_dump_json()))
+
+        weak_plan = json.dumps(
+            {
+                "title": "WSDC/BP Debate Training Plan",
+                "sections": [
+                    "Training Landscape",
+                    "Recent Evidence and Signals",
+                    "Capability Gaps",
+                    "Adoption Risks and Recommendations",
+                ],
+            }
+        )
+        invalid_repair = "not json"
+        call_index = 0
+
+        async def planner_side_effect(messages):
+            nonlocal call_index
+            rendered_prompt = messages[0].content
+            assert "DERIVED PLAN CONTRACT:" in rendered_prompt
+            assert "Comparative Case Studies and Debate Applications" in rendered_prompt
+            content = weak_plan if call_index == 0 else invalid_repair
+            call_index += 1
+            return AIMessage(content=content)
+
+        mock_planner_llm.ainvoke = AsyncMock(side_effect=planner_side_effect)
+        mock_user_callback = AsyncMock(return_value="approve")
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            user_prompt_callback=mock_user_callback,
+            enable_plan_approval=True,
+            planner_llm=mock_planner_llm,
+        )
+
+        query = (
+            "Create a complete slide-deck-ready research document on social change, social justice, "
+            "and social movements to create a world-class WSDC/BP competitive debate training session. "
+            "Cover definitions and philosophy, major social movement theories, success/failure metrics, "
+            "tactics, digital media, intersectionality, comparative case studies, backlash, and debate "
+            "applications with sample motions and speaker notes."
+        )
+        result = await agent.run(ClarifierAgentState(messages=[HumanMessage(content=query)]))
+
+        assert result.plan_approved is True
+        assert result.plan_title == "Social Change, Social Justice, and Social Movements Training Research Dossier"
+        assert result.plan_sections == [
+            "Research Scope, Audience, and Training Objectives",
+            "Definitions, Philosophical Foundations, and Core Terms",
+            "Major Theories, Mechanisms, and Causal Models",
+            "Success Metrics, Evidence Standards, and Critiques",
+            "Tactics, Organization, Digital Media, and Repression",
+            "Intersectionality, Backlash, and Global Perspectives",
+            "Comparative Case Studies and Debate Applications",
         ]
         assert mock_planner_llm.ainvoke.await_count == 2
 

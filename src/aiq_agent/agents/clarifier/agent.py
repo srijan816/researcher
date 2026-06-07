@@ -691,6 +691,136 @@ class ClarifierAgent:
         ]
 
     @staticmethod
+    def _plan_contract_from_query(query: str | None) -> tuple[str, list[str], str]:
+        """
+        Derive the minimum approval-plan contract before asking an LLM to polish it.
+
+        Strong research systems use planning as a control surface: the first plan must
+        preserve the user's stated deliverable, source strategy, and major modules.
+        This parser gives the approval UI a topic-specific floor so model JSON failures
+        or weak summaries cannot collapse a rich prompt into generic fallback headings.
+        """
+        clean_query = ClarifierAgent._strip_research_role_preamble(query)
+        explicit_plan = ClarifierAgent._deterministic_plan_from_query(clean_query)
+        if explicit_plan:
+            return explicit_plan[0], explicit_plan[1], "explicit"
+
+        training_plan = ClarifierAgent._training_plan_contract_from_query(clean_query)
+        if training_plan:
+            return training_plan[0], training_plan[1], "training"
+
+        build_title = ClarifierAgent._build_concept_plan_title(clean_query)
+        build_sections = ClarifierAgent._build_concept_plan_sections(clean_query)
+        if build_title and build_sections:
+            return build_title, build_sections, "build_concept"
+
+        long_form_plan = ClarifierAgent._long_form_plan_contract_from_query(clean_query)
+        if long_form_plan:
+            return long_form_plan[0], long_form_plan[1], "long_form"
+
+        return (
+            ClarifierAgent._fallback_plan_title(clean_query),
+            ClarifierAgent._fallback_plan_sections(clean_query),
+            "fallback",
+        )
+
+    @staticmethod
+    def _training_plan_contract_from_query(query: str | None) -> tuple[str, list[str]] | None:
+        """Build a plan contract for lesson, slide-deck, and debate-training requests."""
+        normalized = re.sub(r"\s+", " ", query or "").strip()
+        if not normalized:
+            return None
+        lowered = normalized.lower()
+        training_signals = (
+            "wsdc",
+            "bp debate",
+            "competitive debate",
+            "debate training",
+            "training session",
+            "lesson plan",
+            "lesson topic",
+            "slide deck",
+            "slide-deck",
+            "speaker notes",
+            "motion",
+        )
+        if not any(signal in lowered for signal in training_signals):
+            return None
+
+        topic = ClarifierAgent._extract_training_topic(normalized)
+        title_topic = ClarifierAgent._title_case_phrase(topic) if topic else "Debate Training"
+        return (
+            f"{title_topic} Training Research Dossier",
+            [
+                "Research Scope, Audience, and Training Objectives",
+                "Definitions, Philosophical Foundations, and Core Terms",
+                "Major Theories, Mechanisms, and Causal Models",
+                "Success Metrics, Evidence Standards, and Critiques",
+                "Tactics, Organization, Digital Media, and Repression",
+                "Intersectionality, Backlash, and Global Perspectives",
+                "Comparative Case Studies and Debate Applications",
+            ],
+        )
+
+    @staticmethod
+    def _extract_training_topic(query: str) -> str:
+        """Extract the substantive lesson topic without treating WSDC/BP as the topic."""
+        patterns = [
+            r"\bExact lesson topic:\s*(.+?)(?:\.| Final debate motion:| Audience:|$)",
+            r"\bcovering\s+[\"“]([^\"”]{8,180})[\"”]",
+            r"\bon\s+[\"“]([^\"”]{8,180})[\"”]\s+(?:to\s+create|for\s+(?:a\s+)?(?:world-class|competitive|WSDC|BP|debate|training))",
+            r"\bon\s+(.{8,180}?)(?:\s+to\s+create\s+(?:a\s+)?(?:world-class|competitive|WSDC|BP|debate|training)|\s+for\s+(?:a\s+)?(?:world-class|competitive|WSDC|BP|debate|training)|\.)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, query, re.IGNORECASE)
+            if match:
+                topic = match.group(1).strip(' .,:;"“”')
+                topic = re.sub(
+                    r"\b(?:WSDC|BP|debate|training|session|slide[- ]deck|lesson)\b.*$",
+                    "",
+                    topic,
+                    flags=re.IGNORECASE,
+                ).strip(" .,:;")
+                if len(topic.split()) >= 2:
+                    return topic
+        return ClarifierAgent._fallback_plan_topic(query)
+
+    @staticmethod
+    def _long_form_plan_contract_from_query(query: str | None) -> tuple[str, list[str]] | None:
+        """Create a non-generic floor for detailed prompts with requirements/output formats."""
+        normalized = re.sub(r"\s+", " ", query or "").strip()
+        if len(normalized) < 650:
+            return None
+        lowered = normalized.lower()
+        long_form_signals = (
+            "core requirements",
+            "output format",
+            "for each",
+            "cover the following",
+            "research topics",
+            "produce a complete",
+            "structured report",
+            "cite",
+            "prioritise",
+            "prioritize",
+        )
+        if not any(signal in lowered for signal in long_form_signals):
+            return None
+
+        topic = ClarifierAgent._title_case_phrase(ClarifierAgent._fallback_plan_topic(normalized))
+        return (
+            f"{topic} Research Execution Plan",
+            [
+                "Research Scope and Success Criteria",
+                "Authoritative Source and Evidence Strategy",
+                "Core Subtopics and Knowledge Modules",
+                "Freshness, Counter-Evidence, and Risky Claims",
+                "Case Studies, Examples, and Comparative Evidence",
+                "Final Deliverable Structure and User-Ready Output",
+            ],
+        )
+
+    @staticmethod
     def _deterministic_plan_from_query(query: str | None) -> tuple[str, list[str]] | None:
         """
         Compile explicit report instructions into an approval plan.
@@ -920,9 +1050,12 @@ class ClarifierAgent:
     def _title_case_phrase(value: str) -> str:
         """Title-case a short concept without wrecking common AI abbreviations."""
         words = []
-        for word in re.sub(r"\s+", " ", value).strip().split():
+        small_words = {"and", "or", "the", "a", "an", "of", "to", "in", "on", "for", "with", "by"}
+        for index, word in enumerate(re.sub(r"\s+", " ", value).strip().split()):
             if word.upper() in {"AI", "LLM", "RAG", "API"}:
                 words.append(word.upper())
+            elif index > 0 and word.lower().strip(",:;") in small_words:
+                words.append(word.lower())
             else:
                 words.append(word[:1].upper() + word[1:].lower())
         return " ".join(words)
@@ -993,9 +1126,8 @@ class ClarifierAgent:
     ) -> tuple[str, list[str]]:
         """Replace planner/fallback text that leaked role instructions into the user-facing plan."""
         if self._looks_like_instruction_leak(title):
-            title = self._fallback_plan_title(query or "")
-        fallback_title = self._fallback_plan_title(query or "")
-        fallback_sections = self._fallback_plan_sections(query or "")
+            title = self._plan_contract_from_query(query or "")[0]
+        fallback_title, fallback_sections, _contract_source = self._plan_contract_from_query(query or "")
         explicit_plan = self._deterministic_plan_from_query(query)
         if self._is_weak_build_plan(title, sections, query) or self._is_underfit_explicit_report_plan(
             title,
@@ -1034,10 +1166,21 @@ class ClarifierAgent:
         ]
         return title, clean_sections or fallback_sections
 
-    def _plan_quality_issue(self, title: str | None, sections: list[str], query: str | None) -> str | None:
+    def _plan_quality_issue(
+        self,
+        title: str | None,
+        sections: list[str],
+        query: str | None,
+        contract_title: str | None = None,
+        contract_sections: list[str] | None = None,
+        contract_source: str | None = None,
+    ) -> str | None:
         """Return why a plan should be repaired before it reaches the approval UI."""
         if not title or not sections:
             return "The planner did not return both a title and section list."
+
+        if contract_title is None or contract_sections is None or contract_source is None:
+            contract_title, contract_sections, contract_source = self._plan_contract_from_query(query)
 
         if self._looks_like_instruction_leak(title) or any(self._looks_like_instruction_leak(s) for s in sections):
             return "The plan leaked role or task instructions instead of a user-facing research plan."
@@ -1068,7 +1211,67 @@ class ClarifierAgent:
         if explicit_plan and generic_count >= 2:
             return "The plan used coarse fallback-like headings instead of the user's explicit report structure."
 
+        contract_issue = self._plan_contract_coverage_issue(sections, contract_sections, contract_source)
+        if contract_issue:
+            return contract_issue
+
         return None
+
+    @staticmethod
+    def _plan_contract_coverage_issue(
+        sections: list[str],
+        contract_sections: list[str],
+        contract_source: str | None,
+    ) -> str | None:
+        """Check that model-polished plans still cover the deterministic contract."""
+        if not contract_sections or contract_source == "fallback":
+            return None
+        combined = " ".join(sections).lower()
+        covered = 0
+        for contract_section in contract_sections:
+            tokens = ClarifierAgent._section_signal_tokens(contract_section)
+            if tokens and any(token in combined for token in tokens):
+                covered += 1
+        required = min(4, max(2, (len(contract_sections) + 1) // 2))
+        if covered < required:
+            return (
+                "The plan does not preserve enough of the query-derived plan contract. "
+                "It should keep the user's requested modules, deliverable shape, and evidence strategy."
+            )
+        return None
+
+    @staticmethod
+    def _section_signal_tokens(section: str) -> list[str]:
+        """Return meaningful lowercase tokens for lightweight contract coverage checks."""
+        stop_words = {
+            "and",
+            "the",
+            "with",
+            "for",
+            "from",
+            "into",
+            "user",
+            "users",
+            "report",
+            "research",
+            "plan",
+            "final",
+            "core",
+            "major",
+            "specific",
+        }
+        raw_tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9-]{3,}", section.lower())
+        tokens: list[str] = []
+        for token in raw_tokens:
+            token = token.strip("-")
+            if token in stop_words:
+                continue
+            tokens.append(token)
+            if token.endswith("ies") and len(token) > 4:
+                tokens.append(f"{token[:-3]}y")
+            elif token.endswith("s") and len(token) > 4:
+                tokens.append(token[:-1])
+        return tokens[:8]
 
     @staticmethod
     def _plan_repair_prompt(
@@ -1076,15 +1279,26 @@ class ClarifierAgent:
         original_query: str | None,
         title: str | None,
         sections: list[str],
+        contract_title: str | None = None,
+        contract_sections: list[str] | None = None,
+        contract_source: str | None = None,
     ) -> str:
         """Build a focused repair request for a weak approval plan."""
         bad_sections = "; ".join(sections[:7]) if sections else "(none)"
+        contract_text = ""
+        if contract_sections and contract_source != "fallback":
+            contract_text = (
+                "\nQuery-derived plan contract to preserve:\n"
+                f"Contract title: {contract_title or '(none)'}\n"
+                "Required coverage:\n" + "\n".join(f"- {section}" for section in contract_sections) + "\n\n"
+            )
         return (
             "Your previous research plan is not acceptable for the approval UI.\n"
             f"Quality issue: {issue}\n\n"
             f"Original user request: {original_query or '(missing)'}\n"
             f"Previous title: {title or '(none)'}\n"
             f"Previous sections: {bad_sections}\n\n"
+            f"{contract_text}"
             "Regenerate the plan from the ORIGINAL user request, not from the previous title. "
             "Do not return generic buckets like Requirements, Architecture and Interfaces, "
             "Failure Paths and Guardrails, Implementation Plan, Scope and Criteria, Key Findings, "
@@ -1492,9 +1706,12 @@ class ClarifierAgent:
             feedback_history: list[str] = list(state.plan_feedback_history)
             original_query = self._get_original_query(state)
 
-            # Initialize with fallback values in case loop doesn't execute (max_plan_iterations <= 0)
-            title: str = self._fallback_plan_title(original_query)
-            sections: list[str] = self._fallback_plan_sections(original_query)
+            # Initialize from the query-derived contract in case the planner fails
+            # or max_plan_iterations <= 0. Generic fallback is only used for vague
+            # inputs where no richer contract can be derived.
+            contract_title, contract_sections, contract_source = self._plan_contract_from_query(original_query)
+            title: str = contract_title
+            sections: list[str] = list(contract_sections)
 
             for iteration in range(self.max_plan_iterations):
                 rendered_prompt = render_prompt_template(
@@ -1502,6 +1719,9 @@ class ClarifierAgent:
                     original_query=original_query,
                     clarifier_context=clarifier_log,
                     feedback_history=feedback_history if feedback_history else None,
+                    plan_contract_title=contract_title if contract_source != "fallback" else None,
+                    plan_contract_sections=contract_sections if contract_source != "fallback" else None,
+                    plan_contract_source=contract_source if contract_source != "fallback" else None,
                 )
 
                 # Generate plan using a clean, bounded message. The system prompt
@@ -1541,14 +1761,21 @@ class ClarifierAgent:
 
                 if not title or not sections:
                     logger.warning(
-                        "Failed to generate valid plan after retry, using fallback. Response excerpt: %s",
+                        "Failed to generate valid plan after retry, using query-derived contract. Response excerpt: %s",
                         last_plan_excerpt,
                     )
-                    title = self._fallback_plan_title(original_query)
-                    sections = self._fallback_plan_sections(original_query)
+                    title = contract_title
+                    sections = list(contract_sections)
 
                 title, sections = self._compact_plan_for_query(title, sections, original_query)
-                quality_issue = self._plan_quality_issue(title, sections, original_query)
+                quality_issue = self._plan_quality_issue(
+                    title,
+                    sections,
+                    original_query,
+                    contract_title=contract_title,
+                    contract_sections=contract_sections,
+                    contract_source=contract_source,
+                )
                 if quality_issue:
                     logger.warning("Planner produced weak approval plan; requesting model repair: %s", quality_issue)
                     repair_response = await planner_llm.ainvoke(
@@ -1560,6 +1787,9 @@ class ClarifierAgent:
                                     original_query,
                                     title,
                                     sections,
+                                    contract_title=contract_title,
+                                    contract_sections=contract_sections,
+                                    contract_source=contract_source,
                                 )
                             ),
                         ]
@@ -1571,24 +1801,31 @@ class ClarifierAgent:
                             repaired_sections,
                             original_query,
                         )
-                        repaired_issue = self._plan_quality_issue(repaired_title, repaired_sections, original_query)
+                        repaired_issue = self._plan_quality_issue(
+                            repaired_title,
+                            repaired_sections,
+                            original_query,
+                            contract_title=contract_title,
+                            contract_sections=contract_sections,
+                            contract_source=contract_source,
+                        )
                         if not repaired_issue:
                             title, sections = repaired_title, repaired_sections
                         else:
                             logger.warning(
-                                "Planner repair still produced a weak plan; using deterministic safety net: %s",
+                                "Planner repair still produced a weak plan; using query-derived contract: %s",
                                 repaired_issue,
                             )
-                            title = self._fallback_plan_title(original_query)
-                            sections = self._fallback_plan_sections(original_query)
+                            title = contract_title
+                            sections = list(contract_sections)
                     else:
                         logger.warning(
-                            "Planner repair did not return a valid plan; using deterministic safety net. "
+                            "Planner repair did not return a valid plan; using query-derived contract. "
                             "Response excerpt: %s",
                             self._plan_response_excerpt(repair_response.content),
                         )
-                        title = self._fallback_plan_title(original_query)
-                        sections = self._fallback_plan_sections(original_query)
+                        title = contract_title
+                        sections = list(contract_sections)
 
                 title, sections = self._sanitize_plan_for_query(title, sections, original_query)
 

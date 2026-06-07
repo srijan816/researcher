@@ -117,6 +117,17 @@ ORIGINAL USER REQUEST:
 {{ original_query }}
 {% endif %}
 
+{% if plan_contract_title and plan_contract_sections %}
+DERIVED PLAN CONTRACT:
+The deterministic query parser extracted this minimum viable approval plan. You may improve wording and grouping, but you must preserve the user's requested deliverable shape and substantive coverage.
+Contract source: {{ plan_contract_source }}
+Contract title: {{ plan_contract_title }}
+Required coverage:
+{% for section in plan_contract_sections %}
+- {{ section }}
+{% endfor %}
+{% endif %}
+
 {% if clarifier_context %}
 CLARIFICATION CONTEXT:
 {{ clarifier_context }}
