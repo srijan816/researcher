@@ -431,15 +431,31 @@ class DeepResearcherAgent:
                 self._upsert_live_virtual_file(path, content)
             research = artifacts.get("/shared/research.md", "")
             sources = artifacts.get("/shared/sources.json", "[]")
+            gaps = artifacts.get("/shared/gaps.md", "")
+            contradictions = artifacts.get("/shared/contradictions.md", "")
             try:
                 source_count = len(json.loads(sources))
             except Exception:
                 source_count = 0
+            research_excerpt = self._compact_tool_excerpt(research, char_limit=14000)
+            gaps_excerpt = self._compact_tool_excerpt(gaps, char_limit=1800)
+            contradictions_excerpt = self._compact_tool_excerpt(contradictions, char_limit=1800)
             return (
                 "Compiled research dossier artifacts: /shared/research.md, /shared/sources.json, "
                 "/shared/gaps.md, /shared/contradictions.md. "
                 f"Scored sources: {source_count}. "
-                f"Research brief chars: {len(research)}."
+                f"Research brief chars: {len(research)}.\n\n"
+                "SYNTHESIS_HANDOFF_START\n"
+                "Use this bounded handoff as the immediate synthesis substrate. The full artifacts are durable "
+                "and can be read if needed, but do not debug readback failures or suppressed read-after-write "
+                "confirmations; continue from this handoff and the researcher task returns.\n\n"
+                "## Research Brief Preview\n"
+                f"{research_excerpt or '(No research brief content compiled.)'}\n\n"
+                "## Gaps Preview\n"
+                f"{gaps_excerpt or '(No explicit gaps compiled.)'}\n\n"
+                "## Contradictions Preview\n"
+                f"{contradictions_excerpt or '(No explicit contradictions compiled.)'}\n"
+                "SYNTHESIS_HANDOFF_END"
             )
 
         async def async_ask_claude_code_specialist(stage: str, task: str) -> str:
@@ -1872,6 +1888,18 @@ class DeepResearcherAgent:
             "created_at": created_at or now,
             "modified_at": now,
         }
+
+    @staticmethod
+    def _compact_tool_excerpt(text: str, *, char_limit: int) -> str:
+        """Return a bounded excerpt suitable for tool output handoffs."""
+        text = (text or "").strip()
+        if len(text) <= char_limit:
+            return text
+        head_limit = max(0, int(char_limit * 0.72))
+        tail_limit = max(0, char_limit - head_limit - 120)
+        head = text[:head_limit].rstrip()
+        tail = text[-tail_limit:].lstrip() if tail_limit else ""
+        return f"{head}\n\n...[middle omitted from tool output; full artifact is in /shared/]...\n\n{tail}"
 
     @staticmethod
     def _normalize_files_state(files: dict[str, Any] | None) -> dict[str, Any]:
