@@ -46,6 +46,8 @@ from aiq_agent.common.source_quality_gates import evaluate_source_quality
 from .callbacks import AgentEventCallback
 from .event_store import BatchingEventStore
 from .event_store import EventStore
+from .webhooks import build_terminal_payload
+from .webhooks import send_job_webhook
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +203,40 @@ def _load_agent_class(agent_class_path: str) -> type:
     return getattr(module, class_name)
 
 
+async def _notify_terminal_webhook(
+    *,
+    webhook_config: dict[str, Any] | None,
+    event_store: EventStore | BatchingEventStore | None,
+    job_id: str,
+    status: str,
+    agent_config_name: str,
+    agent_class_path: str,
+    research_depth: str,
+    has_report: bool,
+    error: str | None = None,
+    quality_warnings: list[str] | None = None,
+    recovered: bool = False,
+) -> None:
+    """Send a best-effort terminal webhook and never fail the job on delivery errors."""
+    if not webhook_config:
+        return
+    payload = build_terminal_payload(
+        job_id=job_id,
+        status=status,
+        agent_config_name=agent_config_name,
+        agent_class_path=agent_class_path,
+        research_depth=research_depth,
+        has_report=has_report,
+        error=error,
+        quality_warnings=quality_warnings,
+        recovered=recovered,
+    )
+    try:
+        await send_job_webhook(config=webhook_config, payload=payload, event_store=event_store)
+    except Exception as exc:  # pragma: no cover - defensive guard around best-effort callback
+        logger.warning("Ignoring terminal webhook failure for job %s: %s", job_id, exc)
+
+
 async def run_agent_job(
     configure_logging: bool,
     log_level: int,
@@ -223,6 +259,7 @@ async def run_agent_job(
     auth_token: str | None = None,
     research_depth: ResearchDepthTier = DEFAULT_RESEARCH_DEPTH,
     resume_files: dict[str, Any] | None = None,
+    webhook_config: dict[str, Any] | None = None,
 ):
     """
     Dask task to run any registered agent with cancellation support and telemetry.
@@ -257,6 +294,8 @@ async def run_agent_job(
         research_depth: Source/depth tier for deep research workloads.
         resume_files: Optional virtual filesystem snapshot recovered from a
             previous failed attempt for the same job.
+        webhook_config: Optional terminal-status webhook config passed from
+            the API submit request.
     """
 
     # Propagate auth token into the current async task's context so tools
@@ -582,6 +621,17 @@ async def run_agent_job(
                         JobStatus.SUCCESS,
                         output=_build_success_output(report, quality_warnings=quality_warnings),
                     )
+                    await _notify_terminal_webhook(
+                        webhook_config=webhook_config,
+                        event_store=event_store,
+                        job_id=job_id,
+                        status=JobStatus.SUCCESS.value,
+                        agent_config_name=agent_config_name,
+                        agent_class_path=agent_class_path,
+                        research_depth=str(research_depth),
+                        has_report=True,
+                        quality_warnings=quality_warnings,
+                    )
                     logger.info(
                         "Job %s completed (report: %d chars, quality_warnings=%d)",
                         job_id,
@@ -625,6 +675,17 @@ async def run_agent_job(
                     },
                 }
             )
+        await _notify_terminal_webhook(
+            webhook_config=webhook_config,
+            event_store=event_store,
+            job_id=job_id,
+            status=JobStatus.INTERRUPTED.value if was_user_cancelled else JobStatus.FAILURE.value,
+            agent_config_name=agent_config_name,
+            agent_class_path=agent_class_path,
+            research_depth=str(research_depth),
+            has_report=False,
+            error=None if was_user_cancelled else "Worker task cancelled unexpectedly",
+        )
         if hasattr(event_store, "flush"):
             event_store.flush()
 
@@ -660,6 +721,19 @@ async def run_agent_job(
                     },
                 }
             )
+            await _notify_terminal_webhook(
+                webhook_config=webhook_config,
+                event_store=event_store,
+                job_id=job_id,
+                status=JobStatus.SUCCESS.value,
+                agent_config_name=agent_config_name,
+                agent_class_path=agent_class_path,
+                research_depth=str(research_depth),
+                has_report=True,
+                error=str(e),
+                quality_warnings=["Recovered a usable report from persisted artifacts after the original run failed."],
+                recovered=True,
+            )
             if hasattr(event_store, "flush"):
                 event_store.flush()
             logger.info(
@@ -682,6 +756,17 @@ async def run_agent_job(
                     "error_type": type(e).__name__,
                 },
             }
+        )
+        await _notify_terminal_webhook(
+            webhook_config=webhook_config,
+            event_store=event_store,
+            job_id=job_id,
+            status=JobStatus.FAILURE.value,
+            agent_config_name=agent_config_name,
+            agent_class_path=agent_class_path,
+            research_depth=str(research_depth),
+            has_report=False,
+            error=str(e),
         )
         if hasattr(event_store, "flush"):
             event_store.flush()

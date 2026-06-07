@@ -39,6 +39,7 @@ from .access import create_job_access
 from .access import rollback_job_submission
 from .event_store import EventStore
 from .runner import run_agent_job
+from .webhooks import build_job_webhook_config
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,9 @@ async def submit_agent_job(
     data_sources: list[str] | None = None,
     research_depth: ResearchDepthTier = DEFAULT_RESEARCH_DEPTH,
     auth_token: str | None = None,
+    webhook_url: str | None = None,
+    webhook_headers: dict[str, str] | None = None,
+    webhook_secret: str | None = None,
 ) -> str:
     """
     Submit an agent job to the Dask cluster.
@@ -145,6 +149,9 @@ async def submit_agent_job(
         research_depth: Source/depth tier for deep research workloads.
         auth_token: Optional auth token to propagate to the Dask worker for
             data sources that require authentication.
+        webhook_url: Optional terminal-status webhook endpoint.
+        webhook_headers: Optional static headers sent with webhook delivery.
+        webhook_secret: Optional HMAC signing secret for webhook delivery.
 
     Returns:
         The job ID.
@@ -221,6 +228,11 @@ async def submit_agent_job(
     job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
     resolved_job_id = job_store.ensure_job_id(job_id)
     loop = asyncio.get_running_loop()
+    webhook_config = build_job_webhook_config(
+        url=webhook_url,
+        headers=webhook_headers,
+        secret=webhook_secret,
+    )
 
     try:
         await job_store.submit_job(
@@ -242,6 +254,8 @@ async def submit_agent_job(
                 data_sources,
                 auth_token,
                 research_depth,
+                None,  # resume_files
+                webhook_config,
             ],
         )
         await loop.run_in_executor(None, create_job_access, resolved_job_id, principal, db_url)
@@ -256,6 +270,7 @@ async def submit_agent_job(
                         "owner": owner,
                         "data_sources": data_sources,
                         "research_depth": research_depth,
+                        "webhook_url": webhook_url,
                     },
                 }
             ),

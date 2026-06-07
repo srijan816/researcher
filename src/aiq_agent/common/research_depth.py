@@ -157,19 +157,19 @@ RESEARCH_DEPTH_CONFIGS: dict[ResearchDepthTier, ResearchDepthConfig] = {
     "medium": ResearchDepthConfig(
         tier="medium",
         label="Medium",
-        source_target="32-64",
-        max_researcher_tasks=5,
+        source_target="25-51",
+        max_researcher_tasks=4,
         max_parallel_researcher_tasks=3,
-        search_calls_per_task=14,
+        search_calls_per_task=11,
         planner_search_limit=1,
-        advanced_web_search_limit=77,
-        nominal_advanced_web_search_limit=64,
-        web_search_limit=24,
-        stock_quote_limit=10,
+        advanced_web_search_limit=62,
+        nominal_advanced_web_search_limit=51,
+        web_search_limit=19,
+        stock_quote_limit=8,
         planner_guidance=(
-            "Use the deeper evidence budget with a latency-first execution style: keep planning compact, "
-            "run bounded researcher tasks in parallel, and spend the adaptive reserve only on gap-filling, "
-            "weak-source replacement, or high-risk claim verification."
+            "Use a reduced latency-first evidence budget: keep planning compact, pack related questions into "
+            "up to 4 researcher tasks, run bounded tasks in parallel, and spend the adaptive reserve only on "
+            "gap-filling, weak-source replacement, or high-risk claim verification."
         ),
     ),
     "deep": ResearchDepthConfig(

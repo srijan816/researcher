@@ -592,7 +592,7 @@ class TestDeepResearcherAgent:
 
             assert agent._tool_limits_for_state(shallow)["advanced_web_search_tool"] == 20
             assert agent._tool_limits_for_state(shallow)["planner:advanced_web_search_tool"] == 1
-            assert agent._tool_limits_for_state(medium)["advanced_web_search_tool"] == 77
+            assert agent._tool_limits_for_state(medium)["advanced_web_search_tool"] == 62
             assert agent._tool_limits_for_state(medium)["planner:advanced_web_search_tool"] == 1
             assert agent._tool_limits_for_state(deeper)["advanced_web_search_tool"] == 92
             assert agent._tool_limits_for_state(deeper)["planner:advanced_web_search_tool"] == 1

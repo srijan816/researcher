@@ -39,9 +39,11 @@ from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.responses import Response
 from fastapi.responses import StreamingResponse
+from pydantic import AnyHttpUrl
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import SecretStr
 
 from aiq_agent.common import DEFAULT_RESEARCH_DEPTH
 from aiq_agent.common import ResearchDepthTier
@@ -66,6 +68,7 @@ class JobSubmitRequest(BaseModel):
                     "agent_type": "deep_researcher",
                     "input": "What are the latest advances in quantum computing?",
                     "research_depth": "deeper",
+                    "webhook_url": "https://example.com/aiq/webhook",
                     "job_id": None,
                     "expiry_seconds": 86400,
                 }
@@ -97,6 +100,27 @@ class JobSubmitRequest(BaseModel):
         ge=600,
         le=604800,
         description="Job expiry in seconds (default from config, max 7 days)",
+    )
+    webhook_url: AnyHttpUrl | None = Field(
+        None,
+        description=(
+            "Optional HTTPS/HTTP endpoint to POST once the async job reaches a terminal status. "
+            "Webhook delivery is best-effort and never blocks report availability."
+        ),
+    )
+    webhook_headers: dict[str, str] | None = Field(
+        None,
+        max_length=10,
+        description="Optional static headers to include in the terminal webhook POST.",
+    )
+    webhook_secret: SecretStr | None = Field(
+        None,
+        min_length=8,
+        max_length=512,
+        description=(
+            "Optional HMAC secret. When set, webhook requests include "
+            "X-AIQ-Webhook-Timestamp and X-AIQ-Webhook-Signature headers."
+        ),
     )
 
 
@@ -416,6 +440,9 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 auth_token=auth_token,
                 data_sources=req.data_sources,
                 research_depth=req.research_depth,
+                webhook_url=str(req.webhook_url) if req.webhook_url else None,
+                webhook_headers=req.webhook_headers,
+                webhook_secret=req.webhook_secret.get_secret_value() if req.webhook_secret else None,
             )
         except RuntimeError as e:
             raise HTTPException(403, str(e))

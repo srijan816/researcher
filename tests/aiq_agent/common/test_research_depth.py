@@ -7,9 +7,10 @@ def test_medium_is_first_class_depth_tier():
 
     assert normalize_research_depth("medium") == "medium"
     assert config.tier == "medium"
-    assert config.advanced_web_search_limit == 77
-    assert config.nominal_advanced_web_search_limit == 64
-    assert config.search_calls_per_task == 14
+    assert config.advanced_web_search_limit == 62
+    assert config.nominal_advanced_web_search_limit == 51
+    assert config.search_calls_per_task == 11
+    assert config.max_researcher_tasks == 4
     assert config.max_parallel_researcher_tasks == 3
 
 
@@ -39,9 +40,9 @@ def test_non_shallow_extra_budget_preserves_normal_active_research_speed():
     medium_profile = get_research_depth_config("medium").budget_profile(section_count=4)
     deep_profile = get_research_depth_config("deep").budget_profile(section_count=4)
 
-    assert medium_profile["total_search_calls"] == 77
-    assert medium_profile["active_search_calls"] == 54
-    assert medium_profile["reserve_search_calls"] == 23
+    assert medium_profile["total_search_calls"] == 62
+    assert medium_profile["active_search_calls"] == 43
+    assert medium_profile["reserve_search_calls"] == 19
     assert deep_profile["total_search_calls"] == 168
     assert deep_profile["active_search_calls"] == 119
     assert deep_profile["reserve_search_calls"] == 49

@@ -83,6 +83,21 @@ class TestJobSubmitRequest:
 
         assert req.research_depth == "deep"
 
+    def test_with_terminal_webhook(self):
+        """Test submit request accepts a terminal webhook endpoint."""
+        req = JobSubmitRequest(
+            agent_type="deep_researcher",
+            input="query",
+            webhook_url="https://example.com/aiq/hook",
+            webhook_headers={"X-Client": "abc"},
+            webhook_secret="secret-value",  # pragma: allowlist secret
+        )
+
+        assert str(req.webhook_url) == "https://example.com/aiq/hook"
+        assert req.webhook_headers == {"X-Client": "abc"}
+        assert req.webhook_secret is not None
+        assert req.webhook_secret.get_secret_value() == "secret-value"  # pragma: allowlist secret
+
     def test_with_custom_job_id(self):
         """Test submit request with custom job ID."""
         req = JobSubmitRequest(agent_type="deep_researcher", input="query", job_id="custom-123")
