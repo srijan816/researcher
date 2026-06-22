@@ -39,6 +39,10 @@ services:
       - WEBSURFX_URL=${WEBSURFX_URL:-http://websurfx:8080}
       - WEBSURFX_ENGINES=${WEBSURFX_ENGINES:-Searx,Brave,DuckDuckGo,LibreX,Mojeek,Qwant,Startpage,Yahoo,Bing,SepiaSearch}
       - AIQ_ADVANCED_DISCOVERY_BACKEND=${AIQ_ADVANCED_DISCOVERY_BACKEND:-websurfx_hybrid}
+      # Wave 2 W2.2 — Redis-backed LLM response cache (verifier verdicts).
+      # Defaults to the shared websurfx Redis with a "llmcache:" key prefix.
+      # Cache is fail-open: if unreachable, every LLM call still happens.
+      - REDIS_URL=${REDIS_URL:-redis://app2-aiq-websurfx-redis:6379/0}
       # Model cascade (Wave 1): leaf/mechanical roles use the high-speed variant.
       # Quality-critical roles (research/deep/planner/synthesis/text) stay on MiniMax-M3.
       - MINIMAX_FAST_MODEL=${MINIMAX_FAST_MODEL:-MiniMax-M2.7-highspeed}

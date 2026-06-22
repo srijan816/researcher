@@ -303,13 +303,57 @@ async def verify_claim(llm: Any, claim: SelectedClaim, *, timeout: float | None 
     }
     if not claim.evidence:
         return {**base, "verdict": "not_addressed", "confidence": 0.0, "note": "no_evidence_extracts"}
+
+    # Wave 2 W2.2 — Redis-backed verdict cache. Keyed by (model, claim, evidence)
+    # so a model upgrade invalidates old verdicts automatically. Fail-open: if
+    # the cache is unreachable, we still make the LLM call.
+    cache_key: str | None = None
+    try:
+        from aiq_agent.common.llm_cache import LLMResponseCache
+
+        cache = LLMResponseCache.instance()
+        if cache.enabled:
+            model_id = getattr(llm, "model_name", None) or getattr(llm, "model", "unknown")
+            cache_key = LLMResponseCache.make_key({
+                "role": "verifier",
+                "model": str(model_id),
+                "claim_id": claim.claim_id,
+                "claim_text": claim.claim_text,
+                "claim_type": claim.claim_type,
+                "evidence": tuple(claim.evidence),
+            })
+            cached = cache.get(cache_key)
+            if cached is not None:
+                logger.info(
+                    "aiq.metrics llm_cache_hit role=verifier claim_id=%s model=%s",
+                    claim.claim_id,
+                    model_id,
+                )
+                return {**base, **cached}
+    except Exception as exc:  # noqa: BLE001 - cache is best-effort
+        logger.debug("Verifier cache lookup failed for %s: %s", claim.claim_id, exc)
+
     try:
         effective_timeout = timeout if timeout is not None else verifier_timeout_seconds()
         response = await asyncio.wait_for(
             llm.ainvoke([HumanMessage(content=_verdict_prompt(claim))]),
             timeout=effective_timeout,
         )
-        return {**base, **parse_verdict_payload(_coerce_message_text(response))}
+        parsed = parse_verdict_payload(_coerce_message_text(response))
+        # Write-through: only cache parseable verdicts so we never poison the
+        # cache with malformed responses.
+        if cache_key is not None:
+            try:
+                from aiq_agent.common.llm_cache import LLMResponseCache
+
+                LLMResponseCache.instance().set(cache_key, parsed)
+                logger.info(
+                    "aiq.metrics llm_cache_miss role=verifier claim_id=%s",
+                    claim.claim_id,
+                )
+            except Exception:  # noqa: BLE001 - cache write is best-effort
+                logger.debug("Verifier cache write failed for %s", claim.claim_id, exc_info=True)
+        return {**base, **parsed}
     except Exception as exc:  # noqa: BLE001 - fail-open by design
         logger.debug("Adversarial verifier call failed for %s: %s", claim.claim_id, exc)
         return {**base, "verdict": "not_addressed", "confidence": 0.0, "note": f"verifier_call_failed: {exc}"[:200]}
