@@ -1590,6 +1590,24 @@ class TaskBatchLimitMiddleware(AgentMiddleware):
         active_limits = _session_parallel_tool_limits.get() or {}
         limit = max(1, int(active_limits.get(self.task_tool_name, self.default_limit)))
 
+        # Wave 3 W3.1a — count how many task() calls the model actually emits
+        # in a single response, regardless of whether deferral is needed.
+        emitted = 0
+        for msg in response.result:
+            if not isinstance(msg, AIMessage) or not msg.tool_calls:
+                continue
+            for tc in msg.tool_calls:
+                if tc.get("name") == self.task_tool_name:
+                    emitted += 1
+
+        if emitted:
+            logger.warning(
+                "aiq.metrics researcher_batch job_id=%s emitted=%d tier_limit=%d",
+                getattr(self, "_job_id", None) or "n/a",
+                emitted,
+                limit,
+            )
+
         needs_fix = False
         for msg in response.result:
             if not isinstance(msg, AIMessage) or not msg.tool_calls:
