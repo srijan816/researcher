@@ -81,7 +81,13 @@ services:
       context: ../..
       dockerfile: deploy/kokoro/Dockerfile
     image: ${KOKORO_IMAGE:-app2-kokoro-tts:latest}
-    container_name: app2-aiq-kokoro
+    # kokoro_onnx is not thread-safe across in-process instances (output corrupts under
+    # concurrency), so parallel synthesis is done by running N isolated containers. Docker DNS
+    # round-robins the `kokoro` name across replicas; the frontend's concurrent narration fetches
+    # spread across them. Host port publish removed (replicas can't share a fixed host port) —
+    # reach kokoro via the frontend proxy or the docker network. Scale via KOKORO_REPLICAS.
+    deploy:
+      replicas: ${KOKORO_REPLICAS:-3}
     environment:
       - KOKORO_MODEL_DIR=${KOKORO_MODEL_DIR:-/data/kokoro-models}
       - KOKORO_MODEL_URL=${KOKORO_MODEL_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx}
@@ -89,8 +95,6 @@ services:
       - KOKORO_AUTO_DOWNLOAD=${KOKORO_AUTO_DOWNLOAD:-1}
     volumes:
       - kokoro-data:/data/kokoro-models
-    ports:
-      - "127.0.0.1:${KOKORO_PORT:-3111}:8000"
     networks:
       - aiq-network
     healthcheck:

@@ -9,7 +9,6 @@ import threading
 import wave
 from functools import lru_cache
 from pathlib import Path
-from queue import Queue
 from typing import Literal
 from urllib.request import Request
 from urllib.request import urlopen
@@ -27,16 +26,17 @@ MODEL_FILE = "kokoro-v1.0.onnx"
 VOICES_FILE = "voices-v1.0.bin"
 DEFAULT_VOICE = "am_adam"
 DEFAULT_MAX_CHARS = 20000
-# Parallel synthesis: a pool of N Kokoro instances, one thread per instance. Kokoro's ONNX
-# inference releases the GIL, so multiple CPU cores synthesise concurrently. Chunk size raised
-# from 420 -> 1000 chars to cut the number of forward passes per request.
-DEFAULT_WORKERS = 3
+# Chunk size raised from 420 -> 1000 chars to cut the number of forward passes per request.
+# NOTE: kokoro_onnx is NOT thread-safe across in-process instances (shared global phonemizer /
+# ONNX state corrupts output under concurrency), so parallelism is achieved by running multiple
+# kokoro *containers* (deploy.replicas in docker-compose), not an in-process pool.
 DEFAULT_CHUNK_CHARS = 1000
 DEFAULT_MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
 DEFAULT_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
 app = FastAPI(title="Kokoro TTS", version="1.0.0")
 _asset_lock = threading.Lock()
+_model_lock = threading.Lock()
 
 
 class SpeechRequest(BaseModel):
@@ -68,17 +68,6 @@ def _max_chars() -> int:
     except ValueError:
         return DEFAULT_MAX_CHARS
     return value if value > 0 else DEFAULT_MAX_CHARS
-
-
-def _workers() -> int:
-    raw = os.environ.get("KOKORO_WORKERS")
-    if not raw:
-        return DEFAULT_WORKERS
-    try:
-        value = int(raw)
-    except ValueError:
-        return DEFAULT_WORKERS
-    return value if value > 0 else DEFAULT_WORKERS
 
 
 def _chunk_size() -> int:
@@ -210,28 +199,10 @@ def _ensure_assets() -> tuple[Path, Path]:
     return model_path, voices_path
 
 
-_models: list[Kokoro] = []
-_worker_pool: Queue | None = None
-
-
-@lru_cache(maxsize=1)
-def _build_worker_pool() -> Queue:
-    """Build a pool of Kokoro instances so multiple CPU cores synthesise in parallel."""
-    global _models, _worker_pool
-    model_path, voices_path = _ensure_assets()
-    _models = [Kokoro(str(model_path), str(voices_path)) for _ in range(_workers())]
-    pool: Queue = Queue()
-    for instance in _models:
-        pool.put((instance, threading.Lock()))
-    _worker_pool = pool
-    return pool
-
-
 @lru_cache(maxsize=1)
 def _get_model() -> Kokoro:
-    # Backwards-compatible accessor; warming also builds the whole worker pool.
-    _build_worker_pool()
-    return _models[0]
+    model_path, voices_path = _ensure_assets()
+    return Kokoro(str(model_path), str(voices_path))
 
 
 def _audio_content_type(audio: bytes) -> str:
@@ -243,20 +214,15 @@ def _synthesize(text: str, voice: str, speed: float, lang: str, response_format:
     if not clean_text:
         raise HTTPException(status_code=400, detail="Input text is empty")
 
-    pool = _build_worker_pool()
+    model = _get_model()
     audio_parts: list[np.ndarray] = []
     sample_rate = 24000
 
-    # Acquire one of N model instances; this bounds concurrent synthesis to KOKORO_WORKERS.
-    instance, instance_lock = pool.get()
-    try:
-        with instance_lock:
-            for chunk in _split_text(clean_text, _chunk_size()):
-                audio, sample_rate = instance.create(chunk, voice=voice, speed=speed, lang=lang)
-                audio_parts.append(np.asarray(audio, dtype=np.float32))
-                audio_parts.append(np.zeros(int(sample_rate * 0.18), dtype=np.float32))
-    finally:
-        pool.put((instance, instance_lock))
+    with _model_lock:
+        for chunk in _split_text(clean_text, _chunk_size()):
+            audio, sample_rate = model.create(chunk, voice=voice, speed=speed, lang=lang)
+            audio_parts.append(np.asarray(audio, dtype=np.float32))
+            audio_parts.append(np.zeros(int(sample_rate * 0.18), dtype=np.float32))
 
     if not audio_parts:
         raise HTTPException(status_code=500, detail="Kokoro produced no audio")
@@ -303,7 +269,6 @@ def health() -> JSONResponse:
             "voicesFile": VOICES_FILE,
             "defaultVoice": DEFAULT_VOICE,
             "maxTtsChars": _max_chars(),
-            "workers": _workers(),
             "chunkChars": _chunk_size(),
             "autoDownload": _env_bool("KOKORO_AUTO_DOWNLOAD", True),
         }
