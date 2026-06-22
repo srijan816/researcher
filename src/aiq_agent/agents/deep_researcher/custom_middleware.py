@@ -1762,7 +1762,21 @@ class SourceRegistryMiddleware(AgentMiddleware):
 
         from aiq_agent.common.citation_verification import _normalize_url
 
-        sources = self._get_registry().all_sources()
+        # Wave 3 W3.3 — optionally collapse near-duplicate sources (syndicated
+        # copies, wire-service paraphrases) before injecting into the prompt.
+        # The registry itself stays untouched; only the *presentation list*
+        # the LLM sees as candidate citations is deduped. Gated by env var so
+        # the default prompt-assembly path stays deterministic and embedding-free.
+        import os as _os
+
+        registry = self._get_registry()
+        if _os.environ.get("AIQ_SOURCE_DEDUP_EMBED", "").lower() in {"1", "true", "yes", "on"}:
+            sources = registry.deduped_sources(enable_embedding=True)
+        elif _os.environ.get("AIQ_SOURCE_DEDUP", "").lower() in {"1", "true", "yes", "on"}:
+            # Deterministic-only dedup (no API call). Cheap and always-on safe.
+            sources = registry.deduped_sources(enable_embedding=False)
+        else:
+            sources = registry.all_sources()
         if not sources:
             return None
 

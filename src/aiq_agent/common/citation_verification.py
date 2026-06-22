@@ -531,6 +531,49 @@ class SourceRegistry:
         """Return all registered sources."""
         return list(self._all)
 
+    def deduped_sources(
+        self,
+        enable_embedding: bool | None = None,
+        deduper: "SourceDeduper | None" = None,
+    ) -> list[SourceEntry]:
+        """Return :meth:`all_sources` with near-duplicates collapsed.
+
+        Wave 3 W3.3 — the *registry* stays untouched so every distinct URL
+        can still be cited, but the *presentation list* handed to the report
+        builder is collapsed to one representative per cluster.
+
+        Two-stage dedup:
+
+        1. Deterministic fingerprint (always on) — collapses entries with
+           identical ``(host, path, title)`` or identical citation_key.
+        2. Optional semantic embedding — collapses entries whose embedding
+           cosine similarity is ≥ threshold (default 0.92). Off by default;
+           enable via ``enable_embedding=True`` or ``AIQ_SOURCE_DEDUP_EMBED=1``.
+
+        Embedding errors degrade to stage-1-only output (the deduper is
+        fail-soft — it never blocks report assembly).
+        """
+        from .source_dedup import SourceDeduper
+
+        entries = self.all_sources()
+        if len(entries) <= 1:
+            return entries
+        d = deduper or SourceDeduper()
+        result = d.deduplicate(entries, enable_embedding=enable_embedding)
+        if result.stage1_collapses or result.stage2_collapses:
+            import logging as _logging
+
+            _logging.getLogger(__name__).info(
+                "[SourceDedup] %d source(s) → %d after dedup "
+                "(stage1=%d, stage2=%d, embedding_attempted=%s)",
+                len(entries),
+                len(result.kept),
+                result.stage1_collapses,
+                result.stage2_collapses,
+                result.embedding_attempted,
+            )
+        return result.kept
+
     def entry_for_url(self, url: str) -> SourceEntry | None:
         """Return the registry entry for a URL if it can be resolved."""
         resolved = self.resolve_url(url)

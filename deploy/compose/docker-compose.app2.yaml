@@ -43,6 +43,12 @@ services:
       # Defaults to the shared websurfx Redis with a "llmcache:" key prefix.
       # Cache is fail-open: if unreachable, every LLM call still happens.
       - REDIS_URL=${REDIS_URL:-redis://app2-aiq-websurfx-redis:6379/0}
+      # Wave 3 W3.3 — semantic source dedup in the report-builder prompt.
+      # Default off (deterministic + cheap). Set AIQ_SOURCE_DEDUP=1 to enable
+      # the fingerprint stage only, or AIQ_SOURCE_DEDUP_EMBED=1 to also run
+      # the NVIDIA-embedding semantic stage (one batched API call per report).
+      - AIQ_SOURCE_DEDUP=${AIQ_SOURCE_DEDUP:-}
+      - AIQ_SOURCE_DEDUP_EMBED=${AIQ_SOURCE_DEDUP_EMBED:-}
       # Model cascade (Wave 1): leaf/mechanical roles use the high-speed variant.
       # Quality-critical roles (research/deep/planner/synthesis/text) stay on MiniMax-M3.
       - MINIMAX_FAST_MODEL=${MINIMAX_FAST_MODEL:-MiniMax-M2.7-highspeed}
