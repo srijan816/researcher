@@ -213,7 +213,10 @@ def _api_key_user(row: Mapping[str, Any], token: str) -> dict[str, Any]:
         "name": name,
         "role": row.get("owner_role"),
         "token": token,
-        "skip_clarifier": False,
+        # Wave 2 W2.3 — API-key callers are programmatic; they cannot answer
+        # clarifying questions or approve a plan preview. Skip the clarifier
+        # node (which also implies no plan_preview) for every API-key request.
+        "skip_clarifier": True,
         "credential_type": "api_key",
         "api_key_id": key_id,
         "api_key_owner_type": owner_type,
@@ -276,6 +279,7 @@ class StaticAPIKeyValidator(TokenValidator):
                     "email": None,
                     "name": "API Key Client",
                     "token": token,
-                    "skip_clarifier": False,
+                    # Wave 2 W2.3 — see StaticAPIKeyValidator note above.
+                    "skip_clarifier": True,
                 }
         return None
