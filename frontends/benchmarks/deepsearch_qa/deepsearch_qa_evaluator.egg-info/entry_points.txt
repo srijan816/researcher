@@ -1,0 +1,2 @@
+[nat.plugins]
+deepsearch_qa_evaluator = deepsearch_qa_evaluator.register

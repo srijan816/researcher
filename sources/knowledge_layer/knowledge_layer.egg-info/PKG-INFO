@@ -1,0 +1,54 @@
+Metadata-Version: 2.4
+Name: knowledge-layer
+Version: 1.0.0
+Summary: NAT-based Knowledge Layer - pluggable document ingestion and retrieval
+License: Apache-2.0
+Requires-Python: <3.14,>=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: httpx>=0.24.0
+Requires-Dist: pydantic>=2.0.0
+Requires-Dist: python-dotenv>=1.0.0
+Provides-Extra: llamaindex
+Requires-Dist: llama-index>=0.10.0; extra == "llamaindex"
+Requires-Dist: llama-index-embeddings-nvidia>=0.1.0; extra == "llamaindex"
+Requires-Dist: llama-index-vector-stores-chroma>=0.1.0; extra == "llamaindex"
+Requires-Dist: chromadb>=0.4.0; extra == "llamaindex"
+Requires-Dist: pdfplumber>=0.10.0; extra == "llamaindex"
+Requires-Dist: pypdfium2>=5.0.0; extra == "llamaindex"
+Requires-Dist: Pillow>=9.0.0; extra == "llamaindex"
+Requires-Dist: openai>=1.0.0; extra == "llamaindex"
+Requires-Dist: docx2txt>=0.8; extra == "llamaindex"
+Provides-Extra: foundational-rag
+Requires-Dist: requests>=2.28.0; extra == "foundational-rag"
+Requires-Dist: urllib3<3,>=2.7.0; extra == "foundational-rag"
+Requires-Dist: docx2txt>=0.8; extra == "foundational-rag"
+Requires-Dist: python-pptx>=0.6.21; extra == "foundational-rag"
+Provides-Extra: all
+Requires-Dist: knowledge-layer[foundational_rag,llamaindex]; extra == "all"
+
+# Knowledge Layer
+
+Pluggable document ingestion and retrieval for NeMo Agent Toolkit workflows.
+
+For comprehensive documentation, see [`docs/KNOWLEDGE-LAYER-SETUP.md`](./KNOWLEDGE-LAYER-SETUP.md).
+
+## Installation
+
+```bash
+# With LlamaIndex backend (local dev)
+uv pip install -e "sources/knowledge_layer[llamaindex]"
+
+# With Foundational RAG (hosted production)
+uv pip install -e "sources/knowledge_layer[foundational_rag]"
+```
+
+## Available Backends
+
+| Backend | Vector Store | Best For |
+|---------|-------------|----------|
+| `llamaindex` | ChromaDB | Development, prototyping |
+| `foundational_rag` | Remote Milvus | Production, multi-user |
+
+## Usage
+
+See [Web UI Mode](./KNOWLEDGE-LAYER-SETUP.md#web-ui-mode) for document upload and chat interfaces.

@@ -1,0 +1,2 @@
+[nat.plugins]
+tavily_web_search = tavily_web_search.register

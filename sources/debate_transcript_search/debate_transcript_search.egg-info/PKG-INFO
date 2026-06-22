@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: debate-transcript-search
+Version: 1.0.0
+Summary: NAT local search tool for prepared debate transcript corpora
+Requires-Python: >=3.11
+Requires-Dist: pydantic>=2.0.0

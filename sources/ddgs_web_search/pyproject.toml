@@ -1,0 +1,20 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools >= 64", "setuptools-scm>=8"]
+
+[tool.setuptools]
+packages = ["ddgs_web_search"]
+package-dir = {"ddgs_web_search" = "src"}
+
+[project]
+name = "ddgs-web-search"
+version = "1.0.0"
+description = "NAT-based DuckDuckGo web search tool using ddgs library"
+requires-python = ">=3.11"
+dependencies = [
+    "ddgs>=7.0.0",
+    "pydantic>=2.0.0",
+]
+
+[project.entry-points."nat.plugins"]
+ddgs_web_search = "ddgs_web_search.register"

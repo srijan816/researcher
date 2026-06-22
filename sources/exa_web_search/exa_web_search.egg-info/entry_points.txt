@@ -1,0 +1,2 @@
+[nat.plugins]
+exa_web_search = exa_web_search.register

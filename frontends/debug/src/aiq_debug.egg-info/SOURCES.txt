@@ -1,0 +1,9 @@
+pyproject.toml
+src/aiq_debug/__init__.py
+src/aiq_debug/routes.py
+src/aiq_debug.egg-info/PKG-INFO
+src/aiq_debug.egg-info/SOURCES.txt
+src/aiq_debug.egg-info/dependency_links.txt
+src/aiq_debug.egg-info/requires.txt
+src/aiq_debug.egg-info/top_level.txt
+src/aiq_debug/static/deep_research_console.html

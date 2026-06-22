@@ -1,0 +1,2194 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Agent-agnostic async job API routes.
+
+Routes:
+    GET  /v1/jobs/async/agents                            - List available agent types
+    POST /v1/jobs/async/submit                            - Submit a new job for any agent
+    GET  /v1/jobs/async/job/{job_id}                      - Get job status
+    GET  /v1/jobs/async/job/{job_id}/stream               - SSE stream from beginning
+    GET  /v1/jobs/async/job/{job_id}/stream/{last_event_id} - SSE stream from event ID
+    POST /v1/jobs/async/job/{job_id}/cancel               - Cancel running job
+    GET  /v1/jobs/async/job/{job_id}/state                - Get artifacts from event store
+    GET  /v1/jobs/async/job/{job_id}/report               - Get final report
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from typing import TYPE_CHECKING
+
+from fastapi import FastAPI
+from fastapi import HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.responses import Response
+from fastapi.responses import StreamingResponse
+from pydantic import AnyHttpUrl
+from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
+from pydantic import SecretStr
+
+from aiq_agent.common import DEFAULT_RESEARCH_DEPTH
+from aiq_agent.common import ResearchDepthTier
+
+from ..registry import AGENT_REGISTRY
+from ..registry import get_agent_config
+
+if TYPE_CHECKING:
+    from nat.builder.workflow_builder import WorkflowBuilder
+    from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorker
+
+logger = logging.getLogger(__name__)
+
+
+class JobSubmitRequest(BaseModel):
+    """Request to submit an async job."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "agent_type": "deep_researcher",
+                    "input": "What are the latest advances in quantum computing?",
+                    "research_depth": "deeper",
+                    "webhook_url": "https://example.com/aiq/webhook",
+                    "job_id": None,
+                    "expiry_seconds": 86400,
+                }
+            ]
+        }
+    )
+
+    agent_type: str = Field(..., description="Agent type (e.g., 'deep_researcher')")
+    input: str = Field(..., min_length=1, description="Input query for the agent")
+    data_sources: list[str] | None = Field(
+        None,
+        description="Optional data source IDs to pass to the agent.",
+    )
+    research_depth: ResearchDepthTier = Field(
+        DEFAULT_RESEARCH_DEPTH,
+        description=(
+            "Depth/source tier for research jobs: shallow, medium, deeper, or deep. "
+            "Deeper and deep use larger adaptive reserve budgets for gap-filling and verification."
+        ),
+    )
+    job_id: str | None = Field(
+        None,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        max_length=64,
+        description="Optional custom job ID (auto-generated if omitted)",
+    )
+    expiry_seconds: int | None = Field(
+        None,
+        ge=600,
+        le=604800,
+        description="Job expiry in seconds (default from config, max 7 days)",
+    )
+    webhook_url: AnyHttpUrl | None = Field(
+        None,
+        description=(
+            "Optional HTTPS/HTTP endpoint to POST once the async job reaches a terminal status. "
+            "Webhook delivery is best-effort and never blocks report availability."
+        ),
+    )
+    webhook_headers: dict[str, str] | None = Field(
+        None,
+        max_length=10,
+        description="Optional static headers to include in the terminal webhook POST.",
+    )
+    webhook_secret: SecretStr | None = Field(
+        None,
+        min_length=8,
+        max_length=512,
+        description=(
+            "Optional HMAC secret. When set, webhook requests include "
+            "X-AIQ-Webhook-Timestamp and X-AIQ-Webhook-Signature headers."
+        ),
+    )
+
+
+class JobStatusResponse(BaseModel):
+    """Job status response."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "job_id": "abc123",
+                    "status": "submitted",
+                    "agent_type": "deep_researcher",
+                    "error": None,
+                    "created_at": "2026-02-12T10:30:00Z",
+                    "updated_at": "2026-02-12T10:42:00Z",
+                    "has_report": True,
+                    "report_ready": True,
+                    "terminal": True,
+                    "poll_after_seconds": None,
+                    "message": "Final report is ready.",
+                    "status_url": "/v1/jobs/async/job/abc123",
+                    "report_url": "/v1/jobs/async/job/abc123/report",
+                    "state_url": "/v1/jobs/async/job/abc123/state",
+                    "stream_url": "/v1/jobs/async/job/abc123/stream",
+                }
+            ]
+        }
+    )
+
+    job_id: str = Field(..., description="Unique job identifier")
+    status: str = Field(
+        ...,
+        description="Current status: submitted, running, success, failure, interrupted, not_found",
+    )
+    agent_type: str | None = Field(None, description="Agent type used for this job")
+    error: str | None = Field(None, description="Error message if job failed")
+    created_at: str | None = Field(None, description="Creation timestamp (ISO format)")
+    updated_at: str | None = Field(None, description="Last update timestamp (ISO format)")
+    has_report: bool = Field(False, description="Whether a usable final report is available")
+    report_ready: bool = Field(False, description="Alias for has_report for polling clients")
+    terminal: bool = Field(False, description="Whether the job is in a terminal status")
+    poll_after_seconds: int | None = Field(None, description="Suggested polling delay while job is active")
+    message: str | None = Field(None, description="Human-readable state and next-action hint")
+    status_url: str | None = Field(None, description="Relative URL for this job status endpoint")
+    report_url: str | None = Field(None, description="Relative URL for the final report endpoint")
+    state_url: str | None = Field(None, description="Relative URL for artifacts/source state")
+    stream_url: str | None = Field(None, description="Relative URL for SSE progress events")
+    quality_status: str | None = Field(None, description="Quality audit status when available")
+    quality_warnings: list[str] = Field(default_factory=list, description="Non-fatal quality warnings")
+
+
+class JobHistoryItem(BaseModel):
+    """A persisted async research job for history/sync views."""
+
+    job_id: str
+    status: str
+    owner_auth_type: str | None = None
+    owner_subject: str | None = None
+    owner_display_name: str | None = None
+    agent_type: str | None = None
+    input: str | None = None
+    title: str | None = None
+    error: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    has_report: bool = False
+    report_ready: bool = False
+    terminal: bool = False
+    poll_after_seconds: int | None = None
+    message: str | None = None
+    status_url: str | None = None
+    report_url: str | None = None
+    state_url: str | None = None
+    stream_url: str | None = None
+    quality_status: str | None = None
+    quality_warnings: list[str] = Field(default_factory=list)
+
+
+class JobHistoryResponse(BaseModel):
+    """List of persisted async jobs visible to the caller."""
+
+    jobs: list[JobHistoryItem]
+
+
+class JobStateResponse(BaseModel):
+    """Job state response with artifacts."""
+
+    job_id: str = Field(..., description="Unique job identifier")
+    has_state: bool = Field(..., description="Whether state/artifacts are available")
+    state: dict | None = Field(None, description="Internal job state")
+    artifacts: dict | None = Field(None, description="Tool calls, outputs, and sources collected during execution")
+
+
+class JobReportResponse(BaseModel):
+    """Final report response."""
+
+    job_id: str = Field(..., description="Unique job identifier")
+    has_report: bool = Field(..., description="Whether the final report is available")
+    report: str | None = Field(None, description="Final research report from the agent")
+    report_markdown: str | None = Field(None, description="Alias for report, for explicit API clients")
+    content_type: str = Field("text/markdown", description="MIME type of report/report_markdown when present")
+    status: str | None = Field(None, description="Current job status")
+    report_ready: bool = Field(False, description="Alias for has_report for polling clients")
+    terminal: bool = Field(False, description="Whether the job is in a terminal status")
+    poll_after_seconds: int | None = Field(None, description="Suggested polling delay while job is active")
+    message: str | None = Field(None, description="Human-readable state and next-action hint")
+    error: str | None = Field(None, description="Error message if the job failed")
+    status_url: str | None = Field(None, description="Relative URL for this job status endpoint")
+    report_url: str | None = Field(None, description="Relative URL for this report endpoint")
+    state_url: str | None = Field(None, description="Relative URL for artifacts/source state")
+    stream_url: str | None = Field(None, description="Relative URL for SSE progress events")
+    sources_found: int | None = Field(None, description="Number of distinct source URLs collected")
+    sources_cited: int | None = Field(None, description="Number of distinct source URLs cited")
+    found_urls: list[str] | None = Field(None, description="Distinct collected source URLs")
+    cited_urls: list[str] | None = Field(None, description="Distinct cited source URLs")
+    quality_status: str | None = Field(None, description="Quality audit status when available")
+    quality_warnings: list[str] = Field(default_factory=list, description="Non-fatal quality warnings")
+
+
+class AgentInfo(BaseModel):
+    """Information about a registered agent."""
+
+    agent_type: str = Field(..., description="Agent identifier used in submit requests")
+    description: str = Field(..., description="Human-readable description of the agent")
+
+
+class AgentListResponse(BaseModel):
+    """List of available agents."""
+
+    agents: list[AgentInfo] = Field(..., description="Registered agent types")
+
+
+class DataSource(BaseModel):
+    """Information about an available data source."""
+
+    id: str = Field(..., description="Unique identifier for the data source")
+    name: str = Field(..., description="Display name")
+    description: str | None = Field(default=None, description="Human-readable description")
+    default_enabled: bool = Field(default=True, description="Whether the source is enabled by default")
+    requires_auth: bool = Field(default=False, description="Whether user authentication is required")
+
+
+async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: FastApiFrontEndPluginWorker) -> None:
+    """
+    Register agent-agnostic async job routes.
+
+    Uses NAT's JobStore for job metadata and Dask for distributed execution.
+    The /v1/data_sources endpoint is always registered regardless of Dask availability.
+    """
+    import logging as std_logging
+    import os
+
+    from aiq_agent.common.data_source_registry import get_all_sources
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+    from ..jobs.access import authorize_job_access
+    from ..jobs.access import ensure_job_access_table
+    from ..jobs.access import require_verified_principal
+    from ..jobs.event_store import EventStore
+    from ..jobs.runner import _recover_report_from_events
+    from ..jobs.submit import resume_agent_job as resume_authorized_job
+    from ..jobs.submit import submit_agent_job as submit_authorized_job
+
+    if not get_all_sources():
+        logger.warning(
+            "No data sources registered. Add a 'data_sources' function with "
+            "_type: data_source_registry to your YAML config to enable "
+            "data source toggles in the UI."
+        )
+
+    @app.get(
+        "/v1/jobs/async/agents",
+        response_model=AgentListResponse,
+        tags=["async jobs"],
+        summary="List available agents",
+        description="Returns all registered agent types that can be used with the submit endpoint.",
+    )
+    async def list_agents() -> AgentListResponse:
+        """List available agent types for async job submission."""
+        agents = [
+            AgentInfo(agent_type=agent_type, description=config.description)
+            for agent_type, config in AGENT_REGISTRY.items()
+        ]
+        return AgentListResponse(agents=agents)
+
+    @app.get(
+        "/v1/data_sources",
+        response_model=list[DataSource],
+        tags=["data sources"],
+        summary="List data sources",
+    )
+    async def list_data_sources() -> list[DataSource]:
+        """List available data sources dynamically from the registry."""
+        return [
+            DataSource(
+                id=source.id,
+                name=source.name,
+                description=source.description,
+                default_enabled=source.default_enabled,
+                requires_auth=source.requires_auth,
+            )
+            for source in get_all_sources()
+        ]
+
+    logger.info("Registered /v1/data_sources and /v1/jobs/async/agents routes")
+
+    dask_available = getattr(worker, "_dask_available", False)
+    job_store = getattr(worker, "_job_store", None)
+
+    if not dask_available or not job_store:
+        logger.warning(
+            "Dask not available - async job submission routes require NAT_DASK_SCHEDULER_ADDRESS"
+            " and NAT_JOB_STORE_DB_URL"
+        )
+        return
+
+    scheduler_address = getattr(worker, "_scheduler_address", None) or os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
+    db_url = getattr(worker, "_db_url", None) or os.environ.get("NAT_JOB_STORE_DB_URL", "sqlite:///./data/jobs.db")
+    config_path = getattr(worker, "_config_file_path", None) or os.environ.get("NAT_CONFIG_FILE", "")
+    log_level = getattr(worker, "_log_level", std_logging.INFO)
+    use_threads = getattr(worker, "_use_dask_threads", False)
+
+    if not config_path:
+        logger.error("Config file path not available - NAT_CONFIG_FILE not set")
+        return
+
+    front_end_config = getattr(worker, "_front_end_config", None)
+    default_expiry_seconds = getattr(front_end_config, "expiry_seconds", 86400) if front_end_config else 86400
+
+    logger.info(
+        "Registering async job routes: scheduler=%s, db=%s, expiry=%ds",
+        scheduler_address,
+        db_url[:50],
+        default_expiry_seconds,
+    )
+    await asyncio.get_running_loop().run_in_executor(None, ensure_job_access_table, db_url)
+
+    @app.get(
+        "/v1/jobs/async/jobs",
+        response_model=JobHistoryResponse,
+        tags=["async jobs"],
+        summary="List async research jobs",
+        description="List persisted async jobs visible to the caller for cross-origin research history.",
+    )
+    async def list_jobs(limit: int = 50) -> JobHistoryResponse:
+        """List jobs from the backend store so localhost and VPS UI can sync history."""
+        principal = require_verified_principal()
+        safe_limit = max(1, min(limit, 200))
+        loop = asyncio.get_running_loop()
+        rows = await loop.run_in_executor(None, _list_job_history_rows, db_url, principal, safe_limit)
+        return JobHistoryResponse(jobs=[_row_to_history_item(row) for row in rows])
+
+    @app.get("/health", tags=["health"], summary="Health check")
+    async def health_check():
+        """Health check endpoint that validates DB connectivity."""
+        from sqlalchemy import text
+
+        from ..jobs.event_store import EventStore
+
+        result = {"status": "ok", "dask_available": dask_available, "db": "ok"}
+
+        # Check DB connectivity using any cached async engine
+        try:
+            cache = EventStore._async_engine_cache
+            if cache:
+                engine = next(iter(cache.values()))[0]
+                async with engine.connect() as conn:
+                    await asyncio.wait_for(conn.execute(text("SELECT 1")), timeout=3.0)
+            else:
+                result["db"] = "no_engine"
+        except Exception:
+            logger.warning("Health check DB ping failed", exc_info=True)
+            result["status"] = "degraded"
+            result["db"] = "unreachable"
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(status_code=503, content=result)
+
+        return result
+
+    @app.post(
+        "/v1/jobs/async/submit",
+        response_model=JobStatusResponse,
+        tags=["async jobs"],
+        summary="Submit a new async job",
+        description=(
+            "Submit a research query to a registered agent. Returns a job ID for tracking progress via SSE stream."
+        ),
+        responses={
+            400: {"description": "Unknown agent type or invalid request"},
+            503: {"description": "Dask scheduler not available"},
+        },
+    )
+    async def submit_job(req: JobSubmitRequest) -> JobStatusResponse:
+        """Submit a new async job for deep research or other registered agents."""
+        try:
+            get_agent_config(req.agent_type)
+        except KeyError as e:
+            raise HTTPException(400, str(e))
+
+        expiry = req.expiry_seconds if req.expiry_seconds is not None else default_expiry_seconds
+        principal = require_verified_principal()
+
+        # Propagate auth token to Dask worker for requires_auth data sources
+        from aiq_agent.auth import get_auth_token
+
+        auth_token = get_auth_token()
+        try:
+            job_id = await submit_authorized_job(
+                agent_type=req.agent_type,
+                input_text=req.input,
+                owner=principal.email or principal.sub,
+                principal=principal,
+                job_id=req.job_id,
+                expiry_seconds=expiry,
+                auth_token=auth_token,
+                data_sources=req.data_sources,
+                research_depth=req.research_depth,
+                webhook_url=str(req.webhook_url) if req.webhook_url else None,
+                webhook_headers=req.webhook_headers,
+                webhook_secret=req.webhook_secret.get_secret_value() if req.webhook_secret else None,
+            )
+        except RuntimeError as e:
+            raise HTTPException(403, str(e))
+        except Exception as e:
+            logger.warning("Failed to submit authorized job: %s", e)
+            raise HTTPException(500, "Failed to persist async job authorization metadata")
+
+        logger.info(
+            "Submitted %s job %s (expiry=%ds) for principal %s:%s",
+            req.agent_type,
+            job_id,
+            expiry,
+            principal.type,
+            principal.sub,
+        )
+        return JobStatusResponse(
+            job_id=job_id,
+            status=JobStatus.SUBMITTED.value,
+            agent_type=req.agent_type,
+            **_job_progress_fields(JobStatus.SUBMITTED.value, has_report=False, error=None),
+            **_job_resource_links(job_id),
+        )
+
+    @app.get(
+        "/v1/jobs/async/job/{job_id}",
+        response_model=JobStatusResponse,
+        tags=["async jobs"],
+        summary="Get job status",
+        description="Get the current status of an async job by its ID.",
+        responses={404: {"description": "Job not found"}},
+    )
+    async def get_job_status(job_id: str) -> JobStatusResponse:
+        """Get the current status of a job."""
+        principal = require_verified_principal()
+        job = await authorize_job_access(job_store, db_url, job_id, principal)
+
+        return JobStatusResponse(
+            job_id=job_id,
+            status=job.status,
+            agent_type=_agent_type_from_events(db_url, job_id),
+            error=job.error,
+            created_at=job.created_at.isoformat() if job.created_at else None,
+            updated_at=job.updated_at.isoformat() if getattr(job, "updated_at", None) else None,
+            **_job_progress_fields(job.status, has_report=_job_has_final_report(job, db_url, job_id), error=job.error),
+            **_job_resource_links(job_id),
+            **_job_quality_fields(job),
+        )
+
+    @app.get(
+        "/v1/jobs/async/job/{job_id}/stream",
+        tags=["async jobs"],
+        summary="Stream job events",
+        description=(
+            "Server-Sent Events (SSE) stream of job progress from the beginning."
+            " Includes tool calls, intermediate results, and the final report."
+        ),
+        responses={404: {"description": "Job not found"}},
+    )
+    async def stream_job_events(job_id: str) -> StreamingResponse:
+        """SSE stream for job events from beginning."""
+        principal = require_verified_principal()
+        await authorize_job_access(job_store, db_url, job_id, principal)
+
+        return StreamingResponse(
+            _sse_generator(job_store, job_id, db_url, start_event_id=0),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.get(
+        "/v1/jobs/async/job/{job_id}/stream/{last_event_id}",
+        tags=["async jobs"],
+        summary="Resume job event stream",
+        description="Resume an SSE stream from a specific event ID. Use for reconnection after network interruption.",
+        responses={404: {"description": "Job not found"}},
+    )
+    async def stream_job_events_from(job_id: str, last_event_id: int) -> StreamingResponse:
+        """SSE stream for job events from specific event ID (for reconnection)."""
+        principal = require_verified_principal()
+        await authorize_job_access(job_store, db_url, job_id, principal)
+
+        return StreamingResponse(
+            _sse_generator(job_store, job_id, db_url, start_event_id=last_event_id),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post(
+        "/v1/jobs/async/job/{job_id}/cancel",
+        tags=["async jobs"],
+        summary="Cancel a running job",
+        description="Request cancellation of a running job. The job status will be set to INTERRUPTED.",
+        responses={
+            400: {"description": "Job is not in RUNNING state"},
+            404: {"description": "Job not found"},
+        },
+    )
+    async def cancel_job(job_id: str) -> dict:
+        """Cancel a running job."""
+        principal = require_verified_principal()
+        job = await authorize_job_access(job_store, db_url, job_id, principal)
+
+        if job.status != JobStatus.RUNNING.value:
+            raise HTTPException(400, f"Job not running: {job_id} (status: {job.status})")
+
+        await job_store.update_status(job_id, JobStatus.INTERRUPTED, error="cancelled by user")
+
+        event_store = EventStore(db_url, job_id)
+        event_store.store(
+            {
+                "type": "job.cancellation_requested",
+                "data": {"reason": "cancelled by user"},
+            }
+        )
+
+        task_cancelled = await _cancel_dask_task(scheduler_address, job_id)
+
+        logger.info("Cancel requested for job %s: status updated, task_cancelled=%s", job_id, task_cancelled)
+
+        return {"job_id": job_id, "status": JobStatus.INTERRUPTED.value, "task_cancelled": task_cancelled}
+
+    @app.post(
+        "/v1/jobs/async/job/{job_id}/resume",
+        response_model=JobStatusResponse,
+        tags=["async jobs"],
+        summary="Resume a failed async job",
+        description=(
+            "Resume a failed/interrupted job using persisted artifacts. If a usable report is already present, "
+            "the job is recovered without another model call."
+        ),
+        responses={
+            400: {"description": "Job cannot be resumed from its current state"},
+            404: {"description": "Job not found"},
+        },
+    )
+    async def resume_job(job_id: str) -> JobStatusResponse:
+        """Resume a failed/interrupted job without discarding persisted research artifacts."""
+        principal = require_verified_principal()
+        job = await authorize_job_access(job_store, db_url, job_id, principal)
+
+        if job.status in (JobStatus.SUBMITTED.value, JobStatus.RUNNING.value):
+            has_report = _job_has_final_report(job, db_url, job_id)
+            return JobStatusResponse(
+                job_id=job_id,
+                status=job.status,
+                error=job.error,
+                created_at=job.created_at.isoformat() if job.created_at else None,
+                updated_at=job.updated_at.isoformat() if getattr(job, "updated_at", None) else None,
+                **_job_progress_fields(job.status, has_report=has_report, error=job.error),
+                **_job_resource_links(job_id),
+                **_job_quality_fields(job),
+            )
+        if job.status == JobStatus.SUCCESS.value:
+            has_report = _job_has_final_report(job, db_url, job_id)
+            return JobStatusResponse(
+                job_id=job_id,
+                status=job.status,
+                error=job.error,
+                created_at=job.created_at.isoformat() if job.created_at else None,
+                updated_at=job.updated_at.isoformat() if getattr(job, "updated_at", None) else None,
+                **_job_progress_fields(job.status, has_report=has_report, error=job.error),
+                **_job_resource_links(job_id),
+                **_job_quality_fields(job),
+            )
+        if job.status not in (JobStatus.FAILURE.value, JobStatus.INTERRUPTED.value):
+            raise HTTPException(400, f"Job cannot be resumed from status: {job.status}")
+
+        recovered_report = _recover_report_from_events(db_url, job_id)
+        if recovered_report:
+            await job_store.update_status(
+                job_id,
+                JobStatus.SUCCESS,
+                output={
+                    "report": recovered_report,
+                    "recovered_from_status": job.status,
+                    "quality_status": "warning",
+                    "quality_warnings": ["Recovered a usable report from persisted job artifacts."],
+                },
+            )
+            EventStore(db_url, job_id).store(
+                {
+                    "type": "job.recovered",
+                    "data": {"reason": "Recovered a usable report from persisted job artifacts."},
+                }
+            )
+            return JobStatusResponse(
+                job_id=job_id,
+                status=JobStatus.SUCCESS.value,
+                error=None,
+                created_at=job.created_at.isoformat() if job.created_at else None,
+                updated_at=job.updated_at.isoformat() if getattr(job, "updated_at", None) else None,
+                **_job_progress_fields(JobStatus.SUCCESS.value, has_report=True, error=None),
+                **_job_resource_links(job_id),
+                quality_status="warning",
+                quality_warnings=["Recovered a usable report from persisted job artifacts."],
+            )
+
+        submit_data = _get_submit_data_from_events(db_url, job_id)
+        if not submit_data:
+            raise HTTPException(400, "Job has no submission metadata to resume")
+
+        agent_type = submit_data.get("agent_type") if isinstance(submit_data.get("agent_type"), str) else None
+        input_text = submit_data.get("input") if isinstance(submit_data.get("input"), str) else None
+        if not agent_type or not input_text:
+            raise HTTPException(400, "Job submission metadata is incomplete")
+
+        from aiq_agent.auth import get_auth_token
+
+        owner = principal.email or principal.sub
+        resume_files = _build_resume_files_from_events(db_url, job_id)
+        resume_input = _format_resume_input(input_text, resume_files)
+        await resume_authorized_job(
+            job_id=job_id,
+            agent_type=agent_type,
+            input_text=resume_input,
+            owner=owner,
+            principal=principal,
+            expiry_seconds=job.expiry_seconds or default_expiry_seconds,
+            data_sources=submit_data.get("data_sources"),
+            research_depth=submit_data.get("research_depth") or DEFAULT_RESEARCH_DEPTH,
+            auth_token=get_auth_token(),
+            resume_files=resume_files,
+        )
+
+        return JobStatusResponse(
+            job_id=job_id,
+            status=JobStatus.RUNNING.value,
+            error=None,
+            created_at=job.created_at.isoformat() if job.created_at else None,
+            updated_at=job.updated_at.isoformat() if getattr(job, "updated_at", None) else None,
+            **_job_progress_fields(JobStatus.RUNNING.value, has_report=False, error=None),
+            **_job_resource_links(job_id),
+            **_job_quality_fields(job),
+        )
+
+    @app.get(
+        "/v1/jobs/async/job/{job_id}/state",
+        response_model=JobStateResponse,
+        tags=["async jobs"],
+        summary="Get job artifacts",
+        description="Get tool calls, outputs, and sources collected during job execution.",
+        responses={404: {"description": "Job not found"}},
+    )
+    async def get_job_state(job_id: str) -> JobStateResponse:
+        """Get artifacts from event store."""
+        principal = require_verified_principal()
+        await authorize_job_access(job_store, db_url, job_id, principal)
+
+        artifacts = await _get_job_artifacts(db_url, job_id)
+        return JobStateResponse(
+            job_id=job_id,
+            has_state=artifacts is not None,
+            state=None,
+            artifacts=artifacts,
+        )
+
+    @app.get(
+        "/v1/jobs/async/job/{job_id}/report",
+        response_model=JobReportResponse,
+        tags=["async jobs"],
+        summary="Get final report",
+        description=(
+            "Get the final research report from a completed job. "
+            "Use ?format=md for raw markdown or ?format=docx for a Word attachment "
+            "(requires python-docx on the server; returns 501 otherwise)."
+        ),
+        responses={
+            404: {"description": "Job not found"},
+            501: {"description": "DOCX export requested but python-docx is not installed"},
+        },
+    )
+    async def get_job_report(job_id: str, format: str | None = None) -> JobReportResponse | Response:
+        """Get the final report from a completed job."""
+        principal = require_verified_principal()
+        job = await authorize_job_access(job_store, db_url, job_id, principal)
+
+        report = _get_final_report_for_job(job, db_url, job_id)
+        progress = _job_progress_fields(job.status, has_report=bool(report), error=job.error)
+        requested_format = (format or "").lower()
+
+        if requested_format in {"md", "markdown", "raw", "text", "docx", "word"}:
+            if not report:
+                return JSONResponse(
+                    status_code=202 if not progress["terminal"] else 200,
+                    content={
+                        "job_id": job_id,
+                        "has_report": False,
+                        "report_ready": False,
+                        "status": job.status,
+                        "error": job.error,
+                        **progress,
+                        **_job_resource_links(job_id),
+                        **_job_quality_fields(job),
+                    },
+                    headers={"Cache-Control": "no-store"},
+                )
+            if requested_format in {"docx", "word"}:
+                from ..jobs.docx_export import DOCX_CONTENT_TYPE
+                from ..jobs.docx_export import markdown_to_docx_bytes
+
+                try:
+                    docx_bytes = await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: markdown_to_docx_bytes(report, title=f"Research Report {job_id}")
+                    )
+                except ImportError:
+                    raise HTTPException(
+                        501,
+                        "DOCX export requires the optional 'python-docx' package. "
+                        "Install it on the server (pip install python-docx) or use ?format=md.",
+                    )
+                except Exception as e:
+                    logger.warning("DOCX export failed for job %s: %s", job_id, e)
+                    raise HTTPException(500, "Failed to convert report to DOCX")
+                return Response(
+                    content=docx_bytes,
+                    media_type=DOCX_CONTENT_TYPE,
+                    headers={
+                        "Cache-Control": "no-store",
+                        "Content-Disposition": f'attachment; filename="report-{job_id}.docx"',
+                    },
+                )
+            return Response(
+                content=report,
+                media_type="text/markdown; charset=utf-8",
+                headers={"Cache-Control": "no-store"},
+            )
+
+        artifacts = await _get_job_artifacts(db_url, job_id)
+        source_summary = artifacts.get("sources", {}) if isinstance(artifacts, dict) else {}
+        return JobReportResponse(
+            job_id=job_id,
+            report=report,
+            report_markdown=report,
+            status=job.status,
+            error=job.error,
+            **progress,
+            **_job_resource_links(job_id),
+            sources_found=source_summary.get("found") if isinstance(source_summary, dict) else None,
+            sources_cited=source_summary.get("cited") if isinstance(source_summary, dict) else None,
+            found_urls=source_summary.get("found_urls") if isinstance(source_summary, dict) else None,
+            cited_urls=source_summary.get("cited_urls") if isinstance(source_summary, dict) else None,
+            **_job_quality_fields(job),
+        )
+
+    logger.info("Registered async job routes at /v1/jobs/async")
+
+    # Ensure job_events table exists before lifecycle recovery/reaper runs (both
+    # query it via raw SQL; table is otherwise created lazily on first write).
+    EventStore._ensure_table_exists(db_url)
+
+    await _resume_orphaned_startup_jobs(job_store, db_url, default_expiry_seconds)
+
+    # Start the ghost job reaper background task.
+    asyncio.create_task(_reap_ghost_jobs(job_store, db_url))
+
+    # Start periodic cleanup of expired jobs (NAT's job_info table) and old events (job_events table).
+    # NAT provides periodic_cleanup as a Dask task for job_info, but it must be explicitly submitted.
+    # We also run a local asyncio task for job_events cleanup since NAT doesn't manage that table.
+    _start_periodic_cleanup(job_store, scheduler_address, db_url, default_expiry_seconds, log_level, use_threads)
+
+
+GHOST_JOB_TIMEOUT_SECONDS = 300  # 5 minutes without events = ghost job
+GHOST_REAPER_INTERVAL_SECONDS = 60  # check every 60 seconds
+
+
+def _find_stale_jobs(db_url: str, running_status: str) -> list[str]:
+    """
+    Sync helper to query for ghost jobs. Runs in a thread via run_in_executor
+    to avoid blocking the async event loop with DB I/O.
+    """
+    from sqlalchemy import inspect
+    from sqlalchemy import text
+
+    from ..jobs.event_store import EventStore
+
+    EventStore._ensure_table_exists(db_url)
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    inspector = inspect(engine)
+    if not inspector.has_table("job_events"):
+        return []
+
+    with engine.connect() as conn:
+        if db_url.startswith("postgresql"):
+            stale_query = text(
+                "SELECT DISTINCT je.job_id FROM job_events je "
+                "INNER JOIN job_info ji ON je.job_id = ji.job_id "
+                "WHERE ji.status = :running_status "
+                "GROUP BY je.job_id "
+                "HAVING MAX(je.created_at) < NOW() - :timeout * INTERVAL '1 second'"
+            )
+            params = {"running_status": running_status, "timeout": GHOST_JOB_TIMEOUT_SECONDS}
+        else:
+            stale_query = text(
+                "SELECT DISTINCT je.job_id FROM job_events je "
+                "INNER JOIN job_info ji ON je.job_id = ji.job_id "
+                "WHERE ji.status = :running_status "
+                "GROUP BY je.job_id "
+                "HAVING MAX(je.created_at) < datetime('now', :timeout_interval)"
+            )
+            params = {
+                "running_status": running_status,
+                "timeout_interval": f"-{GHOST_JOB_TIMEOUT_SECONDS} seconds",
+            }
+
+        result = conn.execute(stale_query, params)
+        return [row[0] for row in result]
+
+
+def _find_jobs_by_status(db_url: str, statuses: list[str]) -> list[dict]:
+    """Return non-expired jobs that currently have one of the provided statuses."""
+    from sqlalchemy import inspect
+    from sqlalchemy import text
+
+    from ..jobs.event_store import EventStore
+
+    if not statuses:
+        return []
+
+    EventStore._ensure_table_exists(db_url)
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    inspector = inspect(engine)
+    if not inspector.has_table("job_info"):
+        return []
+
+    params = {f"status_{idx}": status for idx, status in enumerate(statuses)}
+    placeholders = ", ".join(f":status_{idx}" for idx in range(len(statuses)))
+    sql = text(
+        "SELECT job_id, status, error, created_at, updated_at "
+        "FROM job_info "
+        f"WHERE status IN ({placeholders}) "
+        "AND (is_expired IS NOT TRUE OR is_expired IS NULL)"
+    )
+
+    with engine.connect() as conn:
+        return [dict(row) for row in conn.execute(sql, params).mappings().all()]
+
+
+def _list_job_history_rows(db_url: str, principal, limit: int) -> list[dict]:
+    """Return job metadata rows with the submit event attached when available."""
+    import os
+
+    from sqlalchemy import text
+
+    from ..jobs.event_store import EventStore
+
+    EventStore._ensure_table_exists(db_url)
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    auth_enabled = os.environ.get("REQUIRE_AUTH", "false").lower() == "true"
+
+    if auth_enabled:
+        where_clause = "WHERE ji.is_expired IS NOT TRUE"
+        params = {"limit": limit}
+        if getattr(principal, "role", None) != "admin":
+            where_clause += " AND ja.owner_auth_type = :owner_auth_type AND ja.owner_subject = :owner_subject"
+            params.update(
+                {
+                    "owner_auth_type": principal.type,
+                    "owner_subject": principal.sub,
+                }
+            )
+        sql = text(
+            "SELECT ji.job_id, ji.status, ji.error, ji.output, ji.created_at, ji.updated_at, "
+            "ja.owner_auth_type, ja.owner_subject, "
+            "COALESCE(ja.owner_email, ja.owner_subject) AS owner_display_name, "
+            "je.event_data AS submitted_event "
+            "FROM job_info ji "
+            "INNER JOIN job_access ja ON ja.job_id = ji.job_id "
+            "LEFT JOIN job_events je ON je.id = ("
+            "  SELECT MIN(id) FROM job_events "
+            "  WHERE job_id = ji.job_id AND event_type = 'job.submitted'"
+            ") "
+            f"{where_clause} "
+            "ORDER BY ji.created_at DESC "
+            "LIMIT :limit"
+        )
+    else:
+        sql = text(
+            "SELECT ji.job_id, ji.status, ji.error, ji.output, ji.created_at, ji.updated_at, "
+            "NULL AS owner_auth_type, NULL AS owner_subject, NULL AS owner_display_name, "
+            "je.event_data AS submitted_event "
+            "FROM job_info ji "
+            "LEFT JOIN job_events je ON je.id = ("
+            "  SELECT MIN(id) FROM job_events "
+            "  WHERE job_id = ji.job_id AND event_type = 'job.submitted'"
+            ") "
+            "WHERE ji.is_expired IS NOT TRUE "
+            "ORDER BY ji.created_at DESC "
+            "LIMIT :limit"
+        )
+        params = {"limit": limit}
+
+    with engine.connect() as conn:
+        return [dict(row) for row in conn.execute(sql, params).mappings().all()]
+
+
+def _row_to_history_item(row: dict) -> JobHistoryItem:
+    submitted = _parse_event_data(row.get("submitted_event"))
+    submitted_data = submitted.get("data") if isinstance(submitted.get("data"), dict) else {}
+    input_text = submitted_data.get("input") if isinstance(submitted_data.get("input"), str) else None
+    agent_type = submitted_data.get("agent_type") if isinstance(submitted_data.get("agent_type"), str) else None
+    title = _title_from_input(input_text) if input_text else None
+    output = _parse_json_maybe(row.get("output"))
+    has_report = bool(isinstance(output, dict) and output.get("report"))
+    status = str(row.get("status"))
+    links = _job_resource_links(str(row.get("job_id")))
+    quality_warnings = _quality_warnings_from_output(output) if isinstance(output, dict) else []
+    quality_status = output.get("quality_status") if isinstance(output, dict) else None
+    if not isinstance(quality_status, str):
+        quality_status = "warning" if quality_warnings else None
+
+    return JobHistoryItem(
+        job_id=str(row.get("job_id")),
+        status=status,
+        owner_auth_type=row.get("owner_auth_type"),
+        owner_subject=row.get("owner_subject"),
+        owner_display_name=row.get("owner_display_name"),
+        agent_type=agent_type,
+        input=input_text,
+        title=title,
+        error=row.get("error"),
+        created_at=_iso_or_none(row.get("created_at")),
+        updated_at=_iso_or_none(row.get("updated_at")),
+        **_job_progress_fields(status, has_report=has_report, error=row.get("error")),
+        **links,
+        quality_status=quality_status,
+        quality_warnings=quality_warnings,
+    )
+
+
+TERMINAL_JOB_STATUSES = {"success", "failure", "failed", "interrupted", "cancelled", "not_found"}
+ACTIVE_JOB_STATUSES = {"submitted", "running", "queued", "pending"}
+DEFAULT_POLL_AFTER_SECONDS = 10
+
+
+def _job_resource_links(job_id: str) -> dict[str, str]:
+    base = f"/v1/jobs/async/job/{job_id}"
+    return {
+        "status_url": base,
+        "report_url": f"{base}/report",
+        "state_url": f"{base}/state",
+        "stream_url": f"{base}/stream",
+    }
+
+
+def _is_terminal_status(status: str | None) -> bool:
+    return str(status or "").lower() in TERMINAL_JOB_STATUSES
+
+
+def _job_progress_fields(status: str | None, *, has_report: bool, error: str | None) -> dict[str, object]:
+    status_text = str(status or "")
+    status_lower = status_text.lower()
+    terminal = _is_terminal_status(status_text)
+    poll_after = None if terminal or has_report else DEFAULT_POLL_AFTER_SECONDS
+    if has_report:
+        message = "Final report is ready."
+    elif status_lower in ACTIVE_JOB_STATUSES:
+        message = "Research is still running. Poll the status_url or report_url again."
+    elif terminal and error:
+        message = "Research finished without a final report. See error and state_url for artifacts."
+    elif terminal:
+        message = "Research finished without a final report. See state_url for artifacts."
+    else:
+        message = "Report is not ready yet."
+
+    return {
+        "has_report": has_report,
+        "report_ready": has_report,
+        "terminal": terminal,
+        "poll_after_seconds": poll_after,
+        "message": message,
+    }
+
+
+def _job_output_dict(job) -> dict:
+    if not getattr(job, "output", None):
+        return {}
+    output = _parse_json_maybe(job.output)
+    return output if isinstance(output, dict) else {}
+
+
+def _quality_warnings_from_output(output: dict) -> list[str]:
+    warnings = output.get("quality_warnings")
+    if not isinstance(warnings, list):
+        return []
+    return [str(item) for item in warnings if str(item).strip()]
+
+
+def _job_quality_fields(job) -> dict[str, object]:
+    output = _job_output_dict(job)
+    warnings = _quality_warnings_from_output(output)
+    quality_status = output.get("quality_status")
+    if not isinstance(quality_status, str):
+        quality_status = "warning" if warnings else None
+    return {
+        "quality_status": quality_status,
+        "quality_warnings": warnings,
+    }
+
+
+def _extract_report_from_job_output(job) -> str | None:
+    output = _job_output_dict(job)
+    report = output.get("report")
+    return report if isinstance(report, str) else None
+
+
+def _is_recovered_intermediate_report(report: str | None) -> bool:
+    """Detect recovery banners that wrap intermediate notes rather than final synthesis."""
+    if not isinstance(report, str):
+        return False
+    text = report.lstrip()
+    return text.startswith("# Recovered Research Report") and (
+        "persisted intermediate research files" in text
+        or "persisted research notes" in text
+        or "## Recovered Findings" in text
+    )
+
+
+def _get_final_report_for_job(job, db_url: str, job_id: str) -> str | None:
+    from aiq_agent.common.report_quality import report_matches_request_scope
+
+    from ..jobs.runner import _is_usable_report
+    from ..jobs.runner import _recover_report_from_events
+
+    submit_data = _get_submit_data_from_events(db_url, job_id)
+    request_text = submit_data.get("input")
+    agent_type = submit_data.get("agent_type")
+    is_deep_research_job = isinstance(agent_type, str) and "deep_researcher" in agent_type.lower()
+    report = _extract_report_from_job_output(job)
+    if _is_usable_report(report):
+        if is_deep_research_job and _is_recovered_intermediate_report(report):
+            logger.warning("Ignoring recovered intermediate report stored in job output for %s", job_id)
+        elif report_matches_request_scope(report, request_text)[0]:
+            return report
+    if _is_terminal_status(getattr(job, "status", None)):
+        recovered_report = _recover_report_from_events(db_url, job_id)
+        if (
+            _is_usable_report(recovered_report)
+            and not (is_deep_research_job and _is_recovered_intermediate_report(recovered_report))
+            and report_matches_request_scope(recovered_report, request_text)[0]
+        ):
+            return recovered_report
+    return None
+
+
+def _job_has_final_report(job, db_url: str, job_id: str) -> bool:
+    return bool(_get_final_report_for_job(job, db_url, job_id))
+
+
+def _agent_type_from_events(db_url: str, job_id: str) -> str | None:
+    submit_data = _get_submit_data_from_events(db_url, job_id)
+    agent_type = submit_data.get("agent_type")
+    return agent_type if isinstance(agent_type, str) else None
+
+
+def _parse_event_data(raw: object) -> dict:
+    parsed = _parse_json_maybe(raw)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _parse_json_maybe(raw: object) -> object:
+    if raw is None:
+        return None
+    if isinstance(raw, (dict, list)):
+        return raw
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+
+
+def _title_from_input(input_text: str) -> str:
+    compact = " ".join(input_text.split())
+    return compact if len(compact) <= 80 else compact[:77] + "..."
+
+
+def _iso_or_none(value: object) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _get_submit_data_from_events(db_url: str, job_id: str) -> dict:
+    """Return the original job.submitted payload for a job."""
+    from ..jobs.event_store import EventStore
+
+    events = EventStore.get_events(db_url, job_id, 0, 10000)
+    for event in events:
+        if event.get("type") != "job.submitted":
+            continue
+        data = event.get("data")
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _file_entry(content: str | list[str]) -> dict:
+    """Create a deepagents-compatible virtual file entry for resume state."""
+    from datetime import UTC
+    from datetime import datetime
+
+    now = datetime.now(UTC).isoformat()
+    lines = content.splitlines() if isinstance(content, str) else [str(line) for line in content]
+    return {"content": lines, "created_at": now, "modified_at": now}
+
+
+def _slug_for_resume_path(value: object, fallback: str) -> str:
+    import re
+
+    text = str(value or fallback).strip().lower()
+    text = re.sub(r"[^a-z0-9._-]+", "-", text).strip("-")
+    if not text:
+        text = fallback
+    return text[:80]
+
+
+def _clean_resume_url(url: str) -> str:
+    import html
+
+    clean = html.unescape(str(url)).replace("\\n", "\n").splitlines()[0].strip()
+    return clean.rstrip(".,;:!?)'\"]}>")
+
+
+def _resume_state_path(raw_path: object, fallback: str) -> str:
+    """Convert persisted artifact paths into DeepAgents state keys.
+
+    `/shared/...` is a routed virtual filesystem path. DeepAgents strips that
+    route before looking inside the routed StateBackend, so preloaded resume
+    files must be stored as `/...` or they appear to the model as
+    `/shared/shared/...` and reads of `/shared/...` fail.
+    """
+    path = str(raw_path or fallback).strip()
+    if not path:
+        path = fallback
+    if not path.startswith("/"):
+        path = f"/{path}"
+    if path.startswith("/shared/"):
+        path = path.removeprefix("/shared")
+    return path or "/resume_file.md"
+
+
+def _display_resume_path(state_path: str) -> str:
+    """Return the path the resumed agent should use with read_file."""
+    if state_path.startswith("/shared/"):
+        return state_path
+    if state_path.startswith("/resume_outputs/"):
+        return f"/shared{state_path}"
+    if state_path in {"/resume_sources.md", "/resume_instructions.md"}:
+        return f"/shared{state_path}"
+    if state_path.startswith("/") and state_path not in {"/report.md"}:
+        return f"/shared{state_path}"
+    return state_path
+
+
+def _build_resume_files_from_events(db_url: str, job_id: str) -> dict[str, dict]:
+    """Build a virtual filesystem snapshot from persisted artifact events."""
+    from ..jobs.event_store import EventStore
+
+    events = EventStore.get_events(db_url, job_id, 0, 10000)
+    files: dict[str, dict] = {}
+    sources: list[str] = []
+    seen_sources: set[str] = set()
+    output_index = 0
+
+    for event in events:
+        if event.get("type") != "artifact.update":
+            continue
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        artifact_type = data.get("type")
+        content = data.get("content")
+
+        if artifact_type == "citation_source":
+            url = data.get("url") or content
+            if isinstance(url, str):
+                clean_url = _clean_resume_url(url)
+                if clean_url and clean_url.startswith(("http://", "https://")) and clean_url not in seen_sources:
+                    seen_sources.add(clean_url)
+                    sources.append(clean_url)
+            continue
+
+        if artifact_type == "file" and content:
+            raw_path = data.get("file_path") or data.get("path") or data.get("filename") or event.get("name")
+            path = _resume_state_path(raw_path, f"/resume_file_{len(files) + 1}.md")
+            if path in {"/plan.json", "plan.json", "/shared/plan.json", "shared/plan.json"}:
+                continue
+            files[path] = _file_entry(content if isinstance(content, str) else str(content))
+            continue
+
+        if artifact_type == "output" and isinstance(content, str) and len(content.strip()) >= 200:
+            output_index += 1
+            category = data.get("output_category") or "output"
+            name = _slug_for_resume_path(event.get("name") or category, f"output-{output_index}")
+            files[f"/resume_outputs/{output_index:02d}-{name}.md"] = _file_entry(content)
+
+    if sources:
+        files["/resume_sources.md"] = _file_entry("\n".join(f"- {url}" for url in sources))
+
+    files["/resume_instructions.md"] = _file_entry(
+        "This job is being resumed after a failed/interrupted attempt. Reuse the existing notes, files, "
+        "and sources in /shared before doing new searches. Fill only evidence gaps, then synthesize the final report."
+    )
+    return files
+
+
+def _format_resume_input(input_text: str, resume_files: dict[str, dict]) -> str:
+    """Append concise resume instructions while preserving the user's original question."""
+    paths = "\n".join(f"- {_display_resume_path(path)}" for path in sorted(resume_files))
+    return (
+        f"{input_text}\n\n"
+        "## Resume Context\n"
+        "This is a continuation of a previous failed/interrupted deep research job. "
+        "Do not restart from scratch. First inspect the virtual files listed below, reuse their evidence, "
+        "and only perform additional searches where the existing artifacts are insufficient.\n\n"
+        f"{paths}"
+    )
+
+
+async def _reap_ghost_jobs(job_store, db_url: str) -> None:
+    """
+    Background task that periodically marks stale RUNNING jobs as INTERRUPTED.
+
+    A job is considered "ghost" if it has been RUNNING for over
+    GHOST_JOB_TIMEOUT_SECONDS with no new events in the job_events table.
+    This catches Dask worker crashes and OOM kills that bypass Python exception handling.
+    We keep these jobs resumable because their persisted artifacts are often still useful.
+    """
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+    from ..jobs.event_store import EventStore
+
+    logger.info(
+        "Ghost job reaper started (timeout=%ds, interval=%ds)",
+        GHOST_JOB_TIMEOUT_SECONDS,
+        GHOST_REAPER_INTERVAL_SECONDS,
+    )
+
+    loop = asyncio.get_running_loop()
+
+    while True:
+        try:
+            await asyncio.sleep(GHOST_REAPER_INTERVAL_SECONDS)
+
+            stale_job_ids = await loop.run_in_executor(None, _find_stale_jobs, db_url, JobStatus.RUNNING.value)
+
+            for stale_job_id in stale_job_ids:
+                logger.warning(
+                    "Interrupting ghost job %s (no events for %ds)",
+                    stale_job_id,
+                    GHOST_JOB_TIMEOUT_SECONDS,
+                )
+                try:
+                    await job_store.update_status(
+                        stale_job_id,
+                        JobStatus.INTERRUPTED,
+                        error="Job lost its worker heartbeat; resume is available",
+                    )
+                    event_store = EventStore(db_url, stale_job_id)
+                    event_store.store(
+                        {
+                            "type": "job.interrupted",
+                            "data": {
+                                "error": "Job lost its worker heartbeat; resume is available",
+                                "error_type": "GhostJobTimeout",
+                                "recoverable": True,
+                            },
+                        }
+                    )
+                except Exception as e:
+                    logger.warning("Failed to interrupt ghost job %s: %s", stale_job_id, e)
+
+        except asyncio.CancelledError:
+            logger.info("Ghost job reaper stopped")
+            break
+        except Exception as e:
+            logger.warning("Ghost job reaper error: %s", e)
+
+
+async def _resume_orphaned_startup_jobs(job_store, db_url: str, default_expiry_seconds: int = 86400) -> None:
+    """
+    Auto-resume active jobs (submitted/running) from the last saved LangGraph checkpoint
+    when this backend starts.
+    """
+    from aiq_agent.auth import Principal
+    from aiq_api.jobs.access import _make_no_auth_principal
+    from aiq_api.jobs.access import get_job_access
+    from aiq_api.jobs.submit import resume_agent_job
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+    loop = asyncio.get_running_loop()
+    active_rows = await loop.run_in_executor(
+        None,
+        _find_jobs_by_status,
+        db_url,
+        [JobStatus.SUBMITTED.value, JobStatus.RUNNING.value],
+    )
+    if not active_rows:
+        return
+
+    logger.warning("Auto-resuming %d orphaned active job(s) from checkpoint after backend startup", len(active_rows))
+    for row in active_rows:
+        job_id = str(row.get("job_id"))
+        previous_status = str(row.get("status"))
+
+        async def do_resume(jid=job_id, prev=previous_status):
+            from aiq_api.jobs.event_store import EventStore
+            try:
+                submit_data = _get_submit_data_from_events(db_url, jid)
+                if not submit_data:
+                    logger.warning(
+                        "Job %s has no submission metadata to auto-resume on startup; flagging as interrupted",
+                        jid,
+                    )
+                    await job_store.update_status(
+                        jid,
+                        JobStatus.INTERRUPTED,
+                        error="Job lost worker heartbeat and has no submission metadata to auto-resume",
+                    )
+                    EventStore(db_url, jid).store(
+                        {
+                            "type": "job.interrupted",
+                            "data": {
+                                "error": "Job lost worker heartbeat and has no submission metadata to auto-resume",
+                                "error_type": "BackendRestartInterrupted",
+                                "previous_status": prev,
+                                "recoverable": True,
+                            },
+                        }
+                    )
+                    return
+
+                agent_type = submit_data.get("agent_type")
+                input_text = submit_data.get("input")
+                if not agent_type or not input_text:
+                    logger.warning(
+                        "Job %s submission metadata is incomplete to auto-resume on startup; flagging as interrupted",
+                        jid,
+                    )
+                    await job_store.update_status(
+                        jid,
+                        JobStatus.INTERRUPTED,
+                        error="Job lost worker heartbeat and has incomplete submission metadata to auto-resume",
+                    )
+                    EventStore(db_url, jid).store(
+                        {
+                            "type": "job.interrupted",
+                            "data": {
+                                "error": (
+                                    "Job lost worker heartbeat and has incomplete submission metadata to auto-resume"
+                                ),
+                                "error_type": "BackendRestartInterrupted",
+                                "previous_status": prev,
+                                "recoverable": True,
+                            },
+                        }
+                    )
+                    return
+
+                access = await loop.run_in_executor(None, get_job_access, jid, db_url)
+                owner = submit_data.get("owner") or "anonymous"
+                if access:
+                    principal = Principal(
+                        type=access["owner_auth_type"],
+                        sub=access["owner_subject"],
+                        email=access.get("owner_email"),
+                        name=access.get("owner_name"),
+                        role=access.get("owner_role"),
+                    )
+                    owner = access.get("owner_email") or access["owner_subject"]
+                else:
+                    principal = _make_no_auth_principal(owner)
+
+                resume_files = _build_resume_files_from_events(db_url, jid)
+                resume_input = _format_resume_input(input_text, resume_files)
+
+                logger.info("Auto-resuming job %s (agent_type=%s, owner=%s)", jid, agent_type, owner)
+                await resume_agent_job(
+                    job_id=jid,
+                    agent_type=agent_type,
+                    input_text=resume_input,
+                    owner=owner,
+                    principal=principal,
+                    expiry_seconds=default_expiry_seconds,
+                    data_sources=submit_data.get("data_sources"),
+                    research_depth=submit_data.get("research_depth") or DEFAULT_RESEARCH_DEPTH,
+                    resume_files=resume_files,
+                )
+                logger.info("Successfully submitted auto-resume for job %s on startup", jid)
+                EventStore(db_url, jid).store(
+                    {
+                        "type": "job.resumed",
+                        "data": {
+                            "message": "Auto-resumed job from checkpoint on backend startup",
+                            "previous_status": prev,
+                        },
+                    }
+                )
+            except Exception as ex:
+                logger.error("Failed to auto-resume startup job %s: %s", jid, ex, exc_info=True)
+                try:
+                    await job_store.update_status(
+                        jid,
+                        JobStatus.INTERRUPTED,
+                        error=f"Failed to auto-resume job after restart: {ex}",
+                    )
+                    EventStore(db_url, jid).store(
+                        {
+                            "type": "job.interrupted",
+                            "data": {
+                                "error": f"Failed to auto-resume job after restart: {ex}",
+                                "error_type": "BackendRestartInterrupted",
+                                "previous_status": prev,
+                                "recoverable": True,
+                            },
+                        }
+                    )
+                except Exception:
+                    pass
+
+        asyncio.create_task(do_resume())
+
+
+_cleanup_task: asyncio.Task | None = None
+"""Module-level reference for graceful shutdown cancellation."""
+
+# Advisory lock ID for PostgreSQL — ensures only one pod runs cleanup at a time.
+# Arbitrary constant; change if it collides with another lock in your deployment.
+_PG_ADVISORY_LOCK_ID = 0x41495143_4C45414E  # "AIQCLEAN" in hex
+
+
+def _start_periodic_cleanup(
+    job_store,
+    scheduler_address: str,
+    db_url: str,
+    expiry_seconds: int,
+    log_level: int,
+    use_threads: bool,
+) -> None:
+    """
+    Start periodic cleanup of expired jobs and old events.
+
+    Submits NAT's periodic_cleanup as a Dask task (handles job_info expiry)
+    and starts a local asyncio task for coordinated event cleanup.
+    """
+    global _cleanup_task
+
+    # Cleanup interval: half the expiry time, clamped to [60s, 3600s]
+    cleanup_interval = max(60, min(expiry_seconds // 2, 3600))
+
+    # Submit NAT's periodic_cleanup as a long-running Dask task for job_info table
+    try:
+        from dask.distributed import fire_and_forget
+
+        from nat.front_ends.fastapi.async_jobs import periodic_cleanup
+
+        cleanup_future = job_store.dask_client.submit(
+            periodic_cleanup,
+            scheduler_address=scheduler_address,
+            db_url=db_url,
+            sleep_time_sec=cleanup_interval,
+            configure_logging=not use_threads,
+            log_level=log_level,
+        )
+        fire_and_forget(cleanup_future)
+        logger.info(
+            "Submitted periodic job cleanup task to Dask (interval=%ds, expiry=%ds)",
+            cleanup_interval,
+            expiry_seconds,
+        )
+    except Exception as e:
+        logger.warning("Failed to submit periodic cleanup to Dask: %s", e)
+
+    # Start local asyncio task for job_events table cleanup (NAT doesn't manage this table).
+    # Uses pg_try_advisory_xact_lock on PostgreSQL so only one pod runs cleanup per cycle.
+    # Cancel any previously-started task before overwriting the reference.
+    if _cleanup_task and not _cleanup_task.done():
+        _cleanup_task.cancel()
+    _cleanup_task = asyncio.create_task(_cleanup_old_events_loop(db_url, expiry_seconds, cleanup_interval))
+
+
+async def stop_periodic_cleanup() -> None:
+    """Cancel the event cleanup background task. Call from shutdown handler."""
+    global _cleanup_task
+    if _cleanup_task and not _cleanup_task.done():
+        _cleanup_task.cancel()
+        try:
+            await _cleanup_task
+        except asyncio.CancelledError:
+            pass
+        _cleanup_task = None
+        logger.info("Event cleanup task cancelled")
+
+
+async def _cleanup_old_events_loop(db_url: str, retention_seconds: int, interval_seconds: int) -> None:
+    """
+    Background task that periodically deletes old events from the job_events table
+    and removes events for jobs already marked as expired in job_info.
+
+    On PostgreSQL, uses pg_try_advisory_xact_lock so only one pod runs cleanup per cycle
+    when multiple pods share the same database.
+    """
+
+    is_postgres = db_url.startswith("postgres")
+
+    logger.info(
+        "Event cleanup task started (retention=%ds, interval=%ds, advisory_lock=%s)",
+        retention_seconds,
+        interval_seconds,
+        is_postgres,
+    )
+
+    # Run once immediately on startup to catch anything that aged out during downtime.
+    try:
+        await _run_event_cleanup(db_url, retention_seconds, is_postgres)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning("Event cleanup startup run failed: %s", e)
+
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            await _run_event_cleanup(db_url, retention_seconds, is_postgres)
+        except asyncio.CancelledError:
+            logger.info("Event cleanup task stopped")
+            break
+        except Exception as e:
+            logger.warning("Event cleanup error: %s", e)
+
+
+async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: bool) -> None:
+    """
+    Execute one cleanup cycle: time-based event pruning + removal of events for expired jobs.
+
+    On PostgreSQL, acquires a transaction-level advisory lock (pg_try_advisory_xact_lock)
+    so concurrent pods skip the cycle rather than doing redundant work. The lock is
+    automatically released on commit/rollback, avoiding leak risks.
+    """
+    from ..jobs.access import cleanup_job_access
+    from ..jobs.event_store import EventStore
+
+    loop = asyncio.get_running_loop()
+
+    def _do_cleanup() -> tuple[int, int, int]:
+        from sqlalchemy import text
+
+        engine = EventStore._get_or_create_sync_engine(db_url)
+
+        with engine.connect() as conn:
+            # On PostgreSQL, acquire a transaction-level advisory lock. If another pod
+            # already holds it, skip this cycle. The lock is automatically released
+            # on commit/rollback — no manual unlock needed.
+            if is_postgres:
+                locked = conn.execute(
+                    text("SELECT pg_try_advisory_xact_lock(:lock_id)"),
+                    {"lock_id": _PG_ADVISORY_LOCK_ID},
+                ).scalar()
+                if not locked:
+                    return (0, 0, 0)
+
+            # 1. Time-based: delete events older than retention period
+            if is_postgres:
+                result = conn.execute(
+                    text("DELETE FROM job_events WHERE created_at < NOW() - :seconds * INTERVAL '1 second'"),
+                    {"seconds": retention_seconds},
+                )
+            else:
+                result = conn.execute(
+                    text("DELETE FROM job_events WHERE created_at < datetime('now', :interval)"),
+                    {"interval": f"-{retention_seconds} seconds"},
+                )
+            time_deleted = result.rowcount
+
+            # 2. Coordinated: delete events for jobs already marked expired in job_info.
+            # This catches events that haven't aged out yet but whose parent job is
+            # already expired (e.g. short-lived jobs with long event retention).
+            expired_result = conn.execute(
+                text("DELETE FROM job_events WHERE job_id IN (SELECT job_id FROM job_info WHERE is_expired = true)")
+            )
+            expired_deleted = expired_result.rowcount
+            access_deleted = cleanup_job_access(db_url, conn=conn)
+
+            conn.commit()
+            return (time_deleted, expired_deleted, access_deleted)
+
+    time_deleted, expired_deleted, access_deleted = await loop.run_in_executor(None, _do_cleanup)
+
+    if time_deleted > 0 or expired_deleted > 0 or access_deleted > 0:
+        logger.info(
+            "Event cleanup: %d old events removed, %d events for expired jobs removed, %d access rows removed",
+            time_deleted,
+            expired_deleted,
+            access_deleted,
+        )
+
+
+async def _cancel_dask_task(scheduler_address: str, job_id: str) -> bool:
+    """
+    Cancel a Dask task by job ID.
+
+    Args:
+        scheduler_address: Dask scheduler address.
+        job_id: Job ID to cancel.
+
+    Returns:
+        True if task was cancelled, False otherwise.
+    """
+    try:
+        from distributed import Client
+        from distributed import Future
+        from distributed import Variable
+
+        async with Client(scheduler_address, asynchronous=True) as client:
+            var = Variable(name=job_id, client=client)
+            try:
+                # Short timeout: variable may be unset if worker hasn't started or job already finished.
+                future = await var.get(timeout=2)
+                if isinstance(future, Future):
+                    await client.cancel([future], asynchronous=True, force=True)
+                    logger.info("Cancelled Dask task for job %s", job_id)
+                    return True
+            except (TimeoutError, asyncio.CancelledError) as e:
+                logger.warning(
+                    "Could not get Dask future for job %s (variable not set or wait cancelled): %s",
+                    job_id,
+                    type(e).__name__,
+                )
+            except Exception as e:
+                logger.warning("Error getting Dask future for job %s: %s", job_id, e)
+            finally:
+                try:
+                    var.delete()
+                except (KeyError, RuntimeError):
+                    pass
+    except (ConnectionError, TimeoutError, OSError) as e:
+        logger.warning("Failed to cancel Dask task for job %s: %s", job_id, e)
+    except Exception as e:
+        logger.warning("Unexpected error cancelling Dask task for job %s: %s", job_id, e)
+    return False
+
+
+def _extract_event_metadata(event: dict) -> tuple[dict, dict]:
+    """Extract data and metadata from an event dict."""
+    data = event.get("data", {}) if isinstance(event.get("data"), dict) else {}
+    metadata = event.get("metadata", {}) if isinstance(event.get("metadata"), dict) else {}
+    if not metadata and isinstance(data, dict):
+        metadata = data.get("metadata", {}) or {}
+    return data, metadata
+
+
+def _process_tool_start(event: dict, data: dict, metadata: dict, tool_call_map: dict[str, dict]) -> None:
+    """Process a tool.start event and add to tool_call_map."""
+    tool_id = data.get("id", "")
+    inner_data = data.get("data", {}) if isinstance(data.get("data"), dict) else {}
+    tool_call_map[tool_id] = {
+        "id": tool_id,
+        "name": data.get("name", ""),
+        "input": inner_data.get("input"),
+        "output": None,
+        "status": "running",
+        "workflow": metadata.get("workflow"),
+        "timestamp": event.get("timestamp"),
+    }
+
+
+def _process_tool_end(event: dict, data: dict, metadata: dict, tool_call_map: dict[str, dict]) -> None:
+    """Process a tool.end event and update tool_call_map."""
+    tool_id = data.get("id", "")
+    inner_data = data.get("data", {}) if isinstance(data.get("data"), dict) else {}
+    tool_output = inner_data.get("output")
+
+    if tool_id in tool_call_map:
+        tool_call_map[tool_id]["output"] = tool_output
+        tool_call_map[tool_id]["status"] = "completed"
+    else:
+        tool_call_map[tool_id] = {
+            "id": tool_id,
+            "name": data.get("name", ""),
+            "input": None,
+            "output": tool_output,
+            "status": "completed",
+            "workflow": metadata.get("workflow"),
+            "timestamp": event.get("timestamp"),
+        }
+
+
+def _normalize_url(url: str) -> str:
+    """Normalize URL for consistent deduplication."""
+    from urllib.parse import urlparse
+    from urllib.parse import urlunparse
+
+    try:
+        parsed = urlparse(url)
+        normalized_path = parsed.path.rstrip("/") if parsed.path != "/" else "/"
+        return urlunparse(
+            (
+                parsed.scheme.lower(),
+                parsed.netloc.lower(),
+                normalized_path,
+                parsed.params,
+                parsed.query,
+                "",
+            )
+        )
+    except Exception:
+        return url
+
+
+def _is_valid_url(url: str) -> bool:
+    """Check if string is a valid HTTP/HTTPS URL."""
+    return bool(url and url.lower().startswith(("http://", "https://")))
+
+
+def _process_artifact_update(
+    event: dict,
+    data: dict,
+    metadata: dict,
+    outputs: list[dict],
+    sources_found: set[str],
+    sources_cited: set[str],
+) -> None:
+    """Process an artifact.update event and add to outputs."""
+    artifact_type = data.get("type")
+    content = data.get("content")
+
+    # Track citation sources and uses for accurate counts (with validation)
+    if artifact_type == "citation_source":
+        url = data.get("url") or content
+        if _is_valid_url(url):
+            sources_found.add(_normalize_url(url))
+    elif artifact_type == "citation_use":
+        url = data.get("url") or content
+        if _is_valid_url(url):
+            sources_cited.add(_normalize_url(url))
+
+    if content:
+        outputs.append(
+            {
+                "type": artifact_type,
+                "content": content,
+                "name": event.get("name"),
+                "workflow": metadata.get("workflow"),
+                "timestamp": event.get("timestamp"),
+                **{k: v for k, v in data.items() if k not in ("type", "content")},
+            }
+        )
+
+
+async def _get_job_artifacts(db_url: str, job_id: str) -> dict | None:
+    """
+    Extract artifacts from stored events.
+
+    Returns a simplified structure with all tool calls, outputs, and source counts.
+    Frontend categorizes tools by name (task=subagent, write_todos=middleware, etc.).
+
+    Args:
+        db_url: Database URL for event store.
+        job_id: Job ID to fetch artifacts for.
+
+    Returns:
+        Dict with 'tools', 'outputs', and 'sources' (counts), or None if no artifacts found.
+    """
+    from ..jobs.event_store import EventStore
+
+    try:
+        events = await EventStore.get_events_async(db_url, job_id, 0, 10000)
+        if not events:
+            return None
+
+        tool_call_map: dict[str, dict] = {}
+        outputs: list[dict] = []
+        sources_found: set[str] = set()
+        sources_cited: set[str] = set()
+        job_metrics: dict | None = None
+
+        for event in events:
+            event_type = event.get("type", "")
+            data, metadata = _extract_event_metadata(event)
+
+            if event_type == "tool.start":
+                _process_tool_start(event, data, metadata, tool_call_map)
+            elif event_type == "tool.end":
+                _process_tool_end(event, data, metadata, tool_call_map)
+            elif event_type == "artifact.update":
+                _process_artifact_update(event, data, metadata, outputs, sources_found, sources_cited)
+            elif event_type == "job.metrics" and isinstance(data, dict) and data:
+                job_metrics = data
+
+        tools = list(tool_call_map.values())
+        result = {
+            "tools": tools,
+            "outputs": outputs,
+            "sources": {
+                "found": len(sources_found),
+                "cited": len(sources_cited),
+                "found_urls": list(sources_found),
+                "cited_urls": list(sources_cited),
+            },
+        }
+        if job_metrics is not None:
+            result["metrics"] = job_metrics
+        return result if tools or outputs or sources_found or job_metrics else None
+
+    except (KeyError, TypeError) as e:
+        logger.warning("Failed to parse artifacts for job %s: %s", job_id, e)
+        return None
+    except Exception as e:
+        logger.warning("Failed to get artifacts for job %s: %s", job_id, e)
+        return None
+
+
+async def _sse_generator(job_store, job_id: str, db_url: str, start_event_id: int = 0):
+    """
+    Route to appropriate SSE generator based on database type.
+
+    PostgreSQL: Uses LISTEN/NOTIFY for real-time push-based events (sub-10ms latency).
+    SQLite: Uses polling (0.5s interval) since SQLite doesn't support pub-sub.
+    """
+    from ..jobs.event_store import EventStore
+
+    if EventStore.is_postgres(db_url):
+        try:
+            async for event in _sse_generator_postgres(job_store, job_id, db_url, start_event_id):
+                yield event
+        except Exception as e:
+            logger.warning("Pub-sub failed, falling back to polling: %s", e)
+            async for event in _sse_generator_polling(job_store, job_id, db_url, start_event_id):
+                yield event
+    else:
+        async for event in _sse_generator_polling(job_store, job_id, db_url, start_event_id):
+            yield event
+
+
+async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_event_id: int = 0):
+    """
+    PostgreSQL pub-sub based SSE generator - near-instant event delivery.
+
+    Uses asyncpg LISTEN/NOTIFY for real-time push-based events.
+    Achieves sub-10ms latency compared to 500ms polling interval.
+    """
+    import asyncio
+
+    import asyncpg
+
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+    from ..jobs.connection_manager import get_connection_manager
+    from ..jobs.event_store import EventStore
+    from ..jobs.event_store import get_job_events_channel
+
+    connection_manager = get_connection_manager()
+    last_status = None
+    last_event_id = start_event_id
+    sequence_id = start_event_id
+    terminal_statuses = {JobStatus.SUCCESS.value, JobStatus.FAILURE.value, JobStatus.INTERRUPTED.value}
+    is_reconnect = start_event_id > 0
+
+    def format_sse(event_type: str, data: dict, event_id: int | None = None) -> str:
+        nonlocal sequence_id
+        if event_id is not None:
+            sequence_id = event_id
+        else:
+            sequence_id += 1
+        return f"id: {sequence_id}\nevent: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+    # LISTEN/NOTIFY needs a persistent session — incompatible with PgBouncer
+    # transaction pooling. Use AIQ_LISTEN_DB_URL to point directly at PostgreSQL.
+    import os
+
+    listen_db_url = os.environ.get("AIQ_LISTEN_DB_URL", db_url)
+    asyncpg_url = listen_db_url.replace("+psycopg2", "").replace("+asyncpg", "").replace("postgresql://", "postgres://")
+    channel = get_job_events_channel(job_id)
+
+    logger.info(f"SSE pub-sub stream starting for job_id={job_id}, channel={channel}")
+
+    conn = None
+    notification_queue: asyncio.Queue = asyncio.Queue()
+
+    def notification_handler(connection, pid, channel_name, payload):
+        try:
+            notification_queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            logger.warning("Notification queue full for job %s", job_id)
+
+    try:
+        conn = await asyncpg.connect(asyncpg_url)
+        await conn.add_listener(channel, notification_handler)
+        logger.info(f"SSE: Listening on channel {channel}")
+
+        async with connection_manager.track_connection():
+            job = await job_store.get_job(job_id)
+            if not job:
+                logger.warning(f"SSE pub-sub: Job {job_id} not found")
+                yield format_sse("job.error", {"error": "Job not found"})
+                return
+
+            job_already_complete = job.status in terminal_statuses
+
+            events = await EventStore.get_events_async(db_url, job_id, last_event_id, 10000)
+            logger.info(
+                f"SSE pub-sub: Fetched {len(events)} historical events for job {job_id} (after_id={last_event_id})"
+            )
+
+            for event in events:
+                db_event_id = event.pop("_id", None)
+                if db_event_id:
+                    last_event_id = db_event_id
+                event_type = event.pop("type", "event")
+                yield format_sse(event_type, event, db_event_id)
+
+            yield format_sse("stream.mode", {"mode": "pubsub", "channel": channel})
+
+            # Reconciliation fetch: catch events that arrived while sending the historical batch.
+            # The LISTEN handler may have queued notifications for some of these, but a direct
+            # fetch ensures no gap between the historical batch and the live stream.
+            reconcile_events = await EventStore.get_events_async(db_url, job_id, last_event_id, 1000)
+            if reconcile_events:
+                logger.info(f"SSE pub-sub: Reconciliation fetched {len(reconcile_events)} events for job {job_id}")
+                for event in reconcile_events:
+                    db_event_id = event.pop("_id", None)
+                    if db_event_id:
+                        last_event_id = db_event_id
+                    event_type = event.pop("type", "event")
+                    yield format_sse(event_type, event, db_event_id)
+
+            if job_already_complete:
+                last_status = job.status
+                data = {"status": job.status}
+                if job.error:
+                    data["error"] = job.error
+                if is_reconnect:
+                    data["reconnected"] = True
+                yield format_sse("job.status", data)
+                logger.info(f"SSE pub-sub: Job {job_id} already complete, sent {len(events)} events")
+                return
+
+            while True:
+                if connection_manager.is_shutting_down:
+                    logger.info("SSE pub-sub stream closing for job %s due to server shutdown", job_id)
+                    yield format_sse("job.shutdown", {"message": "Server shutting down"})
+                    break
+
+                try:
+                    try:
+                        payload = await asyncio.wait_for(notification_queue.get(), timeout=5.0)
+                        notification_data = json.loads(payload)
+                        event_id = notification_data.get("id")
+
+                        if event_id and event_id > last_event_id:
+                            event = await EventStore.get_event_by_id_async(db_url, event_id)
+                            if event:
+                                last_event_id = event_id
+                                db_event_id = event.pop("_id", None)
+                                event_type = event.pop("type", "event")
+                                yield format_sse(event_type, event, db_event_id)
+                    except TimeoutError:
+                        # Fallback poll: catch events if NOTIFY was lost
+                        fallback_events = await EventStore.get_events_async(db_url, job_id, last_event_id, 100)
+                        for event in fallback_events:
+                            db_event_id = event.pop("_id", None)
+                            if db_event_id:
+                                last_event_id = db_event_id
+                            event_type = event.pop("type", "event")
+                            yield format_sse(event_type, event, db_event_id)
+
+                    job = await job_store.get_job(job_id)
+                    if not job:
+                        logger.warning(f"SSE pub-sub: Job {job_id} not found")
+                        yield format_sse("job.error", {"error": "Job not found"})
+                        break
+
+                    if job.status != last_status:
+                        last_status = job.status
+                        logger.info(f"SSE pub-sub: Job {job_id} status changed to {job.status}")
+                        data = {"status": job.status}
+                        if job.error:
+                            data["error"] = job.error
+                        if is_reconnect:
+                            data["reconnected"] = True
+                            is_reconnect = False
+                        yield format_sse("job.status", data)
+
+                    if job.status in terminal_statuses:
+                        await asyncio.sleep(0.5)
+                        while not notification_queue.empty():
+                            try:
+                                payload = notification_queue.get_nowait()
+                                notification_data = json.loads(payload)
+                                event_id = notification_data.get("id")
+                                if event_id and event_id > last_event_id:
+                                    event = await EventStore.get_event_by_id_async(db_url, event_id)
+                                    if event:
+                                        last_event_id = event_id
+                                        db_event_id = event.pop("_id", None)
+                                        event_type = event.pop("type", "event")
+                                        yield format_sse(event_type, event, db_event_id)
+                            except asyncio.QueueEmpty:
+                                break
+                        break
+
+                except asyncio.CancelledError:
+                    logger.info("SSE pub-sub stream cancelled for job %s", job_id)
+                    break
+                except Exception as e:
+                    logger.exception("SSE pub-sub stream error for job %s: %s", job_id, e)
+                    yield format_sse("job.error", {"error": "Internal server error"})
+                    break
+
+    finally:
+        if conn:
+            try:
+                await conn.remove_listener(channel, notification_handler)
+                await conn.close()
+                logger.info(f"SSE pub-sub: Closed connection for job {job_id}")
+            except Exception as e:
+                logger.warning(f"SSE pub-sub: Error closing connection for job {job_id}: {e}")
+
+
+async def _sse_generator_polling(job_store, job_id: str, db_url: str, start_event_id: int = 0):
+    """
+    Polling-based SSE generator for SQLite and fallback scenarios.
+
+    Replays historical events as fast as possible, then switches to live polling mode.
+    Live mode uses a 0.5s polling interval and is suitable for local development with SQLite.
+    Supports reconnection via start_event_id - replays events after that ID without delay.
+    Supports graceful shutdown via the SSE connection manager.
+    """
+    import asyncio
+
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+    from ..jobs.connection_manager import get_connection_manager
+    from ..jobs.event_store import EventStore
+
+    connection_manager = get_connection_manager()
+    last_status = None
+    last_event_id = start_event_id
+    sequence_id = start_event_id
+    terminal_statuses = {JobStatus.SUCCESS.value, JobStatus.FAILURE.value, JobStatus.INTERRUPTED.value}
+    is_reconnect = start_event_id > 0
+    in_replay_mode = True
+    replay_mode_announced = False
+
+    def format_sse(event_type: str, data: dict, event_id: int | None = None) -> str:
+        nonlocal sequence_id
+        if event_id is not None:
+            sequence_id = event_id
+        else:
+            sequence_id += 1
+        return f"id: {sequence_id}\nevent: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+    logger.info(
+        f"SSE polling stream starting for job_id={job_id}, start_event_id={start_event_id}, db_url={db_url[:50]}"
+    )
+
+    async with connection_manager.track_connection():
+        yield format_sse("stream.mode", {"mode": "polling", "interval_ms": 500})
+
+        while True:
+            if connection_manager.is_shutting_down:
+                logger.info("SSE stream closing for job %s due to server shutdown", job_id)
+                yield format_sse("job.shutdown", {"message": "Server shutting down"})
+                break
+
+            try:
+                job = await job_store.get_job(job_id)
+                if not job:
+                    logger.warning(f"SSE: Job {job_id} not found")
+                    yield format_sse("job.error", {"error": "Job not found"})
+                    break
+
+                # Replay mode drains historical events quickly without wait delays.
+                # Live mode returns to regular polling cadence.
+                if in_replay_mode:
+                    limit = 10000 if job.status in terminal_statuses else 1000
+                else:
+                    limit = 10000 if job.status in terminal_statuses else 100
+                events = await EventStore.get_events_async(db_url, job_id, last_event_id, limit)
+
+                if events:
+                    logger.info(f"SSE: Fetched {len(events)} events for job {job_id} (after_id={last_event_id})")
+                elif job.status in terminal_statuses:
+                    logger.warning(f"SSE: No events found for completed job {job_id} (after_id={last_event_id})")
+
+                for i, event in enumerate(events):
+                    if connection_manager.is_shutting_down:
+                        logger.info("SSE stream closing for job %s due to server shutdown (mid-batch)", job_id)
+                        yield format_sse("job.shutdown", {"message": "Server shutting down"})
+                        return
+
+                    try:
+                        db_event_id = event.pop("_id", None)
+                        if db_event_id:
+                            last_event_id = db_event_id
+                        event_type = event.pop("type", "event")
+                        sse_output = format_sse(event_type, event, db_event_id)
+                        yield sse_output
+                    except Exception as e:
+                        logger.error(f"SSE: Failed to yield event {i} (id={db_event_id}): {e}", exc_info=True)
+
+                # Transition to live mode after historical catch-up:
+                # - no more events after current cursor, or
+                # - fetched a partial replay batch (< limit), indicating we've reached the current tail.
+                if in_replay_mode and (not events or len(events) < limit):
+                    in_replay_mode = False
+                    replay_mode_announced = True
+                    logger.info(
+                        "SSE: Replay complete for job %s at event_id=%s; switching to live mode", job_id, last_event_id
+                    )
+                    yield format_sse("stream.mode", {"mode": "live"})
+
+                if job.status != last_status:
+                    last_status = job.status
+                    logger.info(f"SSE: Job {job_id} status changed to {job.status}")
+                    data = {"status": job.status}
+                    if job.error:
+                        data["error"] = job.error
+                    if is_reconnect:
+                        data["reconnected"] = True
+                        is_reconnect = False
+                    yield format_sse("job.status", data)
+
+                if job.status in terminal_statuses:
+                    break
+
+                # During replay we intentionally avoid polling delays so clients can catch up quickly.
+                if in_replay_mode:
+                    continue
+
+                # If replay was completed in a prior iteration but stream.mode couldn't be emitted
+                # (e.g., due to an exception path), emit it once before waiting.
+                if not in_replay_mode and not replay_mode_announced:
+                    replay_mode_announced = True
+                    yield format_sse("stream.mode", {"mode": "live"})
+
+                shutdown_signaled = await connection_manager.wait_or_shutdown(0.5)
+                if shutdown_signaled:
+                    logger.info("SSE stream closing for job %s due to server shutdown (during wait)", job_id)
+                    yield format_sse("job.shutdown", {"message": "Server shutting down"})
+                    break
+
+            except asyncio.CancelledError:
+                logger.info("SSE stream cancelled for job %s", job_id)
+                break
+            except Exception as e:
+                logger.exception("SSE stream error for job %s: %s", job_id, e)
+                yield format_sse("job.error", {"error": "Internal server error"})
+                break

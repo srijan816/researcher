@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+google_scholar_paper_search.egg-info/PKG-INFO
+google_scholar_paper_search.egg-info/SOURCES.txt
+google_scholar_paper_search.egg-info/dependency_links.txt
+google_scholar_paper_search.egg-info/entry_points.txt
+google_scholar_paper_search.egg-info/requires.txt
+google_scholar_paper_search.egg-info/top_level.txt
+src/__init__.py
+src/paper_search.py
+src/register.py
+tests/__init__.py
+tests/conftest.py
+tests/test_paper_search.py

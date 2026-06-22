@@ -1,0 +1,841 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+"""Typed planner schema used by the deep research `write_plan` tool."""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping
+from typing import Any
+from typing import Literal
+
+from pydantic import BaseModel
+from pydantic import Field
+from pydantic import field_validator
+from pydantic import model_validator
+
+
+def _unwrap_item(value: Any) -> Any:
+    """Normalize Anthropic/MiniMax tool-call wrappers like {"item": [...]}.
+
+    MiniMax M3 sometimes serializes JSON-schema arrays through an object with an
+    `item` key. Accepting that shape keeps a valid plan from becoming a costly
+    retry loop while preserving strict validation of the normalized payload.
+    """
+
+    if isinstance(value, dict) and set(value) == {"item"}:
+        return _unwrap_item(value["item"])
+    if isinstance(value, list):
+        return [_unwrap_item(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _unwrap_item(item) for key, item in value.items()}
+    return value
+
+
+def _as_list(value: Any) -> list[Any]:
+    """Return provider-wrapped list-ish values as a Python list.
+
+    Anthropic-style tool schemas often arrive from MiniMax as ``{"item": ...}``.
+    When there is only one child, the provider can preserve it as a single
+    object rather than a list, which previously pushed the planner into costly
+    "add a dummy second item" repair loops. List fields should accept that
+    single-object shape and normalize it here.
+    """
+
+    value = _unwrap_item(value)
+    if value is None:
+        return []
+    if isinstance(value, list):
+        flattened: list[Any] = []
+        for item in value:
+            item = _unwrap_item(item)
+            if isinstance(item, list):
+                flattened.extend(_as_list(item))
+            else:
+                flattened.append(item)
+        return flattened
+    return [value]
+
+
+def _textish(value: Any, *keys: str) -> str | None:
+    """Extract a useful string from provider-specific text wrappers."""
+
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return None
+    for key in (*keys, "claim", "text", "$text", "value", "title", "constraint"):
+        item = value.get(key)
+        if isinstance(item, str) and item.strip():
+            return item
+    return None
+
+
+def _shorten_text(value: str, limit: int) -> str:
+    """Return compact single-line text suitable for plan artifacts."""
+
+    value = " ".join(str(value).split()).strip()
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip(" .,;:") + "…"
+
+
+_NUMERIC_TEXT_RE = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def _coerce_int_like(value: Any) -> int | None:
+    """Coerce common MiniMax string-number shapes to an int."""
+
+    value = _unwrap_item(value)
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(round(value))
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        semantic_weights = {
+            "low": 1,
+            "lowish": 2,
+            "medium": 3,
+            "moderate": 3,
+            "high": 5,
+            "highish": 4,
+        }
+        if lowered in semantic_weights:
+            return semantic_weights[lowered]
+        match = _NUMERIC_TEXT_RE.search(value.replace(",", ""))
+        if match:
+            return int(round(float(match.group(0))))
+    return None
+
+
+def _coerce_float_like(value: Any) -> float | None:
+    """Coerce common MiniMax string-number shapes to a float."""
+
+    value = _unwrap_item(value)
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return float(int(value))
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        match = _NUMERIC_TEXT_RE.search(value.replace(",", ""))
+        if match:
+            return float(match.group(0))
+    return None
+
+
+def _normalize_output_mode(value: Any) -> str | Any:
+    """Map loose MiniMax mode strings back to the canonical enum values."""
+
+    value = _unwrap_item(value)
+    if not isinstance(value, str):
+        return value
+    normalized = re.sub(r"[\s\-]+", "_", value.strip().lower())
+    alias_map = {
+        "standard": "standard_report",
+        "standard_report": "standard_report",
+        "standardreport": "standard_report",
+        "focused": "focused_screen",
+        "focused_screen": "focused_screen",
+        "focusedscreen": "focused_screen",
+        "lesson": "lesson_first",
+        "lesson_first": "lesson_first",
+        "lessonfirst": "lesson_first",
+    }
+    return alias_map.get(normalized, "standard_report")
+
+
+def _compact_mapping(value: Mapping[str, Any], *, text_limit: int = 500) -> dict[str, Any]:
+    """Recursively compact provider-generated plan metadata.
+
+    The executable plan should be a contract for downstream research, not a
+    bulky evidence artifact. Tool-call arguments occasionally contain long
+    prose fields that make `write_plan` fragile and slow; compacting here keeps
+    the typed tool tolerant without asking the model to retry.
+    """
+
+    compacted: dict[str, Any] = {}
+    for key, item in value.items():
+        if isinstance(item, str):
+            compacted[str(key)] = _shorten_text(item, text_limit)
+        elif isinstance(item, Mapping):
+            compacted[str(key)] = _compact_mapping(item, text_limit=text_limit)
+        elif isinstance(item, list):
+            compacted[str(key)] = [
+                _compact_mapping(child, text_limit=text_limit)
+                if isinstance(child, Mapping)
+                else _shorten_text(child, text_limit)
+                if isinstance(child, str)
+                else child
+                for child in item[:20]
+            ]
+        else:
+            compacted[str(key)] = item
+    return compacted
+
+
+class PlanTargetClaim(BaseModel):
+    """A compact claim or question a researcher should resolve."""
+
+    claim_id: str = Field(default="")
+    claim_type: str = Field(default="discovery")
+    claim: str
+    required_source_class: str = Field(default="mixed")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_claim_shape(cls, value: Any) -> Any:
+        value = _unwrap_item(value)
+        text = _textish(value)
+        if text is not None:
+            if isinstance(value, dict):
+                normalized = dict(value)
+                normalized["claim"] = text
+                return normalized
+            return {"claim": text}
+        if isinstance(value, dict):
+            normalized = dict(value)
+            compact_parts: list[str] = []
+            for key, item in normalized.items():
+                if key in {"claim_id", "claim_type", "required_source_class"}:
+                    continue
+                item_text = _textish(item)
+                if item_text is None and isinstance(item, (str, int, float, bool)):
+                    item_text = str(item)
+                if item_text:
+                    compact_parts.append(item_text)
+            if compact_parts:
+                normalized["claim"] = _shorten_text(" ".join(compact_parts), 360)
+            else:
+                claim_id = str(normalized.get("claim_id") or "this claim").strip()
+                normalized["claim"] = f"Research and verify {claim_id}"
+            return normalized
+        if isinstance(value, list):
+            text = " ".join(str(item) for item in _as_list(value) if str(item).strip())
+            return {"claim": _shorten_text(text or "Research and verify this claim", 360)}
+        return value
+
+    @field_validator("claim", mode="before")
+    @classmethod
+    def _claim_is_textish(cls, value: Any) -> str:
+        text = _textish(value)
+        if text is not None:
+            return text
+        if isinstance(value, list):
+            return " ".join(str(item) for item in _as_list(value) if str(item).strip())
+        return str(value)
+
+    @field_validator("claim")
+    @classmethod
+    def _claim_is_meaningful(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 6:
+            raise ValueError("claim must be meaningful")
+        return _shorten_text(value, 360)
+
+
+class PlanTocItem(BaseModel):
+    """A section or subsection in the final report."""
+
+    id: str | None = None
+    title: str
+    per_entity: str | None = None
+    subsections: list[PlanTocItem] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_wrapped_lists(cls, value: Any) -> Any:
+        value = _unwrap_item(value)
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "title" not in normalized:
+            for alias in ("heading", "name", "section_title"):
+                if alias in normalized:
+                    normalized["title"] = normalized[alias]
+                    break
+        return normalized
+
+    @field_validator("title")
+    @classmethod
+    def _title_is_meaningful(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 3:
+            raise ValueError("TOC title must be meaningful")
+        return value[:180].rstrip(" .,:;")
+
+    @field_validator("subsections", mode="before")
+    @classmethod
+    def _subsections_are_listish(cls, value: Any) -> list[Any]:
+        return _as_list(value)
+
+
+class PlanConstraint(BaseModel):
+    """Acceptance criterion for the final report."""
+
+    category: str = Field(default="content")
+    constraint: str
+    rationale: str = Field(default="")
+    verification: str = Field(default="")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_constraint_shape(cls, value: Any) -> Any:
+        value = _unwrap_item(value)
+        text = _textish(value)
+        if text is not None:
+            if isinstance(value, dict):
+                normalized = dict(value)
+                normalized["constraint"] = text
+                return normalized
+            return {"constraint": text}
+        return value
+
+    @field_validator("constraint")
+    @classmethod
+    def _constraint_is_meaningful(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 8:
+            raise ValueError("constraint must be meaningful")
+        return _shorten_text(value, 500)
+
+
+class PlanOutputStyle(BaseModel):
+    """Instructions that shape the final report without replacing the TOC."""
+
+    mode: Literal["standard_report", "focused_screen", "lesson_first"] = "standard_report"
+    target: str = Field(default="Comprehensive source-grounded report matching the approved scope.")
+    avoid: list[str] = Field(default_factory=list)
+    topic_anchor: str | None = None
+    motion_anchor: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_wrapped_lists(cls, value: Any) -> Any:
+        value = _unwrap_item(value)
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "mode" in normalized:
+            normalized["mode"] = _normalize_output_mode(normalized["mode"])
+        return normalized
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _mode_is_canonical(cls, value: Any) -> Any:
+        return _normalize_output_mode(value)
+
+    @field_validator("avoid", mode="before")
+    @classmethod
+    def _avoid_is_listish(cls, value: Any) -> list[Any]:
+        return _as_list(value)
+
+
+class PlanTaskAnalysis(BaseModel):
+    """Compact analysis fields needed by downstream orchestration."""
+
+    user_intent: str = Field(default="")
+    scope_profile: dict[str, Any] = Field(default_factory=dict)
+    claim_profile: dict[str, Any] = Field(default_factory=dict)
+    source_strategy: dict[str, Any] = Field(default_factory=dict)
+    entities: list[dict[str, Any]] = Field(default_factory=list)
+    explicit_requirements: list[str] = Field(default_factory=list)
+    implicit_requirements: list[str] = Field(default_factory=list)
+    out_of_scope: list[str] = Field(default_factory=list)
+    language: str = Field(default="English")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_wrapped_lists(cls, value: Any) -> Any:
+        value = _unwrap_item(value)
+        if not isinstance(value, dict):
+            return value
+
+        normalized = dict(value)
+        source_strategy = normalized.get("source_strategy")
+        if isinstance(source_strategy, str):
+            normalized["source_strategy"] = {"summary": _shorten_text(source_strategy, 800)}
+
+        scope_profile = normalized.get("scope_profile")
+        if isinstance(scope_profile, str):
+            normalized["scope_profile"] = {"summary": _shorten_text(scope_profile, 800)}
+
+        claim_profile = normalized.get("claim_profile")
+        if isinstance(claim_profile, str):
+            normalized["claim_profile"] = {"summary": _shorten_text(claim_profile, 800)}
+
+        entities = normalized.get("entities")
+        if isinstance(entities, dict):
+            entity_rows: list[dict[str, Any]] = []
+            for centrality, names in entities.items():
+                for name in _as_list(names):
+                    if isinstance(name, dict):
+                        row = dict(name)
+                        row.setdefault("centrality", str(centrality))
+                        entity_rows.append(row)
+                    else:
+                        entity_rows.append({"name": str(name), "centrality": str(centrality)})
+            normalized["entities"] = entity_rows
+
+        return normalized
+
+    @field_validator("entities", mode="before")
+    @classmethod
+    def _entities_are_listish(cls, value: Any) -> list[Any]:
+        return _as_list(value)
+
+    @field_validator("explicit_requirements", "implicit_requirements", "out_of_scope", mode="before")
+    @classmethod
+    def _string_lists_are_listish(cls, value: Any) -> list[Any]:
+        return _as_list(value)
+
+
+class PlanQuery(BaseModel):
+    """A self-contained researcher assignment."""
+
+    query: str
+    tool: str = Field(default="advanced_web_search_tool")
+    seed_queries: list[str] = Field(default_factory=list)
+    task_id: str | None = None
+    task_category: str = Field(default="evidence")
+    relevance_weight: int = Field(default=1, ge=1, le=5)
+    budget_percent: float | None = None
+    search_budget: int | None = Field(default=None, ge=1)
+    target_claims: list[PlanTargetClaim] = Field(default_factory=list)
+    target_claim_ids: list[str] = Field(default_factory=list)
+    target_sections: list[str] = Field(default_factory=list)
+    target_entity: str | None = None
+    target_class: str = Field(default="mixed")
+    rationale: str = Field(default="")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_wrapped_lists(cls, value: Any) -> Any:
+        value = _unwrap_item(value)
+        if not isinstance(value, dict):
+            return value
+        return dict(value)
+
+    @field_validator("query")
+    @classmethod
+    def _query_is_meaningful(cls, value: str) -> str:
+        value = " ".join(value.split()).strip()
+        if len(value) < 8:
+            raise ValueError("query must be meaningful")
+        return _shorten_text(value, 700)
+
+    @field_validator("seed_queries", "target_claims", "target_claim_ids", "target_sections", mode="before")
+    @classmethod
+    def _query_lists_are_listish(cls, value: Any) -> list[Any]:
+        return _as_list(value)
+
+    @field_validator("relevance_weight", mode="before")
+    @classmethod
+    def _relevance_weight_is_int_like(cls, value: Any) -> int | None:
+        coerced = _coerce_int_like(value)
+        return coerced if coerced is not None else value
+
+    @field_validator("budget_percent", mode="before")
+    @classmethod
+    def _budget_percent_is_float_like(cls, value: Any) -> float | None:
+        coerced = _coerce_float_like(value)
+        return coerced if coerced is not None else value
+
+    @field_validator("search_budget", mode="before")
+    @classmethod
+    def _search_budget_is_int_like(cls, value: Any) -> int | None:
+        coerced = _coerce_int_like(value)
+        return coerced if coerced is not None else value
+
+    @field_validator("seed_queries")
+    @classmethod
+    def _seed_queries_are_compact(cls, value: list[Any]) -> list[str]:
+        compact: list[str] = []
+        for item in value[:5]:
+            text = " ".join(str(item).split()).strip()
+            if text:
+                compact.append(_shorten_text(text, 140))
+        return compact
+
+    @field_validator("rationale")
+    @classmethod
+    def _rationale_is_compact(cls, value: str) -> str:
+        return _shorten_text(value, 360)
+
+
+class WritePlanInput(BaseModel):
+    """Input accepted from the model by the typed `write_plan` tool."""
+
+    report_title: str
+    report_toc: list[PlanTocItem]
+    queries: list[PlanQuery]
+    constraints: list[PlanConstraint | str] = Field(
+        default_factory=lambda: [
+            "Satisfy the user request with source-backed evidence and clearly note uncertainty or gaps."
+        ]
+    )
+    output_style: PlanOutputStyle | dict[str, Any] | None = None
+    task_analysis: PlanTaskAnalysis | dict[str, Any] | None = None
+    fact_ledger_targets: dict[str, Any] | list[dict[str, Any]] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_wrapped_lists(cls, value: Any) -> Any:
+        return _unwrap_item(value)
+
+    @field_validator("report_title")
+    @classmethod
+    def _report_title_is_meaningful(cls, value: str) -> str:
+        value = " ".join(value.split()).strip()
+        if len(value) < 4:
+            raise ValueError("report_title must be meaningful")
+        return value[:180].rstrip(" .,:;")
+
+    @field_validator("report_toc")
+    @classmethod
+    def _toc_is_non_empty(cls, value: list[PlanTocItem]) -> list[PlanTocItem]:
+        if not value:
+            raise ValueError("report_toc must contain at least one section")
+        return value
+
+    @field_validator("report_toc", "queries", "constraints", mode="before")
+    @classmethod
+    def _top_level_lists_are_listish(cls, value: Any) -> list[Any]:
+        return _as_list(value)
+
+    @field_validator("queries")
+    @classmethod
+    def _queries_are_non_empty(cls, value: list[PlanQuery]) -> list[PlanQuery]:
+        if not value:
+            raise ValueError("queries must contain at least one researcher assignment")
+        return value
+
+    @field_validator("fact_ledger_targets", mode="before")
+    @classmethod
+    def _normalize_fact_ledger_targets(cls, value: Any) -> Any:
+        value = _unwrap_item(value)
+        if isinstance(value, list):
+            return {"entities": value}
+        return value
+
+
+def _constraint_to_dict(value: PlanConstraint | str) -> dict[str, str]:
+    if isinstance(value, PlanConstraint):
+        return value.model_dump()
+    return {
+        "category": "content",
+        "constraint": value.strip(),
+        "rationale": "User or planner requirement.",
+        "verification": "Check the final report against this criterion.",
+    }
+
+
+def _toc_to_dict(item: PlanTocItem, index: int, prefix: str = "") -> dict[str, Any]:
+    section_id = item.id or f"{prefix}{index}"
+    return {
+        "id": section_id,
+        "title": item.title,
+        "per_entity": item.per_entity,
+        "subsections": [
+            _toc_to_dict(subsection, sub_index, f"{section_id}.")
+            for sub_index, subsection in enumerate(item.subsections, start=1)
+        ],
+    }
+
+
+def _source_strategy_for_queries() -> dict[str, Any]:
+    return {
+        "required_source_classes": [
+            "first_party",
+            "primary_issuer",
+            "academic",
+            "authoritative_third_party",
+            "trade_press",
+            "forum",
+            "mixed",
+        ],
+        "diversity_floor_domains": 4,
+        "max_single_domain_share": 0.4,
+        "numeric_claim_rule": (
+            "Use primary or authoritative sources for numbers; if unavailable, label "
+            "secondary-source numbers as partially verified."
+        ),
+    }
+
+
+def _claim_profile_from_queries(queries: list[PlanQuery]) -> dict[str, Any]:
+    """Derive a compact claim profile from researcher query claim targets."""
+
+    claims: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for query_index, query in enumerate(queries, start=1):
+        for claim_index, claim in enumerate(query.target_claims, start=1):
+            claim_id = claim.claim_id or f"C{query_index}.{claim_index}"
+            if claim_id in seen:
+                continue
+            seen.add(claim_id)
+            claims.append(
+                {
+                    "claim_id": claim_id,
+                    "claim_text": claim.claim,
+                    "claim_type": claim.claim_type,
+                    "expected_answer_shape": "free_text",
+                    "preferred_source_classes": [claim.required_source_class or "mixed"],
+                    "target_task_id": query.task_id or f"Q{query_index}",
+                }
+            )
+
+    if not claims:
+        return {
+            "claim_density": "medium",
+            "verifiability": "mixed",
+            "claims": [],
+        }
+
+    claim_count = len(claims)
+    if claim_count < 8:
+        density = "low"
+    elif claim_count <= 24:
+        density = "medium"
+    else:
+        density = "high"
+    return {
+        "claim_density": density,
+        "verifiability": "mixed",
+        "claims": claims,
+    }
+
+
+def _scope_profile_from_plan(
+    *,
+    title: str,
+    toc: list[dict[str, Any]],
+    output_style: PlanOutputStyle,
+) -> dict[str, Any]:
+    """Derive a compact scope contract when the planner did not provide one."""
+
+    section_titles = [str(section.get("title") or "").strip() for section in toc if section.get("title")]
+    primary_subject = output_style.topic_anchor or title
+    secondary_contexts: list[str] = []
+    if output_style.motion_anchor:
+        secondary_contexts.append(output_style.motion_anchor)
+
+    if output_style.mode == "focused_screen":
+        scope_mode = "focused_screen"
+        budget_mode = "focused_screen"
+        deliverable_type = "screen_or_lookup"
+    elif output_style.mode == "lesson_first" or output_style.topic_anchor:
+        scope_mode = "topic_first"
+        budget_mode = "lesson_first"
+        deliverable_type = "lesson_or_training_dossier"
+    else:
+        scope_mode = "symmetric"
+        budget_mode = "symmetric"
+        deliverable_type = "research_report"
+
+    forbidden_reframes = list(output_style.avoid or [])
+    if output_style.motion_anchor:
+        forbidden_reframes.append("Treating the application, motion, or audience context as the main topic")
+
+    return {
+        "primary_subject": _shorten_text(primary_subject, 220),
+        "deliverable_type": deliverable_type,
+        "audience": None,
+        "application_context": output_style.motion_anchor,
+        "scope_mode": scope_mode,
+        "budget_mode": budget_mode,
+        "section_count_target": len(section_titles) or None,
+        "secondary_contexts": secondary_contexts,
+        "forbidden_reframes": forbidden_reframes[:8],
+        "classification_reason": (
+            "Derived from output_style anchors and report shape. The primary subject controls titles, "
+            "research task order, and final synthesis."
+        ),
+    }
+
+
+def _expand_single_query_for_sections(
+    raw_queries: list[PlanQuery],
+    *,
+    section_titles: list[str],
+    output_style: PlanOutputStyle,
+) -> list[PlanQuery]:
+    """Split one overloaded research assignment across report sections.
+
+    MiniMax sometimes commits a plausible multi-section plan with only one
+    broad `queries` item. That is valid tool syntax but poor execution: one
+    researcher can burn the budget while later sections never get evidence.
+    When the final report is not a focused one-task screen, expand the single
+    assignment into section-bound tasks so downstream orchestration remains
+    parallel and balanced.
+    """
+
+    if len(raw_queries) != 1 or len(section_titles) <= 1 or output_style.mode == "focused_screen":
+        return raw_queries
+
+    base = raw_queries[0]
+    expanded: list[PlanQuery] = []
+    for index, section_title in enumerate(section_titles[:5], start=1):
+        section_query = _shorten_text(f"{base.query} Focus specifically on: {section_title}.", 700)
+        expanded.append(
+            PlanQuery.model_validate(
+                {
+                    **base.model_dump(),
+                    "query": section_query,
+                    "task_id": f"Q{index}",
+                    "task_category": base.task_category or "evidence",
+                    "relevance_weight": base.relevance_weight or 1,
+                    "budget_percent": None,
+                    "target_sections": [section_title],
+                    "target_claims": [
+                        {
+                            "claim_id": f"C{index}",
+                            "claim_type": "discovery",
+                            "claim": f"Evidence needed to answer report section: {section_title}",
+                            "required_source_class": base.target_class or "mixed",
+                        }
+                    ],
+                    "target_claim_ids": [f"C{index}"],
+                    "rationale": _shorten_text(
+                        (
+                            "Expanded from a single broad planner assignment so "
+                            f"{section_title} receives dedicated evidence."
+                        ),
+                        360,
+                    ),
+                }
+            )
+        )
+    return expanded
+
+
+def build_plan_payload(input_data: WritePlanInput) -> dict[str, Any]:
+    """Expand compact tool arguments into the canonical `/shared/plan.json` shape."""
+
+    toc = [_toc_to_dict(item, index) for index, item in enumerate(input_data.report_toc, start=1)]
+    section_titles = [section["title"] for section in toc]
+
+    task_analysis = (
+        input_data.task_analysis
+        if isinstance(input_data.task_analysis, PlanTaskAnalysis)
+        else PlanTaskAnalysis.model_validate(input_data.task_analysis or {})
+    )
+    task_analysis_dict = _compact_mapping(task_analysis.model_dump(), text_limit=800)
+    task_analysis_dict.setdefault("source_strategy", {})
+    if not task_analysis_dict["source_strategy"]:
+        task_analysis_dict["source_strategy"] = _source_strategy_for_queries()
+    output_style = (
+        input_data.output_style
+        if isinstance(input_data.output_style, PlanOutputStyle)
+        else PlanOutputStyle.model_validate(input_data.output_style or {})
+    )
+
+    queries: list[dict[str, Any]] = []
+    raw_queries = _expand_single_query_for_sections(
+        list(input_data.queries),
+        section_titles=section_titles,
+        output_style=output_style,
+    )
+
+    task_analysis_dict.setdefault("scope_profile", {})
+    if not task_analysis_dict["scope_profile"]:
+        task_analysis_dict["scope_profile"] = _scope_profile_from_plan(
+            title=input_data.report_title,
+            toc=toc,
+            output_style=output_style,
+        )
+
+    task_analysis_dict.setdefault("claim_profile", {})
+    if not task_analysis_dict["claim_profile"]:
+        task_analysis_dict["claim_profile"] = _claim_profile_from_queries(raw_queries)
+    elif not task_analysis_dict["claim_profile"].get("claims"):
+        derived_profile = _claim_profile_from_queries(raw_queries)
+        if derived_profile.get("claims"):
+            task_analysis_dict["claim_profile"] = {
+                **task_analysis_dict["claim_profile"],
+                "claims": derived_profile["claims"],
+                "claim_density": task_analysis_dict["claim_profile"].get(
+                    "claim_density", derived_profile["claim_density"]
+                ),
+                "verifiability": task_analysis_dict["claim_profile"].get(
+                    "verifiability", derived_profile["verifiability"]
+                ),
+            }
+
+    budget_percents = [query.budget_percent for query in raw_queries]
+    needs_budget_normalization = (
+        not raw_queries
+        or any(percent is None or percent <= 0 for percent in budget_percents)
+        or abs(sum(float(percent or 0) for percent in budget_percents) - 100.0) > 1.0
+    )
+    if needs_budget_normalization:
+        weights = [max(1, int(query.relevance_weight or 1)) for query in raw_queries] or [1]
+        weight_total = sum(weights) or 1
+        normalized_budget_percents = [round(weight / weight_total * 100.0, 1) for weight in weights]
+        if normalized_budget_percents:
+            normalized_budget_percents[-1] = round(
+                normalized_budget_percents[-1] + (100.0 - sum(normalized_budget_percents)), 1
+            )
+    else:
+        normalized_budget_percents = [round(float(percent or 0), 1) for percent in budget_percents]
+        if normalized_budget_percents:
+            normalized_budget_percents[-1] = round(
+                normalized_budget_percents[-1] + (100.0 - sum(normalized_budget_percents)), 1
+            )
+
+    for index, query in enumerate(raw_queries, start=1):
+        query_dict = query.model_dump()
+        query_dict["task_id"] = query_dict.get("task_id") or f"Q{index}"
+        query_dict["budget_percent"] = normalized_budget_percents[index - 1]
+        if query_dict.get("target_sections"):
+            query_dict["target_sections"] = [
+                _shorten_text(str(section), 160) for section in query_dict["target_sections"][:8]
+            ]
+        if not query_dict.get("target_sections"):
+            query_dict["target_sections"] = section_titles[:]
+        if not query_dict.get("target_claims"):
+            claim_id = f"C{index}"
+            query_dict["target_claims"] = [
+                {
+                    "claim_id": claim_id,
+                    "claim_type": "discovery",
+                    "claim": f"Evidence needed for: {query.query}",
+                    "required_source_class": "mixed",
+                }
+            ]
+            query_dict["target_claim_ids"] = [claim_id]
+        elif not query_dict.get("target_claim_ids"):
+            query_dict["target_claims"] = query_dict["target_claims"][:3]
+            for claim_index, claim in enumerate(query_dict["target_claims"], start=1):
+                if isinstance(claim, dict) and not claim.get("claim_id"):
+                    claim["claim_id"] = f"C{index}.{claim_index}"
+            query_dict["target_claim_ids"] = [
+                claim["claim_id"]
+                for claim in query_dict["target_claims"]
+                if isinstance(claim, dict) and claim.get("claim_id")
+            ]
+        else:
+            query_dict["target_claims"] = query_dict["target_claims"][:3]
+        queries.append(query_dict)
+
+    plan = {
+        "task_analysis": task_analysis_dict,
+        "report_title": input_data.report_title,
+        "report_toc": toc,
+        "constraints": [_constraint_to_dict(constraint) for constraint in input_data.constraints[:12]],
+        "output_style": output_style.model_dump(),
+        "queries": queries,
+    }
+    if input_data.fact_ledger_targets:
+        fact_targets = _unwrap_item(input_data.fact_ledger_targets)
+        if isinstance(fact_targets, Mapping):
+            plan["fact_ledger_targets"] = _compact_mapping(fact_targets, text_limit=300)
+        else:
+            plan["fact_ledger_targets"] = fact_targets
+    return plan

@@ -1,0 +1,2 @@
+[nat.plugins]
+knowledge_layer = knowledge_layer.register

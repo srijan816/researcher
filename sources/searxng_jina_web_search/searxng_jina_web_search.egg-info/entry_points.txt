@@ -1,0 +1,2 @@
+[nat.plugins]
+searxng_jina_web_search = searxng_jina_web_search.register

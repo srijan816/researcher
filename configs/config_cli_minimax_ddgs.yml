@@ -1,0 +1,338 @@
+# AI-Q Deep Research — MiniMax M3 + SearXNG/Jina (Zero Tavily)
+# Strategy:
+#   - MiniMax M3 across active planner, researcher, and synthesis paths.
+#   - Planner/researcher loops keep thinking disabled for speed and tool-call reliability.
+#   - The thinking-enabled synthesis model is reserved for the orchestrator on
+#     deep, high-stakes, or large-document jobs.
+#   - Exa → optional primary high-quality search when EXA_API_KEY is set
+#   - SearXNG → self-hosted metasearch JSON results and free fallback
+#   - Jina Reader → full-page markdown extraction for the top results
+# Cost: $0 beyond your existing MiniMax plan.
+
+general:
+  front_end:
+    _type: aiq_api
+    runner_class: aiq_api.plugin.AIQAPIWorker
+    db_url: ${NAT_JOB_STORE_DB_URL:-sqlite+aiosqlite:///./jobs.db}
+    expiry_seconds: 604800
+    cors:
+      allow_origin_regex: 'http://localhost(:\d+)?|http://127.0.0.1(:\d+)?|https://research\.genalphai\.com'
+      allow_methods:
+        - GET
+        - POST
+        - DELETE
+        - OPTIONS
+      allow_headers:
+        - '*'
+      allow_credentials: true
+  telemetry:
+    logging:
+      console:
+        _type: console
+        level: INFO
+
+llms:
+  minimax_m3_fast_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_FAST_MODEL:-MiniMax-M3}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.2
+    top_p: 0.8
+    max_tokens: 6000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: disabled
+    request_timeout: 240
+    stream_no_progress_timeout: 60
+    stream_repetition_token_limit: 24
+    max_retries: 1
+
+  minimax_m3_research_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_RESEARCH_MODEL:-MiniMax-M3}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.25
+    top_p: 0.85
+    max_tokens: 10000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: disabled
+    request_timeout: 420
+    stream_no_progress_timeout: 90
+    stream_repetition_token_limit: 24
+    max_retries: 1
+
+  minimax_m3_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_TEXT_MODEL:-MiniMax-M3}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.3
+    top_p: 0.85
+    max_tokens: 16000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: disabled
+    request_timeout: 600
+    stream_no_progress_timeout: 120
+    stream_repetition_token_limit: 24
+    max_retries: 2
+
+  minimax_m3_planner_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_PLANNER_MODEL:-MiniMax-M3}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.2
+    top_p: 0.8
+    max_tokens: 32768
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: disabled
+    request_timeout: 480
+    stream_no_progress_timeout: 90
+    stream_repetition_token_limit: 24
+    max_retries: 2
+
+  minimax_m3_planner_fast_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_PLANNER_FAST_MODEL:-MiniMax-M3}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.15
+    top_p: 0.8
+    max_tokens: 12000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: disabled
+    request_timeout: 300
+    stream_no_progress_timeout: 75
+    stream_repetition_token_limit: 24
+    max_retries: 1
+
+  minimax_m3_synthesis_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_SYNTHESIS_MODEL:-MiniMax-M3}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.2
+    top_p: 0.8
+    max_tokens: 24000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: enabled
+      budget_tokens: 4096
+    request_timeout: 720
+    stream_no_progress_timeout: 120
+    stream_repetition_token_limit: 24
+    max_retries: 2
+
+  minimax_m3_synthesis_fast_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_SYNTHESIS_FAST_MODEL:-MiniMax-M3}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.2
+    top_p: 0.8
+    max_tokens: 18000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: disabled
+    request_timeout: 480
+    stream_no_progress_timeout: 90
+    stream_repetition_token_limit: 24
+    max_retries: 1
+
+  minimax_m3_deeper_planner_fast_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_DEEPER_PLANNER_MODEL:-MiniMax-M3}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.2
+    top_p: 0.8
+    max_tokens: 12000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: disabled
+    request_timeout: 300
+    stream_no_progress_timeout: 75
+    stream_repetition_token_limit: 24
+    max_retries: 1
+
+  minimax_m3_verifier_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_VERIFIER_MODEL:-MiniMax-M3}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.1
+    top_p: 0.8
+    max_tokens: 2000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: disabled
+    request_timeout: 120
+    stream_no_progress_timeout: 60
+    stream_repetition_token_limit: 24
+    max_retries: 1
+
+  minimax_m3_deeper_research_fast_llm:
+    _type: anthropic
+    model_name: ${MINIMAX_DEEPER_RESEARCH_MODEL:-MiniMax-M3}
+    base_url: https://api.minimax.io/anthropic
+    api_key: ${MINIMAX_API_KEY}
+    temperature: 0.25
+    top_p: 0.85
+    max_tokens: 10000
+    streaming: true
+    stream_usage: true
+    thinking:
+      type: disabled
+    request_timeout: 360
+    stream_no_progress_timeout: 90
+    stream_repetition_token_limit: 24
+    max_retries: 1
+
+functions:
+  # Data Source Registry — SearXNG/Jina only, zero Tavily
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: web_search
+        name: Web Search
+        description: Search the web with Exa when configured and self-hosted SearXNG/Scrapling.
+        tools:
+          - local_corpus_search_tool
+          - exa_web_search_tool
+          - web_search_tool
+          - advanced_web_search_tool
+          - stock_quote_tool
+      - id: debate_transcripts
+        name: Debate Transcripts
+        description: Search the local prepared debate transcript corpus for argument framing, clash, rebuttal, and motion analogies.
+        default_enabled: false
+        tools:
+          - debate_transcript_search_tool
+
+  local_corpus_search_tool:
+    _type: local_corpus_search
+    db_path: ${AIQ_CORPUS_DB:-./data/corpus_index.db}
+    top_k: 6
+    max_snippet_chars: 1500
+
+  exa_web_search_tool:
+    _type: exa_web_search
+    max_results: 8
+    search_type: auto
+    highlights: true
+    full_text: false
+    max_content_length: 6000
+    max_retries: 2
+
+  web_search_tool:
+    _type: searxng_jina_web_search
+    searxng_url: ${SEARXNG_URL:-http://localhost:8080}
+    max_results: 8
+    max_content_length: 2500
+    discovery_backend: hybrid
+    engines: bing
+    ddgs_backend: auto
+    ddgs_max_results: 18
+    search_pages: 1
+    search_page_concurrency: 1
+    extraction_backend: scrapling
+    scrape_max_results: 6
+    scrape_concurrency: 8
+    request_timeout: 15
+    max_retries: 1
+
+  advanced_web_search_tool:
+    _type: searxng_jina_web_search
+    searxng_url: ${SEARXNG_URL:-http://localhost:8080}
+    websurfx_url: ${WEBSURFX_URL:-http://localhost:8081}
+    websurfx_engines: ${WEBSURFX_ENGINES:-Searx,Brave,DuckDuckGo,LibreX,Mojeek,Qwant,Startpage,Yahoo,Bing,SepiaSearch}
+    websurfx_timeout_seconds: ${WEBSURFX_TIMEOUT_SECONDS:-10}
+    max_results: 20
+    max_content_length: 2500
+    discovery_backend: ${AIQ_ADVANCED_DISCOVERY_BACKEND:-hybrid}
+    engines: bing
+    ddgs_backend: auto
+    ddgs_max_results: 25
+    search_pages: 1
+    search_page_concurrency: 1
+    extraction_backend: scrapling
+    scrape_max_results: 12
+    scrape_concurrency: 8
+    request_timeout: 18
+    max_retries: 1
+
+  stock_quote_tool:
+    _type: stooq_stock_quote
+    request_timeout: 15
+    max_symbols: 20
+
+  debate_transcript_search_tool:
+    _type: debate_transcript_search
+    corpus_jsonl: ${DEBATE_TRANSCRIPT_CORPUS_JSONL:-/Volumes/SrijanExt/Users/Srijan/Downloads/code/minimax/debate-yt/data/prepared_debate_corpus/chunks/search_chunks.jsonl}
+    max_results: 10
+    max_content_length: 3000
+    max_results_per_transcript: 2
+    candidate_pool: 100
+
+  intent_classifier:
+    _type: intent_classifier
+    llm: minimax_m3_fast_llm
+    llm_timeout: 120
+
+  clarifier_agent:
+    _type: clarifier_agent
+    llm: minimax_m3_fast_llm
+    planner_llm: minimax_m3_fast_llm
+    max_turns: 3
+    enable_plan_approval: true
+    log_response_max_chars: 2000
+    verbose: true
+
+  shallow_research_agent:
+    _type: shallow_research_agent
+    llm: minimax_m3_research_llm
+    exclude_tools:
+      - advanced_web_search_tool
+    max_llm_turns: 20
+    max_tool_iterations: 10
+
+  claude_research_agent:
+    _type: claude_research_agent
+    timeout_seconds: ${AIQ_CLAUDE_RESEARCH_TIMEOUT_SECONDS:-3600}
+    default_depth: deeper
+
+  deep_research_agent:
+    _type: deep_research_agent
+    orchestrator_llm: minimax_m3_synthesis_llm
+    medium_orchestrator_llm: minimax_m3_synthesis_fast_llm
+    deeper_orchestrator_llm: minimax_m3_synthesis_fast_llm
+    deeper_planner_llm: minimax_m3_deeper_planner_fast_llm
+    deeper_researcher_llm: minimax_m3_deeper_research_fast_llm
+    researcher_llm: minimax_m3_research_llm
+    planner_llm: minimax_m3_planner_fast_llm
+    verifier_llm: minimax_m3_verifier_llm
+    max_loops: 2
+    exclude_tools:
+      - web_search_tool
+
+workflow:
+  _type: chat_deepresearcher_agent
+  enable_escalation: true
+  enable_clarifier: true
+  use_async_deep_research: true
+  checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}

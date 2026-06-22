@@ -1,0 +1,2 @@
+[nat.plugins]
+paper_search = google_scholar_paper_search.register

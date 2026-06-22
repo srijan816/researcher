@@ -1,0 +1,19 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools >= 64", "setuptools-scm>=8"]
+
+[tool.setuptools]
+packages = ["debate_transcript_search"]
+package-dir = {"debate_transcript_search" = "src"}
+
+[project]
+name = "debate-transcript-search"
+version = "1.0.0"
+description = "NAT local search tool for prepared debate transcript corpora"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0.0",
+]
+
+[project.entry-points."nat.plugins"]
+debate_transcript_search = "debate_transcript_search.register"

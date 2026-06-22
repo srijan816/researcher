@@ -1,0 +1,9 @@
+pyproject.toml
+searxng_jina_web_search.egg-info/PKG-INFO
+searxng_jina_web_search.egg-info/SOURCES.txt
+searxng_jina_web_search.egg-info/dependency_links.txt
+searxng_jina_web_search.egg-info/entry_points.txt
+searxng_jina_web_search.egg-info/requires.txt
+searxng_jina_web_search.egg-info/top_level.txt
+src/__init__.py
+src/register.py

@@ -1,0 +1,2 @@
+[nat.plugins]
+freshqa_eval = freshqa_eval.register

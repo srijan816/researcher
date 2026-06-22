@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: searxng-jina-web-search
+Version: 1.0.0
+Summary: NAT SearXNG web search tool with Jina Reader page extraction
+Requires-Python: >=3.11
+Requires-Dist: ddgs>=7.0.0
+Requires-Dist: pydantic>=2.0.0
+Requires-Dist: scrapling[fetchers]>=0.4.7

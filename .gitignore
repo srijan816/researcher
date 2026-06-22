@@ -1,0 +1,30 @@
+# --- secrets (NEVER commit) ---
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# --- dependencies ---
+node_modules/
+**/node_modules/
+
+# --- runtime data / logs / dbs ---
+*.db
+*.db-journal
+runs/
+data/
+backups/
+backend.log
+*.log
+
+# --- build artifacts ---
+.next/
+dist/
+build/
+__pycache__/
+**/__pycache__/
+*.pyc
+.venv/
+**/.venv/

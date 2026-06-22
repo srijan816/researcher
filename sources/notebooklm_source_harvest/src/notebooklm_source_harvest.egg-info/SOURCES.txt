@@ -1,0 +1,9 @@
+pyproject.toml
+src/notebooklm_source_harvest.py
+src/notebooklm_source_harvest.egg-info/PKG-INFO
+src/notebooklm_source_harvest.egg-info/SOURCES.txt
+src/notebooklm_source_harvest.egg-info/dependency_links.txt
+src/notebooklm_source_harvest.egg-info/entry_points.txt
+src/notebooklm_source_harvest.egg-info/requires.txt
+src/notebooklm_source_harvest.egg-info/top_level.txt
+tests/test_notebooklm_source_harvest.py

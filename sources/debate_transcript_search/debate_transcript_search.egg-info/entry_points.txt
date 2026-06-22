@@ -1,0 +1,2 @@
+[nat.plugins]
+debate_transcript_search = debate_transcript_search.register

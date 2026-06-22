@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+exa_web_search.egg-info/PKG-INFO
+exa_web_search.egg-info/SOURCES.txt
+exa_web_search.egg-info/dependency_links.txt
+exa_web_search.egg-info/entry_points.txt
+exa_web_search.egg-info/requires.txt
+exa_web_search.egg-info/top_level.txt
+src/__init__.py
+src/register.py
+tests/__init__.py
+tests/test_register.py

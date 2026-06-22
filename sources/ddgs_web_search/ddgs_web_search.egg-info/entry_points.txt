@@ -1,0 +1,2 @@
+[nat.plugins]
+ddgs_web_search = ddgs_web_search.register

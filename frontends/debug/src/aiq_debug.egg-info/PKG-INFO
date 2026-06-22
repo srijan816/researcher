@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: aiq-debug
+Version: 0.1.0
+Summary: Debug console for AI-Q async jobs
+License: Apache-2.0
+Requires-Python: <3.14,>=3.11
+Requires-Dist: fastapi>=0.100.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4.0; extra == "dev"

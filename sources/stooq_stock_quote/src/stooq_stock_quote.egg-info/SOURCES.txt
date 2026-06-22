@@ -1,0 +1,7 @@
+pyproject.toml
+src/stooq_stock_quote.egg-info/PKG-INFO
+src/stooq_stock_quote.egg-info/SOURCES.txt
+src/stooq_stock_quote.egg-info/dependency_links.txt
+src/stooq_stock_quote.egg-info/entry_points.txt
+src/stooq_stock_quote.egg-info/requires.txt
+src/stooq_stock_quote.egg-info/top_level.txt

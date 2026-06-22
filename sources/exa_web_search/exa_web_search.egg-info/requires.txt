@@ -1,0 +1,2 @@
+pydantic>=2.0.0
+langchain-exa>=1.1.0

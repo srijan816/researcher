@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: tavily-web-search
+Version: 1.0.0
+Summary: NAT-based Tavily web search tool
+License: Apache-2.0
+Requires-Python: <3.14,>=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: httpx>=0.24.0
+Requires-Dist: pydantic>=2.0.0
+Requires-Dist: langchain-tavily>=0.1.0

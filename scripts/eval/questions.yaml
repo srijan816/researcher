@@ -1,0 +1,379 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Benchmark questions for the deep-research eval harness.
+#
+# Schema per entry:
+#   id: unique slug used for run folders and CLI selection
+#   domain: product domain bucket (finance, decision_support, debate_prep,
+#           meeting_prep, tech_landscape, current_events)
+#   prompt: the research input submitted to the deep_researcher agent
+#   depth: research_depth tier ("medium" or "deeper")
+#   rubric:
+#     required_facts: 3-6 generically phrased facts a judge can check in the report
+#     recency_required: whether stale data should be penalized hard
+#     expected_source_classes: source classes (see src/aiq_agent/common/source_classification.py)
+#       that a good report should draw from
+#     min_distinct_domains: minimum number of distinct cited web domains expected
+#   notes: free-form guidance for maintainers / the judge
+
+questions:
+  # ---------------------------------------------------------------- finance
+  - id: fin-nvda-competitive-position
+    domain: finance
+    prompt: >-
+      Assess NVIDIA's current competitive position in AI accelerators. Cover its
+      most recently reported quarterly results (especially data-center revenue),
+      the demand/supply picture, and the most credible competitive threats from
+      AMD, custom hyperscaler silicon, and inference-focused chip startups.
+    depth: deeper
+    rubric:
+      required_facts:
+        - "States NVIDIA's most recent quarterly data-center revenue with a figure and a quarter label"
+        - "States NVIDIA's most recent quarterly total revenue with a figure and a quarter label"
+        - "Names at least two competing accelerator vendors or custom-silicon programs with a concrete recent datapoint for each"
+        - "Makes a sourced claim about current supply/demand, backlog, or lead times for NVIDIA accelerators"
+        - "Distinguishes training versus inference competitive dynamics"
+      recency_required: true
+      expected_source_classes: [primary_issuer, first_party, trade_press, authoritative_third_party]
+      min_distinct_domains: 5
+    notes: >-
+      Phrased as "most recent quarter" so the rubric stays checkable over time.
+      The judge should verify figures carry a quarter label and a source, not a
+      specific hard-coded number.
+
+  - id: fin-semiconductor-capex-cycle
+    domain: finance
+    prompt: >-
+      Where are we in the current semiconductor capital-expenditure cycle?
+      Summarize the latest AI-driven capex guidance from major hyperscalers,
+      the wafer-fab-equipment outlook, and what leading foundry and equipment
+      makers are signaling about the next 12 months.
+    depth: deeper
+    rubric:
+      required_facts:
+        - "States the most recent annual or quarterly capex figure or guidance for at least two named hyperscalers"
+        - "Characterizes the current wafer-fab-equipment or foundry capex cycle direction with a timeframe"
+        - "Includes at least one recent datapoint from a foundry or equipment maker (e.g. TSMC capex plan or ASML bookings)"
+        - "Separates AI-driven capex from broader semiconductor capex where sources allow"
+      recency_required: true
+      expected_source_classes: [primary_issuer, trade_press, authoritative_third_party, first_party]
+      min_distinct_domains: 4
+    notes: Earnings-call and guidance-driven; figures must carry period labels.
+
+  - id: fin-hbm-memory-market
+    domain: finance
+    prompt: >-
+      Map the high-bandwidth-memory (HBM) market: who the leading suppliers are,
+      their approximate current market shares or capacity positions, how supply
+      tightness has evolved, and how HBM demand ties to AI accelerator roadmaps.
+    depth: medium
+    rubric:
+      required_facts:
+        - "Identifies the top HBM suppliers by name"
+        - "States at least one recent market-share, capacity, or sold-out/availability datapoint with a date or period"
+        - "Explains the link between HBM generations and specific AI accelerator products"
+        - "Notes at least one qualification or supply milestone for a named supplier"
+      recency_required: true
+      expected_source_classes: [trade_press, primary_issuer, authoritative_third_party]
+      min_distinct_domains: 4
+    notes: Market shares shift; judge checks for dated, sourced share/capacity claims.
+
+  - id: fin-fed-policy-growth-equities
+    domain: finance
+    prompt: >-
+      Summarize the current US Federal Reserve policy stance: the current federal
+      funds target range, the outcome of the most recent FOMC meeting, the market's
+      expected rate path, and what this implies for growth-equity valuations.
+    depth: medium
+    rubric:
+      required_facts:
+        - "States the current federal funds target range with the date of the most recent FOMC decision"
+        - "Summarizes the most recent FOMC decision or statement accurately"
+        - "Describes the market-implied or projected rate path with a source"
+        - "Connects the rate outlook to growth-equity valuation mechanics (discount rates / duration)"
+      recency_required: true
+      expected_source_classes: [primary_issuer, authoritative_third_party, trade_press]
+      min_distinct_domains: 4
+    notes: The Fed's own releases are primary; stale rate ranges should be heavily penalized.
+
+  # ------------------------------------------------------- decision support
+  - id: dec-vector-db-selection
+    domain: decision_support
+    prompt: >-
+      Compare PostgreSQL with pgvector against dedicated vector databases
+      (e.g. Qdrant, Weaviate, Milvus, Pinecone) for a RAG system holding roughly
+      ten million embeddings. Cover query performance, operational complexity,
+      cost, and filtering capabilities, and recommend an approach.
+    depth: medium
+    rubric:
+      required_facts:
+        - "Compares at least three concrete options on performance, operations, and cost"
+        - "States at least one specific limitation of pgvector at scale (e.g. index build/recall/memory tradeoffs)"
+        - "Discusses metadata filtering or hybrid search support differences"
+        - "Gives a clear recommendation with the conditions under which it holds"
+      recency_required: false
+      expected_source_classes: [first_party, trade_press, forum, authoritative_third_party]
+      min_distinct_domains: 4
+    notes: Vendor docs are acceptable first-party sources; benchmark claims should be attributed.
+
+  - id: dec-hosted-api-vs-selfhost-llm
+    domain: decision_support
+    prompt: >-
+      For a five-person product team building an LLM-backed application, compare
+      using hosted LLM APIs versus self-hosting open-weight models. Cover total
+      cost with at least one worked example, data privacy and compliance, latency
+      and throughput, model quality, and operational burden. End with a decision
+      framework.
+    depth: deeper
+    rubric:
+      required_facts:
+        - "Provides a quantified cost comparison with at least one worked example (tokens or GPU-hours with prices)"
+        - "Covers data-privacy and compliance differences between hosted APIs and self-hosting"
+        - "Covers latency/throughput tradeoffs with at least one concrete datapoint"
+        - "Names at least two current hosted providers and two open-weight model options"
+        - "Ends with a decision framework or conditional recommendation"
+      recency_required: true
+      expected_source_classes: [first_party, trade_press, vendor_marketing, forum]
+      min_distinct_domains: 5
+    notes: Pricing moves; judge checks that prices are dated and sourced rather than asserted.
+
+  - id: dec-search-backend-for-agents
+    domain: decision_support
+    prompt: >-
+      Compare self-hosted metasearch (SearXNG) with commercial search APIs
+      (e.g. Brave Search API, Serper, Exa, Tavily) as the discovery backend for
+      an autonomous research agent. Cover pricing, rate limits, result quality,
+      blocking/reliability risk, and legal/ToS considerations, then recommend a
+      setup for a small self-hosted deployment.
+    depth: medium
+    rubric:
+      required_facts:
+        - "Compares at least three options with pricing or rate-limit datapoints"
+        - "Discusses blocking, reliability, or upstream-engine risk for self-hosted metasearch"
+        - "Mentions legal or terms-of-service considerations for scraping or API use"
+        - "Gives a recommendation matched to a small self-hosted deployment"
+      recency_required: false
+      expected_source_classes: [first_party, vendor_marketing, forum, trade_press]
+      min_distinct_domains: 4
+    notes: Mirrors this product's own stack choice; useful for dogfooding judgments.
+
+  # ----------------------------------------------------------- debate prep
+  - id: deb-social-media-under-16
+    domain: debate_prep
+    prompt: >-
+      Build a debate preparation pack for the motion "This House would ban social
+      media for children under 16." Include the three strongest arguments for each
+      side with evidence, likely rebuttals, key statistics on teen mental health,
+      and real-world legislative examples of age restrictions.
+    depth: deeper
+    rubric:
+      required_facts:
+        - "Presents at least three distinct arguments for the proposition and three for the opposition"
+        - "References at least one real legislative or regulatory age-restriction example with its jurisdiction"
+        - "Cites at least one study or statistic on teen mental health and social media with its source"
+        - "Includes rebuttal or counter-argument material for both sides"
+        - "Flags contested or low-quality evidence rather than presenting it as settled"
+      recency_required: false
+      expected_source_classes: [academic, authoritative_third_party, trade_press, primary_issuer]
+      min_distinct_domains: 5
+    notes: Built for debate lesson construction; balance and evidence labeling matter more than verdicts.
+
+  - id: deb-nuclear-decarbonization
+    domain: debate_prep
+    prompt: >-
+      Prepare debate material for the motion "This House believes nuclear power
+      should be the primary path to grid decarbonization." Cover cost evidence
+      (levelized cost comparisons), construction timelines and overruns, safety
+      and waste arguments, and the strongest case for renewables-plus-storage as
+      the alternative.
+    depth: medium
+    rubric:
+      required_facts:
+        - "Includes at least one levelized-cost-of-energy or comparable cost datapoint with its source"
+        - "Cites at least one concrete nuclear construction timeline or cost-overrun example by name"
+        - "Presents the strongest arguments for both the motion and the opposition"
+        - "Addresses renewables-plus-storage as the principal counter-position with evidence"
+      recency_required: false
+      expected_source_classes: [academic, authoritative_third_party, primary_issuer, trade_press]
+      min_distinct_domains: 4
+    notes: Energy cost figures should carry year and source; both sides must be steelmanned.
+
+  - id: deb-generative-ai-creative-industries
+    domain: debate_prep
+    prompt: >-
+      Prepare debate material for the motion "This House believes generative AI
+      does more harm than good to creative industries." Include arguments and
+      evidence for both sides, at least one named lawsuit or policy action over
+      AI training data or outputs, and economic data on creative-sector impact.
+    depth: medium
+    rubric:
+      required_facts:
+        - "Names at least one real lawsuit, settlement, or policy action concerning generative AI and creative works"
+        - "Presents at least three arguments per side with supporting evidence"
+        - "Includes at least one economic datapoint on creative-sector employment, income, or AI adoption"
+        - "Distinguishes legal questions (copyright) from economic and artistic questions"
+      recency_required: false
+      expected_source_classes: [trade_press, academic, authoritative_third_party, primary_issuer]
+      min_distinct_domains: 4
+    notes: Litigation status changes; the judge should reward dated status descriptions.
+
+  # --------------------------------------------------- interview / meeting
+  - id: prep-cto-candidate-interview
+    domain: meeting_prep
+    prompt: >-
+      I am interviewing a candidate for CTO of an AI-infrastructure startup next
+      week. Prepare a briefing: the current state of the AI compute market they
+      should understand, the technical areas I should probe (training vs
+      inference infrastructure, GPU procurement, reliability), and ten strong
+      interview questions with what good answers look like.
+    depth: deeper
+    rubric:
+      required_facts:
+        - "Includes current AI compute market context with at least one dated datapoint (e.g. GPU pricing or supply)"
+        - "Lists concrete technical probe areas spanning training, inference, and infrastructure operations"
+        - "Provides ten or more interview questions"
+        - "Describes what a strong answer looks like for at least several questions"
+      recency_required: true
+      expected_source_classes: [trade_press, first_party, forum, authoritative_third_party]
+      min_distinct_domains: 4
+    notes: Usefulness-oriented; structure and actionability weigh into comprehensiveness.
+
+  - id: prep-cloud-gpu-commit-negotiation
+    domain: meeting_prep
+    prompt: >-
+      Prepare me for a meeting with a major cloud provider about committed-use
+      discounts for GPU capacity. Explain how committed-use or reserved GPU
+      pricing works at the major clouds, current on-demand vs committed price
+      points for popular GPU instances, and the negotiation levers and pitfalls
+      I should know.
+    depth: medium
+    rubric:
+      required_facts:
+        - "Explains the commit/discount structures of at least two major cloud providers"
+        - "States at least one current GPU instance price point with the date or page it was sourced from"
+        - "Lists concrete negotiation levers (term length, flexibility, egress, support)"
+        - "Flags at least one common pitfall in capacity commitments"
+      recency_required: true
+      expected_source_classes: [first_party, vendor_marketing, trade_press, forum]
+      min_distinct_domains: 4
+    notes: Cloud pricing pages are first-party; undated prices should be penalized under recency.
+
+  # -------------------------------------------------------- tech landscape
+  - id: tech-open-weight-llm-state
+    domain: tech_landscape
+    prompt: >-
+      What is the current state of open-weight large language models? Cover the
+      leading model families and the organizations behind them, how they compare
+      to frontier closed models on capability, licensing differences that matter
+      for commercial use, and the most significant releases of the past six
+      months.
+    depth: deeper
+    rubric:
+      required_facts:
+        - "Names at least four current open-weight model families with their developer organizations"
+        - "Includes at least one benchmark or capability comparison datapoint against closed frontier models"
+        - "Explains licensing differences (permissive vs restricted) with at least two concrete license examples"
+        - "Identifies significant releases or trends from roughly the past six months with dates"
+      recency_required: true
+      expected_source_classes: [first_party, trade_press, academic, forum]
+      min_distinct_domains: 5
+    notes: Fast-moving; the judge should penalize reports anchored on models that are clearly superseded.
+
+  - id: tech-agent-orchestration-frameworks
+    domain: tech_landscape
+    prompt: >-
+      Survey the landscape of LLM agent orchestration frameworks (for example
+      LangGraph, CrewAI, AutoGen/AG2, OpenAI's agent tooling, smolagents).
+      Compare their core abstractions, state management, multi-agent support,
+      and production readiness, and note which have meaningful real-world
+      adoption.
+    depth: medium
+    rubric:
+      required_facts:
+        - "Covers at least four frameworks with their maintaining organizations"
+        - "Compares core abstractions or state-management approaches concretely"
+        - "Provides at least one adoption or maturity signal per major framework (releases, users, production cases)"
+        - "Notes tradeoffs rather than declaring a single winner without conditions"
+      recency_required: false
+      expected_source_classes: [first_party, trade_press, forum]
+      min_distinct_domains: 4
+    notes: Docs and repos are first-party; GitHub activity counts as an adoption signal.
+
+  - id: tech-inference-hardware-alternatives
+    domain: tech_landscape
+    prompt: >-
+      Beyond NVIDIA GPUs, what are the credible hardware options for LLM
+      inference today? Cover AMD GPUs, custom cloud silicon (TPU, Trainium/
+      Inferentia, Maia), and inference-focused startups (e.g. Groq, Cerebras,
+      SambaNova), with performance or cost-per-token claims and real deployment
+      examples.
+    depth: medium
+    rubric:
+      required_facts:
+        - "Names at least three non-NVIDIA inference options with their vendors"
+        - "Includes at least one sourced performance or cost-per-token claim"
+        - "Cites at least one real deployment or customer example"
+        - "Distinguishes vendor marketing claims from independent measurements"
+      recency_required: false
+      expected_source_classes: [first_party, trade_press, vendor_marketing, authoritative_third_party]
+      min_distinct_domains: 4
+    notes: Vendor perf claims need attribution; independent benchmarks score higher on citation support.
+
+  # -------------------------------------------------------- current events
+  - id: news-ai-regulation-90d
+    domain: current_events
+    prompt: >-
+      What are the most significant AI regulation and policy developments
+      worldwide from the last 90 days? Cover legislative, regulatory, and major
+      enforcement actions, with dates and jurisdictions, and note the current
+      implementation status of the EU AI Act.
+    depth: deeper
+    rubric:
+      required_facts:
+        - "Reports at least three distinct developments explicitly dated within roughly the last 90 days"
+        - "Names the jurisdiction or body for each development"
+        - "States the current implementation status of the EU AI Act with a date"
+        - "Dates every major claim rather than using vague phrases like 'recently'"
+      recency_required: true
+      expected_source_classes: [primary_issuer, authoritative_third_party, trade_press]
+      min_distinct_domains: 5
+    notes: Hard recency test; undated or stale items should drag the recency score down sharply.
+
+  - id: news-semiconductor-30d
+    domain: current_events
+    prompt: >-
+      Summarize the most important semiconductor industry news from the past 30
+      days: earnings and guidance, capacity and fab announcements, export-control
+      or geopolitical developments, and notable product launches. Date every
+      item.
+    depth: medium
+    rubric:
+      required_facts:
+        - "Reports at least four distinct news items explicitly dated within roughly the past 30 days"
+        - "Includes at least one earnings or financial-guidance item"
+        - "Includes at least one export-control or geopolitical item"
+        - "Every item carries a date and a source"
+      recency_required: true
+      expected_source_classes: [trade_press, primary_issuer, authoritative_third_party]
+      min_distinct_domains: 4
+    notes: A report full of months-old items fails recency even if individually accurate.
+
+  - id: news-frontier-model-releases-60d
+    domain: current_events
+    prompt: >-
+      Which notable AI model releases or announcements happened in the past 60
+      days? For each, give the organization, release date, headline capabilities
+      or benchmark claims, and whether the model is generally available or only
+      announced.
+    depth: medium
+    rubric:
+      required_facts:
+        - "Lists at least three model releases or announcements with organization and date within roughly the past 60 days"
+        - "Attributes capability or benchmark claims to sources"
+        - "Distinguishes announced-only from generally-available models"
+        - "Avoids presenting older releases as new"
+      recency_required: true
+      expected_source_classes: [first_party, trade_press, forum]
+      min_distinct_domains: 4
+    notes: Release blogs are first-party; the judge checks date discipline and availability labels.

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p ~/.claude)",
+      "Bash(echo '{\"model\": \"MiniMax-M3\"}')",
+      "Read(//Volumes/SrijanExt/Users/Srijan/.claude/**)"
+    ]
+  }
+}

@@ -1,0 +1,225 @@
+# =============================================================================
+# AI-Q Blueprint - app2 Oracle VPS Docker Compose
+# =============================================================================
+#
+# App2-specific deployment:
+# - backend is bound only to 127.0.0.1:9000 on the VPS host
+# - frontend is bound only to 127.0.0.1:3110 on the VPS host
+# - postgres and searxng stay private inside the Docker network
+# - network and volumes are app2-specific so app1 is not disturbed
+# =============================================================================
+
+services:
+  aiq-agent:
+    image: ${BACKEND_IMAGE:-app2-aiq-agent:latest}
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+      target: ${BUILD_TARGET:-release}
+    container_name: app2-aiq-agent
+    env_file:
+      - ../.env
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - REQUIRE_AUTH=${REQUIRE_AUTH:-false}
+      - AIQ_LOCAL_AUTH_ENABLED=${AIQ_LOCAL_AUTH_ENABLED:-false}
+      - AIQ_AUTH_TOKEN_SECRET=${AIQ_AUTH_TOKEN_SECRET:-}
+      - AIQ_AUTH_DB_URL=${AIQ_AUTH_DB_URL:-}
+      - AIQ_LOCAL_USERS=${AIQ_LOCAL_USERS:-}
+      - AIQ_LOCAL_ADMIN_USERS=${AIQ_LOCAL_ADMIN_USERS:-}
+      - AIQ_AUTH_TOKEN_TTL_SECONDS=${AIQ_AUTH_TOKEN_TTL_SECONDS:-}
+      - AIQ_API_KEYS=${AIQ_API_KEYS:-}
+      - AIQ_API_KEY_DB_URL=${AIQ_API_KEY_DB_URL:-}
+      - NAT_JOB_STORE_DB_URL=${NAT_JOB_STORE_DB_URL:-postgresql+asyncpg://aiq:aiq_dev@postgres:5432/aiq_jobs}
+      - AIQ_CHECKPOINT_DB=${AIQ_CHECKPOINT_DB:-postgresql://aiq:aiq_dev@postgres:5432/aiq_checkpoints}
+      - AIQ_SUMMARY_DB=${AIQ_SUMMARY_DB:-postgresql+psycopg://aiq:aiq_dev@postgres:5432/aiq_jobs}
+      - AIQ_CHROMA_DIR=${AIQ_CHROMA_DIR:-/app/data/chroma_data}
+      - SEARXNG_URL=${SEARXNG_URL:-http://searxng:8080}
+      - WEBSURFX_URL=${WEBSURFX_URL:-http://websurfx:8080}
+      - WEBSURFX_ENGINES=${WEBSURFX_ENGINES:-Searx,Brave,DuckDuckGo,LibreX,Mojeek,Qwant,Startpage,Yahoo,Bing,SepiaSearch}
+      - AIQ_ADVANCED_DISCOVERY_BACKEND=${AIQ_ADVANCED_DISCOVERY_BACKEND:-websurfx_hybrid}
+      - NOTEBOOKLM_PYTHON=${NOTEBOOKLM_PYTHON:-python}
+      - NOTEBOOKLM_HOME=${NOTEBOOKLM_HOME:-/app/data/notebooklm}
+      - NOTEBOOKLM_HARVEST_WORK_DIR=${NOTEBOOKLM_HARVEST_WORK_DIR:-/tmp/aiq-notebooklm-harvest}
+      - SHALLOW_NOTEBOOKLM_PARALLEL_WAIT_SECONDS=${SHALLOW_NOTEBOOKLM_PARALLEL_WAIT_SECONDS:-7200}
+      - DEBATE_TRANSCRIPT_CORPUS_JSONL=${DEBATE_TRANSCRIPT_CORPUS_JSONL:-/app/data/prepared_debate_corpus/chunks/search_chunks.jsonl}
+      - CONFIG_FILE=${BACKEND_CONFIG:-/app/configs/config_cli_minimax_ddgs.yml}
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DASK_NWORKERS=${DASK_NWORKERS:-1}
+      - DASK_NTHREADS=${DASK_NTHREADS:-4}
+      - DASK_MEMORY_LIMIT=${DASK_MEMORY_LIMIT:-}
+      - DASK_LIFETIME=${DASK_LIFETIME:-}
+      - DASK_LIFETIME_RESTART=${DASK_LIFETIME_RESTART:-}
+    ports:
+      - "127.0.0.1:${PORT:-9000}:8000"
+    volumes:
+      - ../../configs:/app/configs:ro
+      - aiq-data:/app/data
+      - ../../data/prepared_debate_corpus:/app/data/prepared_debate_corpus:ro
+      - ${CLAUDE_CODE_BINARY_HOST_PATH:-/usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe}:${CLAUDE_CODE_BINARY_CONTAINER_PATH:-/usr/local/bin/claude}:ro
+    networks:
+      - aiq-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      searxng:
+        condition: service_healthy
+      websurfx:
+        condition: service_started
+    restart: unless-stopped
+
+  kokoro:
+    build:
+      context: ../..
+      dockerfile: deploy/kokoro/Dockerfile
+    image: ${KOKORO_IMAGE:-app2-kokoro-tts:latest}
+    container_name: app2-aiq-kokoro
+    environment:
+      - KOKORO_MODEL_DIR=${KOKORO_MODEL_DIR:-/data/kokoro-models}
+      - KOKORO_MODEL_URL=${KOKORO_MODEL_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx}
+      - KOKORO_VOICES_URL=${KOKORO_VOICES_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin}
+      - KOKORO_AUTO_DOWNLOAD=${KOKORO_AUTO_DOWNLOAD:-1}
+    volumes:
+      - kokoro-data:/data/kokoro-models
+    ports:
+      - "127.0.0.1:${KOKORO_PORT:-3111}:8000"
+    networks:
+      - aiq-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: app2-aiq-searxng
+    environment:
+      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL:-http://searxng:8080/}
+    volumes:
+      - ./searxng:/etc/searxng:rw
+      - searxng-cache:/var/cache/searxng
+    networks:
+      - aiq-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://localhost:8080/search?q=health&format=json' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  websurfx:
+    image: ${WEBSURFX_IMAGE:-app2-websurfx:latest}
+    build:
+      context: ../..
+      dockerfile: deploy/websurfx/Dockerfile
+      args:
+        WEBSURFX_GIT_REF: ${WEBSURFX_GIT_REF:-rolling}
+    container_name: app2-aiq-websurfx
+    environment:
+      - WEBSURFX_SEARX_URL=${WEBSURFX_SEARX_URL:-http://searxng:8080}
+      - WEBSURFX_PROXY=${WEBSURFX_PROXY:-}
+    volumes:
+      - ./websurfx:/etc/xdg/websurfx:ro
+    networks:
+      - aiq-network
+    depends_on:
+      searxng:
+        condition: service_healthy
+      websurfx-redis:
+        condition: service_started
+    restart: unless-stopped
+
+  websurfx-redis:
+    image: redis:7-alpine
+    container_name: app2-aiq-websurfx-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    networks:
+      - aiq-network
+    restart: unless-stopped
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-app2-aiq-frontend:latest}
+    build:
+      context: ../../frontends/ui
+      dockerfile: deploy/Dockerfile
+    container_name: app2-aiq-blueprint-ui
+    environment:
+      - REQUIRE_AUTH=${REQUIRE_AUTH:-false}
+      - AIQ_LOCAL_AUTH_ENABLED=${AIQ_LOCAL_AUTH_ENABLED:-false}
+      - BACKEND_URL=${BACKEND_URL:-http://aiq-agent:8000}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-}
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
+      - SECURE_COOKIES=${SECURE_COOKIES:-}
+      - KOKORO_TTS_URL=${KOKORO_TTS_URL:-http://kokoro:8000}
+      - FILE_UPLOAD_ACCEPTED_TYPES=${FILE_UPLOAD_ACCEPTED_TYPES:-.pdf,.docx,.txt,.md}
+      - FILE_UPLOAD_MAX_SIZE_MB=${FILE_UPLOAD_MAX_SIZE_MB:-}
+      - FILE_UPLOAD_MAX_FILE_COUNT=${FILE_UPLOAD_MAX_FILE_COUNT:-}
+      - FILE_EXPIRATION_CHECK_INTERVAL_HOURS=${FILE_EXPIRATION_CHECK_INTERVAL_HOURS:-}
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3110}:3000"
+    networks:
+      - aiq-network
+    depends_on:
+      - aiq-agent
+      - kokoro
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 256M
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: app2-aiq-postgres
+    environment:
+      POSTGRES_USER: aiq
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aiq_dev} # pragma: allowlist secret
+      POSTGRES_DB: aiq_jobs
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - aiq-network
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+        reservations:
+          cpus: "1"
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiq -d aiq_jobs && pg_isready -U aiq -d aiq_checkpoints"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  aiq-data:
+    name: app2_deep_research_aiq_data
+    driver: local
+  postgres-data:
+    name: app2_deep_research_postgres_data
+    driver: local
+  searxng-cache:
+    name: app2_deep_research_searxng_cache
+    driver: local
+  kokoro-data:
+    name: app2_deep_research_kokoro_data
+    driver: local
+
+networks:
+  aiq-network:
+    name: app2_deep_research_net
+    driver: bridge

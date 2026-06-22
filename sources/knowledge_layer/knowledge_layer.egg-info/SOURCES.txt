@@ -1,0 +1,16 @@
+KNOWLEDGE-LAYER-SETUP.md
+README.md
+pyproject.toml
+knowledge_layer.egg-info/PKG-INFO
+knowledge_layer.egg-info/SOURCES.txt
+knowledge_layer.egg-info/dependency_links.txt
+knowledge_layer.egg-info/entry_points.txt
+knowledge_layer.egg-info/requires.txt
+knowledge_layer.egg-info/top_level.txt
+src/__init__.py
+src/register.py
+src/foundational_rag/README.md
+src/foundational_rag/__init__.py
+src/foundational_rag/adapter.py
+src/llamaindex/__init__.py
+src/llamaindex/adapter.py

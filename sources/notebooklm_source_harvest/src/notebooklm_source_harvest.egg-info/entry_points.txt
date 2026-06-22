@@ -1,0 +1,2 @@
+[nat.plugins]
+notebooklm_source_harvest = notebooklm_source_harvest

@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+configs/config_full_workflow.yml
+configs/config_shallow_research_only.yml
+freshqa_eval.egg-info/PKG-INFO
+freshqa_eval.egg-info/SOURCES.txt
+freshqa_eval.egg-info/dependency_links.txt
+freshqa_eval.egg-info/entry_points.txt
+freshqa_eval.egg-info/requires.txt
+freshqa_eval.egg-info/top_level.txt
+src/__init__.py
+src/convert_csv_to_json.py
+src/evaluator.py
+src/register.py

@@ -1,0 +1,37 @@
+[
+  {
+    "id": "ai_use_cases_2026",
+    "tier": "deep",
+    "prompt": "Conduct a comprehensive deep research report on the top 10 highest-value use cases of AI in 2026. For each use case, cover what it is, why it is high-value with quantified business impact, real-world examples, maturity level, key enabling technologies, barriers to adoption, and who benefits most. Rank the 10 use cases by overall business value and transformative potential in 2026. Prioritize analyst reports and credible 2025-2026 sources. Present findings with an executive summary, ranked list, detailed sections, and a final insight on where AI value creation is heading in 2027-2028.",
+    "expected_plan_title": "Top 10 Highest-Value AI Use Cases in 2026",
+    "expected_section_terms": ["Ranking", "ROI", "Examples", "Maturity", "Technologies", "Barriers", "Outlook"]
+  },
+  {
+    "id": "curiosity_engine_build",
+    "tier": "deeper",
+    "prompt": "Deep research on all the ingredients required to build: Lifelong curiosity engines that surface and teach niche topics matched to user interests using AI",
+    "expected_plan_title": "Building AI Curiosity Engines",
+    "expected_section_terms": ["Curiosity", "Interest", "Discovery", "Teaching", "RAG", "Verification", "Metrics"]
+  },
+  {
+    "id": "ai_life_strategy",
+    "tier": "deeper",
+    "prompt": "What's the best way to live life in the age of AI",
+    "expected_plan_title": "Living Well in the Age of AI",
+    "expected_section_terms": ["Human", "Work", "Attention", "Risk", "Operating"]
+  },
+  {
+    "id": "structured_lesson_doctors_patients",
+    "tier": "deeper",
+    "prompt": "Report type: content_research_dossier.\nExact lesson topic: Doctors & Patients.\nFinal debate motion: This house would allow doctors to refuse to perform treatments that are against their own ethical principles.\nAudience: G5-6 PSD II Grade 5-6 primary debate students.\nThe Markdown must include these sections:\n1. Research scope and final motion anchor.\n2. Age and audience assumptions.\n3. Topic essentials: definitions, key terms, and background concepts.\n4. Factual findings with citations: only claims that are well-supported.\n5. Key examples and case studies: concrete examples with what each teaches.\n6. Motion relevance notes: raw material that helps explain the final motion.",
+    "expected_plan_title": "Doctors & Patients Content Research Dossier",
+    "expected_section_terms": ["scope", "audience", "essentials", "findings", "examples", "motion"]
+  },
+  {
+    "id": "stock_fair_value_screen",
+    "tier": "shallow",
+    "prompt": "Which U.S. large-cap stocks are trading 40-50% below Morningstar fair value?",
+    "expected_plan_title": "Stocks Trading 40-50% Below Estimated Fair Value",
+    "expected_section_terms": ["Candidate", "Price", "Caveats"]
+  }
+]

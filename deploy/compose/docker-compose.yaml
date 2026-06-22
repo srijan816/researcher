@@ -1,0 +1,193 @@
+# =============================================================================
+# AI-Q Blueprint - Docker Compose
+# =============================================================================
+#
+# Services:
+#   aiq-agent - Backend API server
+#   frontend               - Next.js UI (aiq-blueprint-ui)
+#   postgres               - PostgreSQL for jobs and checkpoints
+#
+# Build targets (backend only):
+#   dev     - Development build (includes CLI)
+#   release - Production build (web only, validates env vars)
+#
+# Quick start (from the repo root):
+#   cp deploy/.env.example deploy/.env        # then add your MINIMAX_API_KEY
+#   docker compose -f deploy/compose/docker-compose.yaml --env-file deploy/.env up -d --build
+#   # open http://localhost:3000
+#
+# Or simply run: ./scripts/quickstart.sh
+#
+# Usage notes:
+#   - The default backend config is config_cli_minimax_ddgs.yml (MiniMax M3 +
+#     bundled SearXNG). The only required secret is MINIMAX_API_KEY.
+#   - BUILD_TARGET=release builds the slimmer production image (no CLI).
+#   - Skip --build and set BACKEND_IMAGE / FRONTEND_IMAGE to use prebuilt images.
+#
+# Frontend image:
+#   The frontend is built from frontends/ui/Dockerfile.
+#
+# =============================================================================
+
+services:
+  aiq-agent:
+    image: ${BACKEND_IMAGE:-nvcr.io/nvidia/blueprint/aiq-agent:2.1.0}
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+      target: ${BUILD_TARGET:-dev}
+    container_name: aiq-agent
+    env_file:
+      - ../.env
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - REQUIRE_AUTH=${REQUIRE_AUTH:-false}
+      - AIQ_LOCAL_AUTH_ENABLED=${AIQ_LOCAL_AUTH_ENABLED:-false}
+      - AIQ_AUTH_TOKEN_SECRET=${AIQ_AUTH_TOKEN_SECRET:-}
+      - AIQ_AUTH_DB_URL=${AIQ_AUTH_DB_URL:-}
+      - AIQ_LOCAL_USERS=${AIQ_LOCAL_USERS:-}
+      - AIQ_LOCAL_ADMIN_USERS=${AIQ_LOCAL_ADMIN_USERS:-}
+      - AIQ_AUTH_TOKEN_TTL_SECONDS=${AIQ_AUTH_TOKEN_TTL_SECONDS:-}
+      - AIQ_API_KEYS=${AIQ_API_KEYS:-}
+      - AIQ_API_KEY_DB_URL=${AIQ_API_KEY_DB_URL:-}
+      # Database config (with Docker defaults)
+      - NAT_JOB_STORE_DB_URL=${NAT_JOB_STORE_DB_URL:-postgresql+asyncpg://aiq:aiq_dev@postgres:5432/aiq_jobs}
+      - AIQ_CHECKPOINT_DB=${AIQ_CHECKPOINT_DB:-postgresql://aiq:aiq_dev@postgres:5432/aiq_checkpoints}
+      - AIQ_SUMMARY_DB=${AIQ_SUMMARY_DB:-postgresql+psycopg://aiq:aiq_dev@postgres:5432/aiq_jobs}
+      # LlamaIndex persistence (used by config_web_default_llamaindex.yml)
+      - AIQ_CHROMA_DIR=${AIQ_CHROMA_DIR:-/app/data/chroma_data}
+      # Self-hosted metasearch used by config_cli_minimax_ddgs.yml
+      - SEARXNG_URL=${SEARXNG_URL:-http://searxng:8080}
+      # NotebookLM source harvesting. Keep auth state on the persistent writable data volume.
+      - NOTEBOOKLM_HOME=${NOTEBOOKLM_HOME:-/app/data/notebooklm}
+      - NOTEBOOKLM_HARVEST_WORK_DIR=${NOTEBOOKLM_HARVEST_WORK_DIR:-/tmp/aiq-notebooklm-harvest}
+      - NOTEBOOKLM_PYTHON=${NOTEBOOKLM_PYTHON:-python}
+      - SHALLOW_NOTEBOOKLM_PARALLEL_WAIT_SECONDS=${SHALLOW_NOTEBOOKLM_PARALLEL_WAIT_SECONDS:-7200}
+      # Server config
+      # MiniMax deep-research is the default config: it only needs SEARXNG (bundled
+      # in this compose) plus MINIMAX_API_KEY, so the stack runs out of the box.
+      # Override BACKEND_CONFIG to point at another file in configs/ if desired.
+      - CONFIG_FILE=${BACKEND_CONFIG:-/app/configs/config_cli_minimax_ddgs.yml}
+      - HOST=0.0.0.0
+      - PORT=8000
+      # RAG config
+      # - RAG_SERVER_URL=${RAG_SERVER_URL:-https://rag-backend}
+      # - RAG_INGEST_URL=${RAG_INGEST_URL:-https://rag-ingest}
+      # Dask worker config
+      - DASK_NWORKERS=${DASK_NWORKERS:-1}
+      - DASK_NTHREADS=${DASK_NTHREADS:-4}
+      # Optional: bound per-worker memory (Dask spills/restarts above this)
+      # - DASK_MEMORY_LIMIT=${DASK_MEMORY_LIMIT:-}
+      # Optional: recycle workers after this many seconds to drop accumulated state
+      # - DASK_LIFETIME=${DASK_LIFETIME:-}
+      # Optional (default true): set to "false" to let workers exit gracefully without respawning
+      # - DASK_LIFETIME_RESTART=${DASK_LIFETIME_RESTART:-}
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - ../../configs:/app/configs:ro
+      - aiq-data:/app/data
+    networks:
+      - aiq-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      searxng:
+        condition: service_healthy
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: aiq-searxng
+    environment:
+      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL:-http://localhost:8080/}
+    ports:
+      - "${SEARXNG_PORT:-8080}:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+      - searxng-cache:/var/cache/searxng
+    networks:
+      - aiq-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://localhost:8080/search?q=health&format=json' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-nvcr.io/nvidia/blueprint/aiq-frontend:2.1.0}
+    build:
+      context: ../../frontends/ui
+      dockerfile: deploy/Dockerfile
+    container_name: aiq-blueprint-ui
+    environment:
+      - REQUIRE_AUTH=${REQUIRE_AUTH:-false}
+      - AIQ_LOCAL_AUTH_ENABLED=${AIQ_LOCAL_AUTH_ENABLED:-false}
+      - BACKEND_URL=${BACKEND_URL:-http://aiq-agent:8000}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-}
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
+      - SECURE_COOKIES=${SECURE_COOKIES:-}
+      - FILE_UPLOAD_ACCEPTED_TYPES=${FILE_UPLOAD_ACCEPTED_TYPES:-.pdf,.docx,.txt,.md}
+      - FILE_UPLOAD_MAX_SIZE_MB=${FILE_UPLOAD_MAX_SIZE_MB:-}
+      - FILE_UPLOAD_MAX_FILE_COUNT=${FILE_UPLOAD_MAX_FILE_COUNT:-}
+      - FILE_EXPIRATION_CHECK_INTERVAL_HOURS=${FILE_EXPIRATION_CHECK_INTERVAL_HOURS:-}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    networks:
+      - aiq-network
+    depends_on:
+      - aiq-agent
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: aiq-postgres
+    environment:
+      POSTGRES_USER: aiq
+      POSTGRES_PASSWORD: aiq_dev
+      POSTGRES_DB: aiq_jobs
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - aiq-network
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiq -d aiq_jobs && pg_isready -U aiq -d aiq_checkpoints"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  aiq-data:
+    driver: local
+  postgres-data:
+    driver: local
+  searxng-cache:
+    driver: local
+
+networks:
+  aiq-network:
+    driver: bridge

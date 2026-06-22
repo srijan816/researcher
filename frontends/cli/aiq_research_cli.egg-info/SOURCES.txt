@@ -1,0 +1,11 @@
+__init__.py
+cli.py
+pyproject.toml
+./__init__.py
+./cli.py
+aiq_research_cli.egg-info/PKG-INFO
+aiq_research_cli.egg-info/SOURCES.txt
+aiq_research_cli.egg-info/dependency_links.txt
+aiq_research_cli.egg-info/entry_points.txt
+aiq_research_cli.egg-info/requires.txt
+aiq_research_cli.egg-info/top_level.txt

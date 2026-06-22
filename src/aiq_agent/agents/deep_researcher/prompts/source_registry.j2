@@ -1,0 +1,21 @@
+## Consolidated Source Registry (auto-generated from tool calls)
+Use ONLY these sources when writing the final report. Each has been verified as a real tool result and annotated with a source class. You may use these [N] numbers directly or assign your own — citations will be auto-verified and renumbered.
+
+For broad standard reports, cite a representative spread of the strongest sources across all major sections. Do not collapse the evidence base to only a few references when many relevant verified sources are available.
+
+Match source class to claim class: use `first_party` for named-entity specifications, pricing, limits, API behavior, release notes, and feature support; use `primary_issuer` for statistics/data; use `academic` for empirical or causal claims; use `authoritative_third_party` and `trade_press` for independent synthesis; use `content_marketing`, `vendor_marketing`, and `forum` sources only with visible calibration.
+
+{% for source in sources %}
+[{{ loop.index }}] {{ source.title }} [{{ source.source_class or "unknown" }}]: {{ source.url }}
+{% endfor %}
+
+Source class definitions:
+- `first_party`: official documentation, help center, API reference, or release notes from the named entity's owner
+- `primary_issuer`: original publisher of data/statistics, government reports, statutes, analyst reports, or official datasets
+- `academic`: peer-reviewed papers, preprints, conference proceedings, or scholarly indexes
+- `authoritative_third_party`: established API marketplaces, model registries, repositories, reference works, or reputable technical publications
+- `trade_press`: industry journalism or professional publications with editorial standards
+- `vendor_marketing`: vendor landing pages, pricing pages, case studies, and product marketing pages
+- `content_marketing`: tutorial, SEO, commentary, or aggregator pages
+- `forum`: Reddit, Stack Overflow, Hacker News, or community discussion
+- `unknown`: source class could not be determined

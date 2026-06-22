@@ -1,0 +1,9 @@
+pyproject.toml
+ddgs_web_search.egg-info/PKG-INFO
+ddgs_web_search.egg-info/SOURCES.txt
+ddgs_web_search.egg-info/dependency_links.txt
+ddgs_web_search.egg-info/entry_points.txt
+ddgs_web_search.egg-info/requires.txt
+ddgs_web_search.egg-info/top_level.txt
+src/__init__.py
+src/register.py

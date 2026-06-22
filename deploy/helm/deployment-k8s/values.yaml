@@ -1,0 +1,275 @@
+# Generated WEB mode deployment
+
+aiq:
+  appname: aiq
+  project:
+    name: aiq
+    deploymentEnv: ''
+    cluster_name: in-cluster
+    cloud_provider: kind
+    primary_owner: developer@localhost
+    secondary_owner: developer@localhost
+    blueprint_type: web
+    deploymentTarget: kubernetes
+    orientation: external
+    profile: web
+    services:
+    - backend
+    - frontend
+    - postgres
+    - rag
+  sharedSecrets:
+    enabled: true
+    autoMount: true
+    refreshInterval: 5m
+    dataFrom: []
+  bootstrap:
+    createPostgresInitConfigMap: true
+  apps:
+    backend:
+      enabled: true
+      replicas: 1
+      autoscaling:
+        enabled: false
+        minReplicas: 1
+        maxReplicas: 3
+        targetCPUUtilizationPercentage: 80
+        targetMemoryUtilizationPercentage: 80
+      image:
+        repository: nvcr.io/nvidia/blueprint/aiq-agent
+        tag: "2.1.0"
+        pullPolicy: IfNotPresent
+      imagePullSecrets: []
+      service:
+        type: ClusterIP
+        port: 8000
+        targetPort: 8000
+      port: 8000
+      healthCheck:
+        enabled: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          cpu: '2'
+          memory: 4Gi
+      env:
+        APP_ENV: production
+        LOG_LEVEL: INFO
+        CONFIG_FILE: configs/config_web_default_llamaindex.yml
+        DASK_NWORKERS: '1'
+        DASK_NTHREADS: '4'
+        # Optional: bound per-worker memory; Dask spills/restarts above this
+        # DASK_MEMORY_LIMIT: '800MB'
+        # Optional: recycle workers every N seconds to drop accumulated state
+        # DASK_LIFETIME: '3600'
+        # Optional (default 'true'): set to 'false' for graceful exit without respawn
+        # DASK_LIFETIME_RESTART: 'true'
+        NAT_JOB_STORE_DB_URL: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
+        AIQ_CHECKPOINT_DB: postgresql://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
+        AIQ_SUMMARY_DB: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
+        RAG_SERVER_URL: http://rag-server:8080
+        RAG_INGEST_URL: http://rag-ingest:8080
+        COLLECTION_NAME: default_collection
+        AIQ_CHROMA_DIR: /app/data/chroma
+        MODE: web
+      labels:
+        component: backend
+      route:
+        enabled: false
+        host: localhost
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+        annotations: {}
+      ingress:
+        enabled: false
+        annotations: {}
+      volumes:
+      - name: postgres-init
+        configMap:
+          name: aiq-postgres-init
+      initContainers:
+      - name: db-init
+        image: bitnami/postgresql:latest
+        command:
+        - sh
+        - -c
+        - "echo \"Waiting for postgres...\"\nuntil pg_isready -h aiq-postgres -U $(DB_USER_NAME)\
+          \ -d aiq_jobs; do\n  sleep 2\ndone\necho \"Running init script...\"\npsql\
+          \ -h aiq-postgres -U $(DB_USER_NAME) -d aiq_jobs -v db_user=$(DB_USER_NAME)\
+          \ -f /db-init/init.sql\n"
+        env:
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: aiq-credentials
+              key: DB_USER_PASSWORD
+        - name: DB_USER_NAME
+          valueFrom:
+            secretKeyRef:
+              name: aiq-credentials
+              key: DB_USER_NAME
+        volumeMounts:
+        - name: postgres-init
+          mountPath: /db-init
+          readOnly: true
+      stdin: false
+      tty: false
+      podSecurityContext: null
+    postgres:
+      enabled: true
+      replicas: 1
+      image:
+        repository: bitnami/postgresql
+        tag: latest
+        pullPolicy: IfNotPresent
+      imagePullSecrets: []
+      service:
+        type: ClusterIP
+        ports:
+        - name: postgres
+          port: 5432
+          targetPort: 5432
+      ports:
+      - name: postgres
+        containerPort: 5432
+        protocol: TCP
+      secretEnv:
+        POSTGRES_USER: DB_USER_NAME
+        POSTGRES_PASSWORD: DB_USER_PASSWORD
+      env:
+        POSTGRES_DB: aiq_jobs
+        POSTGRESQL_MAX_CONNECTIONS: '200'
+      # ConfigMap for init.sql is managed by postgres-init-configmap.yaml template
+      # which reads from files/init-db.sql (source of truth: deploy/compose/init-db.sql)
+      persistence:
+      - name: aiq-postgres-data
+        accessModes:
+        - ReadWriteOnce
+        size: 10Gi
+      volumes:
+      - name: postgres-data
+        persistentVolumeClaim:
+          claimName: aiq-postgres-data
+      volumeMounts:
+      - name: postgres-data
+        mountPath: /var/lib/postgresql/data
+      healthCheck:
+        enabled: true
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - pg_isready -U $POSTGRES_USER -d aiq_jobs
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 5
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - pg_isready -U $POSTGRES_USER -d aiq_jobs
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 5
+      labels:
+        component: postgres
+      podSecurityContext: null
+    frontend:
+      replicas: 1
+      autoscaling:
+        enabled: false
+        minReplicas: 1
+        maxReplicas: 3
+        targetCPUUtilizationPercentage: 80
+      image:
+        repository: nvcr.io/nvidia/blueprint/aiq-frontend
+        tag: "2.1.0"
+        pullPolicy: IfNotPresent
+      imagePullSecrets: []
+      service:
+        type: ClusterIP
+        port: 3000
+        targetPort: 3000
+      port: 3000
+      healthCheck:
+        enabled: true
+        path: /
+        startupProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 3
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 2Gi
+      env:
+        BACKEND_URL: http://aiq-backend:8000
+        NODE_ENV: production
+        REQUIRE_AUTH: 'false'
+        FILE_UPLOAD_ACCEPTED_TYPES: .pdf,.docx,.txt,.md
+        FILE_UPLOAD_MAX_SIZE_MB: '100'
+        FILE_UPLOAD_MAX_FILE_COUNT: '10'
+        FILE_EXPIRATION_CHECK_INTERVAL_HOURS: '0'
+        NEXT_PUBLIC_DATADOG_ENABLED: 'false'
+      labels:
+        component: frontend
+      route:
+        enabled: false
+        host: localhost
+        annotations: {}
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+      enabled: true
+      ingress:
+        enabled: true
+        className: nginx
+        annotations: {}
+      podSecurityContext: null
+  secretEnvAsEnv: false

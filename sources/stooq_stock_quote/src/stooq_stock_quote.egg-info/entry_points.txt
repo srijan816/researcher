@@ -1,0 +1,2 @@
+[nat.plugins]
+stooq_stock_quote = register

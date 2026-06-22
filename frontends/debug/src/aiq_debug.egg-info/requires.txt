@@ -1,0 +1,4 @@
+fastapi>=0.100.0
+
+[dev]
+pytest>=7.4.0

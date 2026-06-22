@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+configs/config_deepsearch_qa.yml
+deepsearch_qa_evaluator.egg-info/PKG-INFO
+deepsearch_qa_evaluator.egg-info/SOURCES.txt
+deepsearch_qa_evaluator.egg-info/dependency_links.txt
+deepsearch_qa_evaluator.egg-info/entry_points.txt
+deepsearch_qa_evaluator.egg-info/requires.txt
+deepsearch_qa_evaluator.egg-info/top_level.txt
+src/__init__.py
+src/register.py
