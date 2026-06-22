@@ -3452,6 +3452,13 @@ class DeepResearcherAgent:
 
         result = None
         last_error = None
+        # Wave 2 W2.1 — retry-failure tracking (observe, do not suppress).
+        # Track every incomplete-report attempt and the final outcome so we can
+        # measure failure rate over time and fix root causes instead of lowering
+        # max_retries or hiding replies. Summary is always emitted via finally:.
+        failure_reasons: list[str] = []
+        attempts_used: int = 0
+        last_succeeded: bool = False
         try:
             max_retries = 2
             workflow_started_at = perf_counter()
@@ -3490,10 +3497,24 @@ class DeepResearcherAgent:
 
                 is_complete, reason = self._is_report_complete(result, state)
                 if is_complete:
+                    last_succeeded = True
                     logger.info(f"Report completed successfully. Reason: {reason}")
                     break
 
-                logger.warning("Report incomplete (attempt %d/%d): %s", attempt + 1, max_retries, reason)
+                attempts_used = attempt + 1
+                failure_reasons.append(reason)
+                # Structured metric line: tail with `grep "aiq.metrics retry_failure"`
+                # and count with `wc -l` to see how often retries fire.
+                logger.warning(
+                    "aiq.metrics retry_failure job_id=%s attempt=%d/%d reason=%s "
+                    "elapsed_attempt=%.1fs sources_captured=%d",
+                    self.job_id or "n/a",
+                    attempt + 1,
+                    max_retries,
+                    reason,
+                    perf_counter() - attempt_started_at,
+                    bool(self.source_registry_middleware._get_registry().all_sources()),
+                )
 
                 has_captured_sources = bool(self.source_registry_middleware._get_registry().all_sources())
                 feedback_msg = f"Your report is not yet complete. Reason: {reason}. "
@@ -3625,8 +3646,21 @@ class DeepResearcherAgent:
                 # Evaluate the feedback-retry result before the next iteration
                 is_complete, reason = self._is_report_complete(result, state)
                 if is_complete:
+                    last_succeeded = True
                     logger.info(f"Report completed after feedback retry. Reason: {reason}")
                     break
+
+                attempts_used = attempt + 1
+                failure_reasons.append(reason)
+                logger.warning(
+                    "aiq.metrics retry_failure job_id=%s attempt=%d/%d phase=feedback "
+                    "reason=%s elapsed_attempt=%.1fs",
+                    self.job_id or "n/a",
+                    attempt + 1,
+                    max_retries,
+                    reason,
+                    perf_counter() - retry_started_at,
+                )
 
                 # Update state so next iteration builds on progress, not the original state
                 state = result
@@ -3775,6 +3809,21 @@ class DeepResearcherAgent:
             logger.error("Deep Research Subagent failed: %s", ex, exc_info=True)
             raise
         finally:
+            # Wave 2 W2.1 — always emit one summary metric line per deep-research
+            # job, on both success and failure. Lets us grep `aiq.metrics
+            # deep_research_complete` and answer "how often does this fail".
+            try:
+                logger.warning(
+                    "aiq.metrics deep_research_complete job_id=%s succeeded=%s "
+                    "attempts_used=%d failure_reasons=%s total_elapsed=%.1fs",
+                    self.job_id or "n/a",
+                    last_succeeded,
+                    attempts_used,
+                    "|".join(failure_reasons) or "(none)",
+                    perf_counter() - workflow_started_at,
+                )
+            except Exception:  # noqa: BLE001 - metrics must never break cleanup
+                logger.debug("Failed to emit deep_research_complete metric", exc_info=True)
             reset_session_tool_counts(tool_counts_token)
             reset_session_tool_limits(tool_limits_token)
             reset_session_exhausted_tools(exhausted_tools_token)
