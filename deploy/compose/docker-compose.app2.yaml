@@ -87,7 +87,7 @@ services:
     # spread across them. Host port publish removed (replicas can't share a fixed host port) —
     # reach kokoro via the frontend proxy or the docker network. Scale via KOKORO_REPLICAS.
     deploy:
-      replicas: ${KOKORO_REPLICAS:-3}
+      replicas: ${KOKORO_REPLICAS:-1}
     environment:
       - KOKORO_MODEL_DIR=${KOKORO_MODEL_DIR:-/data/kokoro-models}
       - KOKORO_MODEL_URL=${KOKORO_MODEL_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx}
