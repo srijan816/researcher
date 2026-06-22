@@ -39,6 +39,12 @@ services:
       - WEBSURFX_URL=${WEBSURFX_URL:-http://websurfx:8080}
       - WEBSURFX_ENGINES=${WEBSURFX_ENGINES:-Searx,Brave,DuckDuckGo,LibreX,Mojeek,Qwant,Startpage,Yahoo,Bing,SepiaSearch}
       - AIQ_ADVANCED_DISCOVERY_BACKEND=${AIQ_ADVANCED_DISCOVERY_BACKEND:-websurfx_hybrid}
+      # Model cascade (Wave 1): leaf/mechanical roles use the high-speed variant.
+      # Quality-critical roles (research/deep/planner/synthesis/text) stay on MiniMax-M3.
+      - MINIMAX_FAST_MODEL=${MINIMAX_FAST_MODEL:-MiniMax-M2.7-highspeed}
+      - MINIMAX_VERIFIER_MODEL=${MINIMAX_VERIFIER_MODEL:-MiniMax-M2.7-highspeed}
+      - MINIMAX_PLANNER_FAST_MODEL=${MINIMAX_PLANNER_FAST_MODEL:-MiniMax-M2.7-highspeed}
+      - MINIMAX_SYNTHESIS_FAST_MODEL=${MINIMAX_SYNTHESIS_FAST_MODEL:-MiniMax-M2.7-highspeed}
       - NOTEBOOKLM_PYTHON=${NOTEBOOKLM_PYTHON:-python}
       - NOTEBOOKLM_HOME=${NOTEBOOKLM_HOME:-/app/data/notebooklm}
       - NOTEBOOKLM_HARVEST_WORK_DIR=${NOTEBOOKLM_HARVEST_WORK_DIR:-/tmp/aiq-notebooklm-harvest}
@@ -47,7 +53,7 @@ services:
       - CONFIG_FILE=${BACKEND_CONFIG:-/app/configs/config_cli_minimax_ddgs.yml}
       - HOST=0.0.0.0
       - PORT=8000
-      - DASK_NWORKERS=${DASK_NWORKERS:-1}
+      - DASK_NWORKERS=${DASK_NWORKERS:-2}
       - DASK_NTHREADS=${DASK_NTHREADS:-4}
       - DASK_MEMORY_LIMIT=${DASK_MEMORY_LIMIT:-}
       - DASK_LIFETIME=${DASK_LIFETIME:-}

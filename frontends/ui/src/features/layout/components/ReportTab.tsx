@@ -61,6 +61,9 @@ const formatAudioTime = (seconds: number): string => {
 const DEFAULT_NARRATION_VOICE = 'onyx'
 const NARRATION_CHUNK_TARGET_CHARS = 800
 const NARRATION_CHUNK_MAX_CHARS = 1000
+// Number of narration chunks to synthesise concurrently. Matches the Kokoro worker pool
+// size so parallel requests are served in parallel rather than queued.
+const NARRATION_FETCH_CONCURRENCY = 3
 
 const splitLongSpeechPart = (value: string, maxChars: number): string[] => {
   const chunks: string[] = []
@@ -139,6 +142,7 @@ export const ReportTab: FC<ReportTabProps> = ({ children }) => {
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [playlist, setPlaylist] = useState<PlaylistItem[]>([])
+  const [narrationEnabled, setNarrationEnabled] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const audioUrlRef = useRef<string | null>(null)
   const playlistRef = useRef<PlaylistItem[]>([])
@@ -201,6 +205,7 @@ export const ReportTab: FC<ReportTabProps> = ({ children }) => {
   }, [])
 
   useEffect(() => {
+    setNarrationEnabled(false)
     setAudioError(null)
     setAudioNotice(null)
     if (audioUrlRef.current) {
@@ -318,26 +323,71 @@ export const ReportTab: FC<ReportTabProps> = ({ children }) => {
     }
 
     try {
-      for (const [index, chunk] of speechChunks.entries()) {
-        setAudioNotice(`Preparing narration part ${index + 1} of ${speechChunks.length}.`)
-        const response = await fetch('/api/tts/kokoro', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: chunk, voice: DEFAULT_NARRATION_VOICE, format: 'mp3' }),
-          signal: controller.signal,
-        })
+      // Fan out chunk synthesis with bounded concurrency, committing results in index order
+      // so playlist ordering + gapless playback stay unchanged. Chunk 0 still begins
+      // playback the moment it arrives.
+      const total = speechChunks.length
+      const blobs: (Blob | null)[] = new Array(total).fill(null)
+      const slotDone: (() => void)[] = []
+      const slotPromise: Promise<void>[] = speechChunks.map(
+        (_, i) =>
+          new Promise<void>((resolve) => {
+            slotDone[i] = resolve
+          })
+      )
+      let firstError: Error | null = null
+      let launched = 0
 
-        if (!response.ok) {
-          const detail = await response.json().catch(() => null)
-          const message = typeof detail?.error === 'string' ? detail.error : 'Kokoro is not available'
-          throw new Error(message)
+      const fetchAt = async (index: number) => {
+        setAudioNotice(`Preparing narration part ${Math.min(index + 1, total)} of ${total}.`)
+        try {
+          const response = await fetch('/api/tts/kokoro', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: speechChunks[index], voice: DEFAULT_NARRATION_VOICE, format: 'mp3' }),
+            signal: controller.signal,
+          })
+
+          if (!response.ok) {
+            const detail = await response.json().catch(() => null)
+            if (!firstError) {
+              firstError = new Error(typeof detail?.error === 'string' ? detail.error : 'Kokoro is not available')
+            }
+          } else {
+            blobs[index] = await response.blob()
+          }
+        } catch (error) {
+          if (!controller.signal.aborted && !firstError) {
+            firstError = error instanceof Error ? error : new Error('Narration generation failed')
+          }
+        } finally {
+          slotDone[index]()
         }
+      }
 
-        const blob = await response.blob()
+      const worker = async () => {
+        while (true) {
+          const index = launched++
+          if (index >= total) return
+          await fetchAt(index)
+        }
+      }
+
+      const width = Math.min(NARRATION_FETCH_CONCURRENCY, total)
+      const inflight: Promise<void>[] = []
+      for (let w = 0; w < width; w++) inflight.push(worker())
+
+      for (let index = 0; index < total; index++) {
+        await slotPromise[index]
+        if (firstError) throw firstError
+
+        const blob = blobs[index]
+        if (!blob) throw new Error('Narration generation failed')
+
         const nextUrl = URL.createObjectURL(blob)
         const nextItem: PlaylistItem = {
           id: `${signature}-${index}`,
-          title: `Part ${index + 1}/${speechChunks.length}`,
+          title: `Part ${index + 1}/${total}`,
           url: nextUrl,
           blob,
         }
@@ -382,7 +432,10 @@ export const ReportTab: FC<ReportTabProps> = ({ children }) => {
         }
       }
 
-      setAudioNotice(`Narration ready: ${speechChunks.length} parts.`)
+      await Promise.all(inflight)
+      if (firstError) throw firstError
+
+      setAudioNotice(`Narration ready: ${total} parts.`)
     } catch (error) {
       narrationSignatureRef.current = null
       if (controller.signal.aborted) return
@@ -395,8 +448,10 @@ export const ReportTab: FC<ReportTabProps> = ({ children }) => {
     }
   }, [canReadAloud, reportContentStr])
 
-  useEffect(() => {
+  // Narration is opt-in (default off). It only starts when the user explicitly enables it.
+  const handleEnableNarration = useCallback(() => {
     if (!canReadAloud) return
+    setNarrationEnabled(true)
     void prepareNarration({ autoplay: false })
   }, [canReadAloud, prepareNarration])
 
@@ -484,7 +539,23 @@ export const ReportTab: FC<ReportTabProps> = ({ children }) => {
       {/* Claim verification summary — renders nothing when data is absent */}
       {isFinalReport && !children && <VerificationStatsStrip />}
 
-      {canReadAloud && (
+      {canReadAloud && !narrationEnabled && (
+        <Flex align="center" gap="2" className="mb-3 shrink-0">
+          <Button
+            type="button"
+            kind="tertiary"
+            size="tiny"
+            onClick={guardClick(handleEnableNarration)}
+            aria-label="Generate audio narration"
+            title="Generate audio narration (opt-in)"
+          >
+            <Volume className="h-4 w-4" />
+            <span className="ml-1">Generate audio narration</span>
+          </Button>
+        </Flex>
+      )}
+
+      {canReadAloud && narrationEnabled && (
         <Flex direction="col" gap="2" className="border-base mb-3 shrink-0 rounded-md border bg-surface-raised px-3 py-2">
           <Flex align="center" justify="between" gap="2">
             <Flex align="center" gap="2" className="min-w-0">
