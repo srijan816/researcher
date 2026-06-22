@@ -556,7 +556,22 @@ class AgentEventCallback(BaseCallbackHandler):
         Call this after citation verification and sanitisation so the
         frontend receives the verified content (overwrites the earlier
         auto-emitted version).
+
+        Wave 3 W3.2 — when ``final_report_section_streaming`` is enabled on
+        the callback (set by the FastAPI route), the report is split on
+        ``^## `` / ``^# `` section headers and each section is emitted as a
+        cumulative artifact (section 1, then 1+2, then 1+2+3, …). The
+        frontend's ``setReportContent`` replaces, so the cumulative emission
+        makes the report appear to grow on screen while generation finishes.
         """
+        enable_sections = bool(getattr(self, "final_report_section_streaming", False))
+        if enable_sections and len(content) >= 800:
+            self._emit_sectioned_final_report(content)
+            return
+        self._emit_final_report_atomic(content)
+
+    def _emit_final_report_atomic(self, content: str) -> None:
+        """Original single-shot emission (kept as the default path)."""
         self._emit_artifact(
             ArtifactType.FILE,
             content,
@@ -571,6 +586,74 @@ class AgentEventCallback(BaseCallbackHandler):
             output_category="final_report",
         )
         self._emit_cited_urls(content)
+
+    def _emit_sectioned_final_report(self, content: str) -> None:
+        """Wave 3 W3.2 — emit the report section-by-section, cumulatively.
+
+        Splitting rule: headings at level 1-3 (``# / ## / ###``) start a new
+        section; everything before the first heading is the prelude. Each
+        emission is the cumulative content seen so far, so the frontend's
+        replace-on-receive behaviour produces a progressive build-up.
+        The full report is still emitted as the final ``final_report``
+        artifact so downstream consumers (export, save) see the complete
+        text exactly once.
+        """
+        sections = self._split_report_into_sections(content)
+        if len(sections) < 2:
+            # Too few sections to bother with progressive emission.
+            self._emit_final_report_atomic(content)
+            return
+        cumulative = ""
+        for index, section in enumerate(sections, start=1):
+            cumulative = cumulative + section if cumulative else section
+            is_last = index == len(sections)
+            self._emit_artifact(
+                ArtifactType.OUTPUT,
+                cumulative,
+                output_category="final_report",
+                section_index=index,
+                section_count=len(sections),
+                is_section_stream=True,
+            )
+            if is_last:
+                # Final atomic write so consumers (export, save, citation
+                # detection) see the complete report with stable metadata.
+                self._emit_artifact(
+                    ArtifactType.FILE,
+                    content,
+                    name="/report.md",
+                    file_path="/report.md",
+                    filename="/report.md",
+                    output_category="final_report",
+                )
+                self._emit_cited_urls(content)
+
+    @staticmethod
+    def _split_report_into_sections(content: str) -> list[str]:
+        """Split a Markdown report on top-level headings (level 1-3).
+
+        Returns a list of section chunks where chunk 0 is the prelude
+        (everything before the first heading) and each subsequent chunk
+        begins with a heading line. Headings are kept attached to the
+        chunk that follows them.
+        """
+        if not content:
+            return []
+        # Match any H1/H2/H3 line. The line break is consumed so the
+        # heading stays attached to the chunk that follows it.
+        pattern = re.compile(r"(?m)^(#{1,3})\s+", re.MULTILINE)
+        matches = list(pattern.finditer(content))
+        if not matches:
+            return [content]
+        chunks: list[str] = []
+        first_start = matches[0].start()
+        if first_start > 0:
+            chunks.append(content[:first_start])
+        for i, match in enumerate(matches):
+            start = match.start()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+            chunks.append(content[start:end])
+        return chunks
 
     def _is_search_tool(self, tool_name: str) -> bool:
         """Check if tool is a search-related tool that returns URLs."""

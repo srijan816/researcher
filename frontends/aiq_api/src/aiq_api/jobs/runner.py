@@ -29,6 +29,7 @@ import asyncio
 import importlib
 import json
 import logging
+import os
 import re
 import uuid
 from typing import Any
@@ -540,6 +541,13 @@ async def run_agent_job(
                     raw_event_store = EventStore(db_url, job_id)
                     event_store = BatchingEventStore(raw_event_store)
                     agent_event_callback = AgentEventCallback(event_store)
+                    # Wave 3 W3.2 — opt-in section-by-section final-report
+                    # emission. The frontend's setReportContent replaces, so
+                    # cumulative section emissions make the report appear to
+                    # grow on screen. Default off to preserve current
+                    # behaviour; flip on in deploy/.env when ready.
+                    if os.getenv("AIQ_FINAL_REPORT_SECTION_STREAM", "false").lower() in ("1", "true", "yes"):
+                        agent_event_callback.final_report_section_streaming = True
                     callbacks.append(agent_event_callback)
                     callbacks.append(nat_profiler_callback)
 
