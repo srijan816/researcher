@@ -13,7 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Launch a local Dask cluster and the web server."""
+"""Launch a local Dask cluster (or skip it) and the web server.
+
+Wave 3 W3.4 — when ``AIQ_USE_INPROCESS_EXECUTOR=1`` is set we skip the
+Dask scheduler and worker subprocesses entirely. The deep-research jobs
+run on the uvicorn event loop via :mod:`aiq_api.jobs.asyncio_executor`.
+The web server's lifecycle (signal handlers, graceful shutdown) stays
+identical; only the Dask-specific child processes are not spawned.
+"""
 
 from __future__ import annotations
 
@@ -35,15 +42,18 @@ def _terminate_process(proc: subprocess.Popen[str] | None) -> None:
 
 
 def _install_signal_handlers(
-    scheduler_proc: subprocess.Popen[str],
-    worker_proc: subprocess.Popen[str],
     web_proc: subprocess.Popen[str],
+    dask_procs: list[subprocess.Popen[str]] | None = None,
 ) -> None:
+    """Install SIGTERM/SIGINT handlers that shut down ``web_proc`` and any
+    Dask child processes (when Dask is in use)."""
+    dask_procs = dask_procs or []
+
     def _handle_signal(_signum: int, _frame: object) -> None:
         print("Shutting down...", flush=True)
         _terminate_process(web_proc)
-        _terminate_process(worker_proc)
-        _terminate_process(scheduler_proc)
+        for proc in reversed(dask_procs):
+            _terminate_process(proc)
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -75,77 +85,109 @@ def main() -> int:
     )
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))
-    scheduler_port = int(os.getenv("DASK_SCHEDULER_PORT", "8786"))
-    nworkers = os.getenv("DASK_NWORKERS", "1")
-    nthreads = os.getenv("DASK_NTHREADS", "4")
-    memory_limit = os.getenv("DASK_MEMORY_LIMIT")
-    lifetime = os.getenv("DASK_LIFETIME")
+
+    # Wave 3 W3.4 — opt into the in-process asyncio executor. When set,
+    # we skip the Dask scheduler and worker subprocesses entirely.
+    use_inprocess = os.getenv("AIQ_USE_INPROCESS_EXECUTOR", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
     print("============================================", flush=True)
-    print("NVIDIA NeMo Agent toolkit - Local Dask Mode", flush=True)
+    if use_inprocess:
+        print("NVIDIA NeMo Agent toolkit - InProcess Executor Mode", flush=True)
+    else:
+        print("NVIDIA NeMo Agent toolkit - Local Dask Mode", flush=True)
     print("============================================", flush=True)
     print("", flush=True)
     print(f"Config: {config_file}", flush=True)
     print(f"API:    http://{host}:{port}", flush=True)
-    print(f"Dask:   tcp://localhost:{scheduler_port}", flush=True)
+    if not use_inprocess:
+        scheduler_port = int(os.getenv("DASK_SCHEDULER_PORT", "8786"))
+        print(f"Dask:   tcp://localhost:{scheduler_port}", flush=True)
     print("", flush=True)
 
-    scheduler_proc = subprocess.Popen(
-        [
-            "dask-scheduler",
-            "--port",
-            str(scheduler_port),
-            "--dashboard-address",
-            ":8787",
-        ],
-    )
+    dask_procs: list[subprocess.Popen[str]] = []
 
-    try:
-        _wait_for_scheduler(scheduler_port)
-    except RuntimeError as exc:
-        _terminate_process(scheduler_proc)
-        raise SystemExit(str(exc)) from exc
+    if not use_inprocess:
+        scheduler_port = int(os.getenv("DASK_SCHEDULER_PORT", "8786"))
+        nworkers = os.getenv("DASK_NWORKERS", "1")
+        nthreads = os.getenv("DASK_NTHREADS", "4")
+        memory_limit = os.getenv("DASK_MEMORY_LIMIT")
+        lifetime = os.getenv("DASK_LIFETIME")
 
-    worker_args = [
-        "dask-worker",
-        f"tcp://localhost:{scheduler_port}",
-        "--nworkers",
-        str(nworkers),
-        "--nthreads",
-        str(nthreads),
-        "--no-dashboard",
-    ]
-    if memory_limit:
-        worker_args += ["--memory-limit", memory_limit]
-    if lifetime:
-        lifetime_restart = os.getenv("DASK_LIFETIME_RESTART", "true").lower() != "false"
-        worker_args += ["--lifetime", lifetime]
-        if lifetime_restart:
-            worker_args += ["--lifetime-restart"]
+        scheduler_proc = subprocess.Popen(
+            [
+                "dask-scheduler",
+                "--port",
+                str(scheduler_port),
+                "--dashboard-address",
+                ":8787",
+            ],
+        )
+        dask_procs.append(scheduler_proc)
 
-    worker_proc = subprocess.Popen(worker_args)
+        try:
+            _wait_for_scheduler(scheduler_port)
+        except RuntimeError as exc:
+            _terminate_process(scheduler_proc)
+            raise SystemExit(str(exc)) from exc
 
-    print("Waiting for worker to connect...", flush=True)
-    time.sleep(3)
+        worker_args = [
+            "dask-worker",
+            f"tcp://localhost:{scheduler_port}",
+            "--nworkers",
+            str(nworkers),
+            "--nthreads",
+            str(nthreads),
+            "--no-dashboard",
+        ]
+        if memory_limit:
+            worker_args += ["--memory-limit", memory_limit]
+        if lifetime:
+            lifetime_restart = os.getenv("DASK_LIFETIME_RESTART", "true").lower() != "false"
+            worker_args += ["--lifetime", lifetime]
+            if lifetime_restart:
+                worker_args += ["--lifetime-restart"]
 
-    os.environ["NAT_DASK_SCHEDULER_ADDRESS"] = f"tcp://localhost:{scheduler_port}"
+        worker_proc = subprocess.Popen(worker_args)
+        dask_procs.append(worker_proc)
 
-    print("", flush=True)
-    print("--------------------------------------------", flush=True)
-    print("  Dask cluster ready", flush=True)
-    print("  Starting web server...", flush=True)
-    print("--------------------------------------------", flush=True)
+        print("Waiting for worker to connect...", flush=True)
+        time.sleep(3)
+
+        os.environ["NAT_DASK_SCHEDULER_ADDRESS"] = f"tcp://localhost:{scheduler_port}"
+
+        print("", flush=True)
+        print("--------------------------------------------", flush=True)
+        print("  Dask cluster ready", flush=True)
+        print("  Starting web server...", flush=True)
+        print("--------------------------------------------", flush=True)
+    else:
+        # In-process executor: deep-research jobs run on the uvicorn loop
+        # via :mod:`aiq_api.jobs.asyncio_executor`. No NAT_DASK_SCHEDULER_ADDRESS
+        # is set; ``JobStore`` calls inside the runner pass a sentinel
+        # address that is never connected to (Dask is only used for job
+        # submission, not for status or cancellation).
+        print("", flush=True)
+        print("--------------------------------------------", flush=True)
+        print("  InProcess executor ready (no Dask subprocesses)", flush=True)
+        print("  Starting web server...", flush=True)
+        print("--------------------------------------------", flush=True)
+
     print("", flush=True)
 
     web_proc = subprocess.Popen(["python", "/app/deploy/start_web.py"])
-    _install_signal_handlers(scheduler_proc, worker_proc, web_proc)
+    _install_signal_handlers(web_proc, dask_procs=dask_procs if dask_procs else None)
 
     try:
         return web_proc.wait()
     finally:
         _terminate_process(web_proc)
-        _terminate_process(worker_proc)
-        _terminate_process(scheduler_proc)
+        for proc in reversed(dask_procs):
+            _terminate_process(proc)
 
 
 if __name__ == "__main__":

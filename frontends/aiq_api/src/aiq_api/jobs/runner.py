@@ -241,7 +241,7 @@ async def _notify_terminal_webhook(
 async def run_agent_job(
     configure_logging: bool,
     log_level: int,
-    scheduler_address: str,
+    scheduler_address: str | None,
     db_url: str,
     config_file_path: str,
     job_id: str,
@@ -265,8 +265,16 @@ async def run_agent_job(
     """
     Dask task to run any registered agent with cancellation support and telemetry.
 
-    This function is submitted to Dask and runs in a worker process. It:
-    - Uses NAT's JobStore for status tracking
+    Wave 3 W3.4 — this function is the same one that used to run inside a
+    Dask worker process; it now runs in-process on the agent's uvicorn
+    event loop when ``AIQ_USE_INPROCESS_EXECUTOR=1`` is set, and inside
+    a Dask worker otherwise. ``scheduler_address`` is unused on the
+    in-process path (``JobStore`` only needs it for ``dask_client.submit``)
+    but is preserved as a positional argument for backwards compatibility
+    with existing Dask-task call sites.
+
+    Responsibilities:
+    - Uses NAT's JobStore for status tracking (postgres/sqlite — not Dask)
     - Monitors for cancellation requests and gracefully terminates the agent
     - Exports telemetry to Phoenix/OpenTelemetry via NAT's ExporterManager
     - Propagates trace context from parent workflow for nested spans
@@ -274,7 +282,11 @@ async def run_agent_job(
     Args:
         configure_logging: Whether to set up logging in the worker.
         log_level: Logging level to use.
-        scheduler_address: Dask scheduler address.
+        scheduler_address: Dask scheduler address. Optional on the
+            in-process path; required on the Dask path. The Dask
+            scheduler is only consulted at job submission time — once
+            the worker is running, status updates and cancellation polls
+            go through NAT's ``JobStore`` (postgres/sqlite), not Dask.
         db_url: Database URL for job store and event store.
         config_file_path: Path to NAT config file.
         job_id: Unique job identifier.
@@ -345,11 +357,19 @@ async def run_agent_job(
     )
 
     try:
-        job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
+        # Wave 3 W3.4 — when running in-process the executor passes a
+        # sentinel scheduler_address (or None). The runner only uses
+        # ``JobStore.update_status`` / ``get_job`` and ``CancellationMonitor``,
+        # both of which are pure SQLAlchemy. The Dask client is only
+        # instantiated lazily on first access (see ``DaskClientMixin``), and
+        # this code path never accesses it, so passing any non-empty
+        # placeholder is safe.
+        effective_scheduler_address = scheduler_address or "in-process"
+        job_store = JobStore(scheduler_address=effective_scheduler_address, db_url=db_url)
         await job_store.update_status(job_id, JobStatus.RUNNING)
 
         cancellation_monitor = CancellationMonitor(
-            scheduler_address=scheduler_address,
+            scheduler_address=effective_scheduler_address,
             db_url=db_url,
             job_id=job_id,
             poll_interval=1.0,

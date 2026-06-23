@@ -211,6 +211,17 @@ async def submit_agent_job(
     # Use Dask thread pool instead of process pool for workers. Set to 1 to enable.
     use_threads = os.environ.get("NAT_USE_DASK_THREADS", "0") == "1"
 
+    # Wave 3 W3.4 — opt into the in-process asyncio executor. When set,
+    # deep-research jobs run on the agent's uvicorn event loop instead of
+    # in a Dask worker process. The Dask path is the default; flip this
+    # on once the executor has been verified in dev.
+    from .asyncio_executor import InProcessJobExecutor
+    from .asyncio_executor import use_inprocess_executor
+
+    in_process = use_inprocess_executor()
+    if in_process:
+        # No scheduler address required — the executor runs on this loop.
+        scheduler_address = None
     if not scheduler_address:
         raise RuntimeError("Async job submission requires NAT_DASK_SCHEDULER_ADDRESS to be set")
 
@@ -234,30 +245,44 @@ async def submit_agent_job(
         secret=webhook_secret,
     )
 
+    job_args = [
+        not use_threads,  # configure_logging
+        log_level,
+        scheduler_address,
+        db_url,
+        config_path,
+        resolved_job_id,
+        input_text,
+        agent_config.class_path,
+        agent_config.config_name,
+        *_get_parent_trace_context(),
+        available_documents,
+        data_sources,
+        auth_token,
+        research_depth,
+        None,  # resume_files
+        webhook_config,
+    ]
+
     try:
-        await job_store.submit_job(
-            job_id=resolved_job_id,
-            expiry_seconds=expiry_seconds,
-            job_fn=run_agent_job,
-            job_args=[
-                not use_threads,  # configure_logging
-                log_level,
-                scheduler_address,
-                db_url,
-                config_path,
-                resolved_job_id,
-                input_text,
-                agent_config.class_path,
-                agent_config.config_name,
-                *_get_parent_trace_context(),
-                available_documents,
-                data_sources,
-                auth_token,
-                research_depth,
-                None,  # resume_files
-                webhook_config,
-            ],
-        )
+        if in_process:
+            # Wave 3 W3.4 — in-process asyncio executor path. Run the
+            # worker coroutine on this loop, gated by the executor's
+            # semaphore. Same status writes, same EventStore events, same
+            # webhook notifications — the chat UI cannot tell the
+            # difference.
+            await InProcessJobExecutor.instance().submit(
+                job_id=resolved_job_id,
+                job_fn=run_agent_job,
+                job_args=job_args,
+            )
+        else:
+            await job_store.submit_job(
+                job_id=resolved_job_id,
+                expiry_seconds=expiry_seconds,
+                job_fn=run_agent_job,
+                job_args=job_args,
+            )
         await loop.run_in_executor(None, create_job_access, resolved_job_id, principal, db_url)
         await loop.run_in_executor(
             None,
@@ -316,12 +341,16 @@ async def resume_agent_job(
     auth_token: str | None = None,
     resume_files: dict[str, Any] | None = None,
 ) -> str:
-    """Requeue an existing failed/interrupted job ID with recovered virtual files."""
-    from dask.distributed import Variable
-    from dask.distributed import fire_and_forget
+    """Requeue an existing failed/interrupted job ID with recovered virtual files.
 
+    Wave 3 W3.4 — when ``AIQ_USE_INPROCESS_EXECUTOR=1`` the resume re-uses
+    the same in-process asyncio task slot; otherwise the Dask path runs.
+    """
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
     from nat.front_ends.fastapi.async_jobs.job_store import JobStore
+
+    from .asyncio_executor import InProcessJobExecutor
+    from .asyncio_executor import use_inprocess_executor
 
     agent_config = get_agent_config(agent_type)
     scheduler_address = os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
@@ -330,6 +359,9 @@ async def resume_agent_job(
     log_level = int(os.environ.get("NAT_FASTAPI_LOG_LEVEL", "20"))
     use_threads = os.environ.get("NAT_USE_DASK_THREADS", "0") == "1"
 
+    in_process = use_inprocess_executor()
+    if in_process:
+        scheduler_address = None
     if not scheduler_address:
         raise RuntimeError("Async job resume requires NAT_DASK_SCHEDULER_ADDRESS to be set")
 
@@ -355,8 +387,7 @@ async def resume_agent_job(
         }
     )
 
-    future = job_store.dask_client.submit(
-        run_agent_job,
+    job_args = [
         not use_threads,
         log_level,
         scheduler_address,
@@ -372,10 +403,26 @@ async def resume_agent_job(
         auth_token,
         research_depth,
         resume_files,
-        key=f"{job_id}-resume-{uuid.uuid4().hex}",
-    )
-    Variable(name=job_id, client=job_store.dask_client).set(future, timeout="5 s")
-    fire_and_forget(future)
+        None,  # webhook_config — resume path doesn't carry a fresh webhook
+    ]
+
+    if in_process:
+        await InProcessJobExecutor.instance().requeue(
+            job_id=job_id,
+            job_fn=run_agent_job,
+            job_args=job_args,
+        )
+    else:
+        from dask.distributed import Variable
+        from dask.distributed import fire_and_forget
+
+        future = job_store.dask_client.submit(
+            run_agent_job,
+            *job_args,
+            key=f"{job_id}-resume-{uuid.uuid4().hex}",
+        )
+        Variable(name=job_id, client=job_store.dask_client).set(future, timeout="5 s")
+        fire_and_forget(future)
 
     logger.info(
         "Resumed %s job %s for owner %s (%s:%s)",

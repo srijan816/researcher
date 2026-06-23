@@ -82,6 +82,13 @@ aiq:
         # DASK_LIFETIME: '3600'
         # Optional (default 'true'): set to 'false' for graceful exit without respawn
         # DASK_LIFETIME_RESTART: 'true'
+        # Wave 3 W3.4 — in-process asyncio executor for deep-research jobs.
+        # Set to '1' to skip the Dask scheduler/worker subprocesses; jobs run
+        # on the uvicorn event loop. AIQ_ASYNC_JOB_MAX_CONCURRENT caps how
+        # many deep-research jobs can be in-flight at once (default 2 to
+        # match the historical DASK_NWORKERS=2 ceiling).
+        # AIQ_USE_INPROCESS_EXECUTOR: '1'
+        # AIQ_ASYNC_JOB_MAX_CONCURRENT: '2'
         NAT_JOB_STORE_DB_URL: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
         AIQ_CHECKPOINT_DB: postgresql://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
         AIQ_SUMMARY_DB: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs

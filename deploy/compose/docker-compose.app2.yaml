@@ -22,13 +22,6 @@ services:
     environment:
       - APP_ENV=${APP_ENV:-production}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - REQUIRE_AUTH=${REQUIRE_AUTH:-false}
-      - AIQ_LOCAL_AUTH_ENABLED=${AIQ_LOCAL_AUTH_ENABLED:-false}
-      - AIQ_AUTH_TOKEN_SECRET=${AIQ_AUTH_TOKEN_SECRET:-}
-      - AIQ_AUTH_DB_URL=${AIQ_AUTH_DB_URL:-}
-      - AIQ_LOCAL_USERS=${AIQ_LOCAL_USERS:-}
-      - AIQ_LOCAL_ADMIN_USERS=${AIQ_LOCAL_ADMIN_USERS:-}
-      - AIQ_AUTH_TOKEN_TTL_SECONDS=${AIQ_AUTH_TOKEN_TTL_SECONDS:-}
       - AIQ_API_KEYS=${AIQ_API_KEYS:-}
       - AIQ_API_KEY_DB_URL=${AIQ_API_KEY_DB_URL:-}
       - NAT_JOB_STORE_DB_URL=${NAT_JOB_STORE_DB_URL:-postgresql+asyncpg://aiq:aiq_dev@postgres:5432/aiq_jobs}
@@ -68,6 +61,12 @@ services:
       - DASK_MEMORY_LIMIT=${DASK_MEMORY_LIMIT:-}
       - DASK_LIFETIME=${DASK_LIFETIME:-}
       - DASK_LIFETIME_RESTART=${DASK_LIFETIME_RESTART:-}
+      # Wave 3 W3.4 — in-process asyncio executor for deep-research jobs.
+      # Default empty (Dask path retained). Set AIQ_USE_INPROCESS_EXECUTOR=1
+      # to skip the dask-scheduler/worker subprocesses and run jobs on the
+      # uvicorn event loop. AIQ_ASYNC_JOB_MAX_CONCURRENT caps in-flight jobs.
+      - AIQ_USE_INPROCESS_EXECUTOR=${AIQ_USE_INPROCESS_EXECUTOR:-}
+      - AIQ_ASYNC_JOB_MAX_CONCURRENT=${AIQ_ASYNC_JOB_MAX_CONCURRENT:-}
     ports:
       - "127.0.0.1:${PORT:-9000}:8000"
     volumes:
@@ -167,12 +166,11 @@ services:
       context: ../../frontends/ui
       dockerfile: deploy/Dockerfile
     container_name: app2-aiq-blueprint-ui
+    env_file:
+      - ../.env
     environment:
-      - REQUIRE_AUTH=${REQUIRE_AUTH:-false}
-      - AIQ_LOCAL_AUTH_ENABLED=${AIQ_LOCAL_AUTH_ENABLED:-false}
+      - PORT=3000
       - BACKEND_URL=${BACKEND_URL:-http://aiq-agent:8000}
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-}
-      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
       - SECURE_COOKIES=${SECURE_COOKIES:-}
       - KOKORO_TTS_URL=${KOKORO_TTS_URL:-http://kokoro:8000}
       - FILE_UPLOAD_ACCEPTED_TYPES=${FILE_UPLOAD_ACCEPTED_TYPES:-.pdf,.docx,.txt,.md}
