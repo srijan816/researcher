@@ -82,6 +82,11 @@ export const ERROR_REGISTRY: Record<ErrorCode, ErrorMeta> = {
     title: 'Research Data Unavailable',
     defaultMessage: 'Unable to load research data. The job may have expired or been deleted.',
   },
+  'agent.deep_research_auth_required': {
+    status: 'error',
+    title: 'Session Expired',
+    defaultMessage: 'Your session has expired. Please sign in again to view this research.',
+  },
 
   // ============================================================
   // System Errors

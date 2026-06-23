@@ -93,6 +93,7 @@ export type ErrorCode =
   | 'agent.response_interrupted'
   | 'agent.deep_research_failed'
   | 'agent.deep_research_load_failed'
+  | 'agent.deep_research_auth_required'
   // System errors
   | 'system.unknown'
 

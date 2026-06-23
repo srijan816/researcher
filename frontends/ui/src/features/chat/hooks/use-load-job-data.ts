@@ -31,6 +31,7 @@ import {
   type TodoItem,
 } from '@/adapters/api'
 import { useChatStore } from '../store'
+import { isAuthRequiredDeepResearchError } from '../lib/deep-research-errors'
 import { isUnavailableDeepResearchJobError } from '../lib/deep-research-errors'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
@@ -589,7 +590,10 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         if (isUnavailableDeepResearchJobError(err)) {
           syncMissingJobToFailureState(jobId)
         }
-        addErrorCard('agent.deep_research_load_failed', errorMessage)
+        const errorCode = isAuthRequiredDeepResearchError(err)
+          ? 'agent.deep_research_auth_required'
+          : 'agent.deep_research_load_failed'
+        addErrorCard(errorCode, errorMessage)
         stopAllDeepResearchSpinners()
         completeDeepResearch()
         setStreaming(false)
@@ -686,7 +690,10 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         if (isUnavailableDeepResearchJobError(err)) {
           syncMissingJobToFailureState(jobId)
         }
-        addErrorCard('agent.deep_research_load_failed', errorMessage)
+        const errorCode = isAuthRequiredDeepResearchError(err)
+          ? 'agent.deep_research_auth_required'
+          : 'agent.deep_research_load_failed'
+        addErrorCard(errorCode, errorMessage)
         stopAllDeepResearchSpinners()
         completeDeepResearch()
         setStreaming(false)

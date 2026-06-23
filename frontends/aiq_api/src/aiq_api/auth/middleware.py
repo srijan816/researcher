@@ -299,12 +299,30 @@ async def resolve_request_user(
                 user["skip_clarifier"] = True
             return user, None, is_external, None
 
-        if is_external and require_auth:
+        # Token was presented but didn't validate. When REQUIRE_AUTH is on,
+        # reject regardless of external/internal classification — otherwise
+        # the request falls through to ``detect_internal_caller`` which
+        # trusts the raw token presence and produces a user dict with no
+        # ``sub`` claim, causing route-level 403s in
+        # ``require_verified_principal()``. (Internal callers go through
+        # Docker DNS, e.g. ``aiq-agent``, and are not in
+        # ``AIQ_EXTERNAL_HOSTNAMES`` — they were silently bypassing token
+        # validation here.)
+        if require_auth:
             return None, 401, is_external, error_code or "token_invalid"
 
     if is_external:
         if not require_auth:
             return {"type": "anonymous", "skip_clarifier": True}, None, is_external, None
+        return None, 401, is_external, "token_missing"
+
+    # Internal caller (e.g. chat-UI proxy hitting ``aiq-agent`` over Docker
+    # DNS). With REQUIRE_AUTH=true, require a token just like the external
+    # path — otherwise a missing/invalid token here would silently fall
+    # through to a synthetic identity with no ``sub`` claim, causing
+    # route-level 403s in ``require_verified_principal()`` (or, with
+    # REQUIRE_AUTH=false, an unauthenticated bypass of access checks).
+    if require_auth and not token:
         return None, 401, is_external, "token_missing"
 
     return detect_internal_caller(headers), None, is_external, None
