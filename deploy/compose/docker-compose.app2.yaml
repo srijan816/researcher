@@ -36,12 +36,17 @@ services:
       # Defaults to the shared websurfx Redis with a "llmcache:" key prefix.
       # Cache is fail-open: if unreachable, every LLM call still happens.
       - REDIS_URL=${REDIS_URL:-redis://app2-aiq-websurfx-redis:6379/0}
-      # Wave 3 W3.3 — semantic source dedup in the report-builder prompt.
-      # Default off (deterministic + cheap). Set AIQ_SOURCE_DEDUP=1 to enable
-      # the fingerprint stage only, or AIQ_SOURCE_DEDUP_EMBED=1 to also run
-      # the NVIDIA-embedding semantic stage (one batched API call per report).
-      - AIQ_SOURCE_DEDUP=${AIQ_SOURCE_DEDUP:-}
-      - AIQ_SOURCE_DEDUP_EMBED=${AIQ_SOURCE_DEDUP_EMBED:-}
+      # Wave 3 W3.3 / Wave 4 — semantic source dedup in the report-builder
+      # prompt. Both stages on: fingerprint + local model2vec embeddings
+      # (potion-base-8M, CPU-only; NVIDIA embed used only if a key is set).
+      - AIQ_SOURCE_DEDUP=${AIQ_SOURCE_DEDUP:-1}
+      - AIQ_SOURCE_DEDUP_EMBED=${AIQ_SOURCE_DEDUP_EMBED:-1}
+      # Wave 4 — CPU ONNX cross-encoder rerank of merged discovery results
+      # (FlashRank ms-marco-MiniLM-L-12-v2). Model cached on the data volume.
+      - AIQ_RERANK_BACKEND=${AIQ_RERANK_BACKEND:-flashrank}
+      - AIQ_RERANK_CACHE_DIR=${AIQ_RERANK_CACHE_DIR:-/app/data/flashrank}
+      # Persist HuggingFace downloads (model2vec potion-base-8M) across recreates.
+      - HF_HOME=${HF_HOME:-/app/data/hf}
       # Model cascade (Wave 1): leaf/mechanical roles use the high-speed variant.
       # Quality-critical roles (research/deep/planner/synthesis/text) stay on MiniMax-M3.
       - MINIMAX_FAST_MODEL=${MINIMAX_FAST_MODEL:-MiniMax-M2.7-highspeed}
@@ -56,7 +61,14 @@ services:
       - CONFIG_FILE=${BACKEND_CONFIG:-/app/configs/config_cli_minimax_ddgs.yml}
       - HOST=0.0.0.0
       - PORT=8000
-      - DASK_NWORKERS=${DASK_NWORKERS:-2}
+      - DASK_NWORKERS=${DASK_NWORKERS:-3}
+      # Freshness: default recency window on every web search (fixes stale
+      # 2023-era facts surfacing as current). Overridable per deploy.
+      - AIQ_SEARCH_DEFAULT_TIME_RANGE=${AIQ_SEARCH_DEFAULT_TIME_RANGE:-year}
+      # Jobs are remote-API/network bound; RAM headroom allows 3 (measured
+      # ~2GB/job). Search-engine 429s are the scaling limit — mitigated by the
+      # 2h websurfx redis cache. Queue absorbs anything beyond the cap.
+      - AIQ_QUEUE_MAX_CONCURRENT=${AIQ_QUEUE_MAX_CONCURRENT:-3}
       - DASK_NTHREADS=${DASK_NTHREADS:-4}
       - DASK_MEMORY_LIMIT=${DASK_MEMORY_LIMIT:-}
       - DASK_LIFETIME=${DASK_LIFETIME:-}
@@ -169,6 +181,7 @@ services:
     env_file:
       - ../.env
     environment:
+      - NODE_OPTIONS=--max-old-space-size=384
       - PORT=3000
       - BACKEND_URL=${BACKEND_URL:-http://aiq-agent:8000}
       - SECURE_COOKIES=${SECURE_COOKIES:-}

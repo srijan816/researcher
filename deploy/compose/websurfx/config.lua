@@ -10,7 +10,9 @@ binding_ip = "0.0.0.0"
 -- Production mode adds random delay for human HTML searches. Our Docker patch
 -- skips that delay for json=true agent calls so AIQ research stays fast.
 production_use = true
-request_timeout = 10
+-- 6s: most engines answer in 1-4s; waiting the full 10s for stragglers made
+-- every uncached discovery wave cost 10s flat.
+request_timeout = 6
 tcp_connection_keep_alive = 30
 pool_idle_connection_timeout = 30
 rate_limiter = {
@@ -29,7 +31,9 @@ theme = "simple"
 animation = nil
 
 redis_url = "redis://websurfx-redis:6379"
-cache_expiry_time = 1800
+-- 2h: concurrent/overlapping research jobs re-issue near-identical queries;
+-- longer reuse also relieves upstream engine rate limits (429s).
+cache_expiry_time = 7200
 http_cache_expiry_time = 120
 
 -- Searx uses WEBSURFX_SEARX_URL from the container env. App2 points it to the

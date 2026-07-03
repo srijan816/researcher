@@ -13,6 +13,9 @@ description = "NAT SearXNG web search tool with Jina Reader page extraction"
 requires-python = ">=3.11"
 dependencies = [
     "ddgs>=7.0.0",
+    # CPU ONNX cross-encoder rerank (AIQ_RERANK_BACKEND=flashrank); reuses the
+    # onnxruntime already shipped for kokoro-onnx.
+    "flashrank>=0.2.10",
     "pydantic>=2.0.0",
     "scrapling[fetchers]>=0.4.7",
 ]

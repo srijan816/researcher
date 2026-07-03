@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Pluggable search-result reranking: NVIDIA NIM, local cross-encoder, or heuristic passthrough.
+"""Pluggable search-result reranking: NVIDIA NIM, FlashRank ONNX, local cross-encoder, or heuristic passthrough.
 
 All entry points are fail-open. ``rerank_results`` returns ``None`` whenever a
 backend is unavailable or errors, in which case callers keep the heuristic
@@ -22,14 +22,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_NVIDIA_RERANK_MODEL = "nvidia/llama-nemotron-rerank-1b-v2"
 DEFAULT_NVIDIA_RERANK_ENDPOINT = "https://ai.api.nvidia.com/v1/retrieval/nvidia/llama-nemotron-rerank-1b-v2/reranking"
 DEFAULT_LOCAL_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
+DEFAULT_FLASHRANK_MODEL = "ms-marco-MiniLM-L-12-v2"
 DEFAULT_RERANK_TIMEOUT_SECONDS = 8.0
 PASSAGE_MAX_CONTENT_CHARS = 1800
 
-VALID_BACKENDS = {"nvidia", "local", "heuristic"}
+VALID_BACKENDS = {"nvidia", "flashrank", "local", "heuristic"}
 
 _warned_keys: set[str] = set()
 _local_cross_encoder = None
 _local_import_failed = False
+_flashrank_ranker = None
+_flashrank_import_failed = False
 
 
 def _warn_once(key: str, message: str, *args: object) -> None:
@@ -46,7 +49,13 @@ def resolve_rerank_backend() -> str:
         return backend
     if backend:
         _warn_once(f"backend:{backend}", "Unknown AIQ_RERANK_BACKEND %r; using default resolution.", backend)
-    return "nvidia" if os.environ.get("NVIDIA_API_KEY") else "heuristic"
+    if os.environ.get("NVIDIA_API_KEY"):
+        return "nvidia"
+    import importlib.util
+
+    if importlib.util.find_spec("flashrank") is not None:
+        return "flashrank"
+    return "heuristic"
 
 
 def build_passage(result: dict) -> str:
@@ -90,6 +99,10 @@ async def rerank_results(query: str, results: Sequence[dict], timeout: float | N
     try:
         if backend == "nvidia":
             scores = await asyncio.wait_for(_rerank_nvidia(query, passages, timeout), timeout=timeout + 2.0)
+        elif backend == "flashrank":
+            # First call downloads the ONNX model (~35MB) and loads it; allow
+            # extra headroom for that, warm calls finish in well under 8s.
+            scores = await asyncio.wait_for(_rerank_flashrank(query, passages), timeout=max(timeout, 120.0))
         else:
             scores = await asyncio.wait_for(_rerank_local(query, passages), timeout=max(timeout, 60.0))
     except Exception as exc:
@@ -151,6 +164,46 @@ async def _rerank_nvidia(query: str, passages: list[str], timeout: float) -> lis
         raise RuntimeError("rerank response contained no usable rankings")
     floor = min(seen_logits) - 1.0
     return [score if score is not None else floor for score in scores]
+
+
+async def _rerank_flashrank(query: str, passages: list[str]) -> list[float] | None:
+    """Score passages with a small ONNX cross-encoder via FlashRank (CPU, no API)."""
+    global _flashrank_ranker, _flashrank_import_failed
+    if _flashrank_import_failed:
+        return None
+    loop = asyncio.get_event_loop()
+    if _flashrank_ranker is None:
+        try:
+            from flashrank import Ranker
+        except ImportError:
+            _flashrank_import_failed = True
+            _warn_once(
+                "flashrank-import",
+                "flashrank is not installed; AIQ_RERANK_BACKEND=flashrank falls back to heuristic ranking.",
+            )
+            return None
+        model_name = os.environ.get("AIQ_RERANK_FLASHRANK_MODEL", "").strip() or DEFAULT_FLASHRANK_MODEL
+        cache_dir = os.environ.get("AIQ_RERANK_CACHE_DIR", "").strip() or "/tmp/flashrank"
+        _flashrank_ranker = await loop.run_in_executor(
+            None, lambda: Ranker(model_name=model_name, cache_dir=cache_dir)
+        )
+
+    def _score() -> list[float]:
+        from flashrank import RerankRequest
+
+        request = RerankRequest(
+            query=query,
+            passages=[{"id": index, "text": passage} for index, passage in enumerate(passages)],
+        )
+        ranked = _flashrank_ranker.rerank(request)
+        scores: list[float] = [0.0] * len(passages)
+        for entry in ranked:
+            index = int(entry.get("id", -1))
+            if 0 <= index < len(passages):
+                scores[index] = float(entry.get("score", 0.0))
+        return scores
+
+    return await loop.run_in_executor(None, _score)
 
 
 async def _rerank_local(query: str, passages: list[str]) -> list[float] | None:

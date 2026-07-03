@@ -59,6 +59,9 @@ from .citation_verification import SourceEntry
 if TYPE_CHECKING:
     pass
 
+# Lazily-loaded model2vec StaticModel shared across dedup runs (load ~1s once).
+_MODEL2VEC_MODEL = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -431,7 +434,34 @@ class SourceDeduper:
 
     @staticmethod
     def _default_embed_fn(texts: list[str]) -> list[list[float]]:
-        """Default embedding backend: NVIDIA nemotron-embed-vl-1b-v2.
+        """Default embedding backend: NVIDIA when a key is set, else local model2vec."""
+        if not os.environ.get("NVIDIA_API_KEY", ""):
+            return SourceDeduper._model2vec_embed_fn(texts)
+        return SourceDeduper._nvidia_embed_fn(texts)
+
+    @staticmethod
+    def _model2vec_embed_fn(texts: list[str]) -> list[list[float]]:
+        """Local CPU embeddings via model2vec static vectors (~30MB, numpy-only).
+
+        Static embeddings are weak on negation/polysemy, which is fine here:
+        dedup only needs near-duplicate detection, not fine-grained retrieval.
+        """
+        global _MODEL2VEC_MODEL
+        try:
+            from model2vec import StaticModel
+        except ImportError as e:
+            raise RuntimeError(
+                "model2vec is required for local semantic source dedup; "
+                "either install it, set NVIDIA_API_KEY, or set AIQ_SOURCE_DEDUP_EMBED=false."
+            ) from e
+        if _MODEL2VEC_MODEL is None:
+            model_name = os.environ.get("AIQ_SOURCE_DEDUP_LOCAL_MODEL", "minishlab/potion-base-8M")
+            _MODEL2VEC_MODEL = StaticModel.from_pretrained(model_name)
+        return [vector.tolist() for vector in _MODEL2VEC_MODEL.encode(texts)]
+
+    @staticmethod
+    def _nvidia_embed_fn(texts: list[str]) -> list[list[float]]:
+        """NVIDIA-hosted embedding backend: nemotron-embed-vl-1b-v2.
 
         Imported lazily so test environments without ``llama_index`` or
         without ``NVIDIA_API_KEY`` set can still import the module.
