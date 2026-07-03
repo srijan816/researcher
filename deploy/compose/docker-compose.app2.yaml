@@ -41,9 +41,10 @@ services:
       # (potion-base-8M, CPU-only; NVIDIA embed used only if a key is set).
       - AIQ_SOURCE_DEDUP=${AIQ_SOURCE_DEDUP:-1}
       - AIQ_SOURCE_DEDUP_EMBED=${AIQ_SOURCE_DEDUP_EMBED:-1}
-      # Wave 4 — CPU ONNX cross-encoder rerank of merged discovery results
-      # (FlashRank ms-marco-MiniLM-L-12-v2). Model cached on the data volume.
-      - AIQ_RERANK_BACKEND=${AIQ_RERANK_BACKEND:-flashrank}
+      # Wave 4 — rerank of merged discovery results. Empty = auto-resolve:
+      # NVIDIA hosted llama-nemotron-rerank-1b-v2 when NVIDIA_API_KEY is set
+      # (with flashrank ONNX fallback on failure), else flashrank locally.
+      - AIQ_RERANK_BACKEND=${AIQ_RERANK_BACKEND:-}
       - AIQ_RERANK_CACHE_DIR=${AIQ_RERANK_CACHE_DIR:-/app/data/flashrank}
       # Persist HuggingFace downloads (model2vec potion-base-8M) across recreates.
       - HF_HOME=${HF_HOME:-/app/data/hf}
