@@ -98,7 +98,17 @@ async def rerank_results(query: str, results: Sequence[dict], timeout: float | N
     passages = [build_passage(result) for result in results]
     try:
         if backend == "nvidia":
-            scores = await asyncio.wait_for(_rerank_nvidia(query, passages, timeout), timeout=timeout + 2.0)
+            try:
+                scores = await asyncio.wait_for(_rerank_nvidia(query, passages, timeout), timeout=timeout + 2.0)
+            except Exception as exc:
+                # Hosted rerank is rate-limited (free tier); degrade to the
+                # local ONNX reranker rather than losing reranking entirely.
+                _warn_once(
+                    "rerank-nvidia-fallback",
+                    "NVIDIA rerank failed (%s); falling back to local flashrank.",
+                    exc,
+                )
+                scores = await asyncio.wait_for(_rerank_flashrank(query, passages), timeout=max(timeout, 120.0))
         elif backend == "flashrank":
             # First call downloads the ONNX model (~35MB) and loads it; allow
             # extra headroom for that, warm calls finish in well under 8s.

@@ -437,7 +437,11 @@ class SourceDeduper:
         """Default embedding backend: NVIDIA when a key is set, else local model2vec."""
         if not os.environ.get("NVIDIA_API_KEY", ""):
             return SourceDeduper._model2vec_embed_fn(texts)
-        return SourceDeduper._nvidia_embed_fn(texts)
+        try:
+            return SourceDeduper._nvidia_embed_fn(texts)
+        except Exception:
+            logger.warning("NVIDIA embed failed; falling back to local model2vec for dedup.")
+            return SourceDeduper._model2vec_embed_fn(texts)
 
     @staticmethod
     def _model2vec_embed_fn(texts: list[str]) -> list[list[float]]:
