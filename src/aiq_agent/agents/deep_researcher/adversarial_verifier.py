@@ -56,6 +56,11 @@ _MAX_EVIDENCE_CHARS = 1400
 _MAX_CLAIM_CHARS = 600
 _MAX_NOTE_CHARS = 320
 
+_DEFAULT_NLI_SUPPORT_THRESHOLD = 0.90
+# Evidence snippets are stored as "[<source_url>] <extract>"; the URL prefix is
+# provenance metadata, not premise text, so strip it before NLI scoring.
+_EVIDENCE_URL_PREFIX_RE = re.compile(r"^\[[^\]\s]*\]\s*")
+
 _FALSEY = {"0", "false", "no", "off"}
 
 
@@ -87,6 +92,19 @@ def verifier_concurrency() -> int:
 def verifier_timeout_seconds() -> float:
     """Per-claim LLM call timeout: AIQ_VERIFIER_TIMEOUT_SECONDS (default 45)."""
     return float(_env_int("AIQ_VERIFIER_TIMEOUT_SECONDS", 45, minimum=5, maximum=600))
+
+
+def nli_support_threshold() -> float:
+    """Entailment probability that auto-supports a claim without an LLM call:
+    AIQ_NLI_SUPPORT_THRESHOLD (default 0.90). Clamped to [0.5, 1.0] so the
+    shortcut can never fire below coin-flip confidence."""
+    raw = os.getenv("AIQ_NLI_SUPPORT_THRESHOLD")
+    if raw is None or not raw.strip():
+        return _DEFAULT_NLI_SUPPORT_THRESHOLD
+    try:
+        return max(0.5, min(1.0, float(raw.strip())))
+    except (TypeError, ValueError):
+        return _DEFAULT_NLI_SUPPORT_THRESHOLD
 
 
 @dataclass
@@ -240,6 +258,71 @@ def select_high_risk_claims(
 
     selected.sort(key=lambda claim: (-claim.risk_score, claim.claim_id))
     return selected[: max(0, cap)]
+
+
+def nli_prefilter_claims(claims: list[SelectedClaim]) -> tuple[list[dict[str, Any]], list[SelectedClaim]]:
+    """Split claims into NLI-resolved verdicts and claims still needing the LLM.
+
+    Wave 5 verification cascade: a local ONNX NLI cross-encoder scores each
+    claim (hypothesis) against each of its evidence extracts (premise). When
+    the max entailment probability clears AIQ_NLI_SUPPORT_THRESHOLD the claim
+    is marked "supported" without an LLM call (``verifier_method: "nli"`` makes
+    this auditable in the verification report). Everything else — including
+    NLI contradictions, which are unreliable on paraphrase — goes to the LLM
+    verifier unchanged. Fail-open: any error routes all claims to the LLM.
+    """
+    if not claims:
+        return [], []
+    try:
+        from aiq_agent.common.nli_filter import nli_enabled
+        from aiq_agent.common.nli_filter import score_entailment_batch
+
+        if not nli_enabled():
+            return [], list(claims)
+
+        pairs: list[tuple[str, str]] = []
+        owners: list[int] = []
+        for index, claim in enumerate(claims):
+            for snippet in claim.evidence:
+                premise = _EVIDENCE_URL_PREFIX_RE.sub("", str(snippet or ""), count=1).strip()
+                if premise:
+                    pairs.append((premise, claim.claim_text))
+                    owners.append(index)
+        if not pairs:
+            return [], list(claims)
+
+        scores = score_entailment_batch(pairs)
+        max_entailment: dict[int, float] = {}
+        for owner, score in zip(owners, scores, strict=True):
+            if score is None:
+                continue
+            entailment = float(score.get("entailment", 0.0))
+            if entailment > max_entailment.get(owner, -1.0):
+                max_entailment[owner] = entailment
+
+        threshold = nli_support_threshold()
+        resolved: list[dict[str, Any]] = []
+        remaining: list[SelectedClaim] = []
+        for index, claim in enumerate(claims):
+            entailment = max_entailment.get(index)
+            if entailment is not None and entailment >= threshold:
+                resolved.append(
+                    {
+                        "claim_id": claim.claim_id,
+                        "claim_text": claim.claim_text,
+                        "claim_type": claim.claim_type,
+                        "verdict": "supported",
+                        "confidence": round(entailment, 4),
+                        "note": "nli_entailment",
+                        "verifier_method": "nli",
+                    }
+                )
+            else:
+                remaining.append(claim)
+        return resolved, remaining
+    except Exception:  # noqa: BLE001 - fail-open: LLM path handles everything
+        logger.debug("NLI prefilter failed; sending all claims to the LLM verifier", exc_info=True)
+        return [], list(claims)
 
 
 def _verdict_prompt(claim: SelectedClaim) -> str:
@@ -431,22 +514,27 @@ def build_verification_report(verdicts: list[dict[str, Any]], *, tier: str | Non
     for verdict in verdicts:
         key = str(verdict.get("verdict") or "not_addressed")
         summary[key] = summary.get(key, 0) + 1
+    claims_payload: list[dict[str, Any]] = []
+    for verdict in verdicts:
+        entry = {
+            "claim_id": verdict.get("claim_id"),
+            "claim_text": verdict.get("claim_text"),
+            "claim_type": verdict.get("claim_type"),
+            "verdict": verdict.get("verdict"),
+            "confidence": verdict.get("confidence"),
+            "note": verdict.get("note"),
+        }
+        # Only NLI-resolved verdicts carry the method marker; LLM verdicts keep
+        # the pre-cascade payload byte-for-byte.
+        if verdict.get("verifier_method"):
+            entry["verifier_method"] = verdict.get("verifier_method")
+        claims_payload.append(entry)
     return {
         "schema_version": "1.0",
         "generated_at": datetime.now(UTC).isoformat(),
         "tier": tier,
         "summary": summary,
-        "claims": [
-            {
-                "claim_id": verdict.get("claim_id"),
-                "claim_text": verdict.get("claim_text"),
-                "claim_type": verdict.get("claim_type"),
-                "verdict": verdict.get("verdict"),
-                "confidence": verdict.get("confidence"),
-                "note": verdict.get("note"),
-            }
-            for verdict in verdicts
-        ],
+        "claims": claims_payload,
     }
 
 
@@ -490,11 +578,29 @@ async def run_adversarial_verification(
         logger.debug("Adversarial verifier skipped: no evidence extracts available")
         return None
 
-    try:
-        verdicts = await verify_claims(llm, claims, concurrency=concurrency, timeout=timeout)
-    except Exception:  # noqa: BLE001 - fail-open by design
-        logger.warning("Adversarial verifier pass failed", exc_info=True)
-        return None
+    # NLI pre-filter cascade: settle clearly-entailed claims locally before
+    # spending LLM calls. Runs in a worker thread because ONNX inference is
+    # blocking CPU work and must not stall the event loop.
+    nli_verdicts, llm_claims = await asyncio.to_thread(nli_prefilter_claims, claims)
+    logger.info(
+        "Adversarial verifier NLI prefilter: %d/%d claim(s) resolved by NLI, %d sent to LLM",
+        len(nli_verdicts),
+        len(claims),
+        len(llm_claims),
+    )
+
+    llm_verdicts: list[dict[str, Any]] = []
+    if llm_claims:
+        try:
+            llm_verdicts = await verify_claims(llm, llm_claims, concurrency=concurrency, timeout=timeout)
+        except Exception:  # noqa: BLE001 - fail-open by design
+            logger.warning("Adversarial verifier pass failed", exc_info=True)
+            return None
+
+    # Merge back in original selection order so the report reads the same
+    # regardless of which path resolved each claim.
+    verdicts_by_id = {str(v.get("claim_id")): v for v in [*nli_verdicts, *llm_verdicts]}
+    verdicts = [verdicts_by_id[claim.claim_id] for claim in claims if claim.claim_id in verdicts_by_id]
 
     report = build_verification_report(verdicts, tier=tier)
     updated_claim_table = apply_verdicts_to_claim_table(claim_table_content, verdicts)

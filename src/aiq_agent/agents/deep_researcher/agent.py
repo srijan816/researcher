@@ -58,6 +58,9 @@ from aiq_agent.common.report_fact_audit import fact_audit_note
 from aiq_agent.common.research_artifacts import build_virtual_research_artifacts
 from aiq_agent.common.research_artifacts import mirror_run_artifacts
 from aiq_agent.common.source_quality_gates import evaluate_source_quality as evaluate_url_source_quality
+from aiq_agent.common.url_audit import annotate_dead_references
+from aiq_agent.common.url_audit import audit_reference_urls
+from aiq_agent.common.url_audit import extract_reference_urls
 
 from .adversarial_verifier import VERIFICATION_REPORT_PATH
 from .adversarial_verifier import run_adversarial_verification
@@ -3741,6 +3744,22 @@ class DeepResearcherAgent:
                         "Deep researcher produced no valid citations after verification; "
                         "returning sanitized report without fabricating references."
                     )
+                # Post-step: liveness-audit the cited reference URLs and
+                # annotate dead links in place. Never removes or renumbers
+                # citations; fully fail-open so it cannot break finalization.
+                try:
+                    reference_urls = extract_reference_urls(final_message)
+                    if reference_urls:
+                        liveness = await audit_reference_urls(reference_urls)
+                        final_message, annotated_count = annotate_dead_references(final_message, liveness)
+                        if annotated_count:
+                            logger.info(
+                                "Cited-URL liveness audit annotated %d dead reference(s) out of %d URL(s)",
+                                annotated_count,
+                                len(liveness),
+                            )
+                except Exception:  # noqa: BLE001 - audit must never break the report
+                    logger.debug("Cited-URL liveness audit failed (fail-open)", exc_info=True)
             else:
                 from aiq_agent.common.tool_validation import validate_tool_availability
 
