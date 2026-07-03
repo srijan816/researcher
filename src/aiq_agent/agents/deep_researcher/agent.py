@@ -71,6 +71,7 @@ from .custom_middleware import ReportEditCircuitBreakerMiddleware
 from .custom_middleware import SearchBudgetExhaustionRepairMiddleware
 from .custom_middleware import SequentialSearchMiddleware
 from .custom_middleware import SourceRegistryMiddleware
+from .custom_middleware import ResearcherTaskTimeoutMiddleware
 from .custom_middleware import TaskBatchLimitMiddleware
 from .custom_middleware import TaskSearchBudgetMiddleware
 from .custom_middleware import ThinkingOnlyRepairMiddleware
@@ -610,6 +611,8 @@ class DeepResearcherAgent:
             ReportEditCircuitBreakerMiddleware(),
             PostWriteReadbackGuardMiddleware(),
             TaskBatchLimitMiddleware(task_tool_name="task", defer_tool_name="defer_task"),
+            # Tail-latency backstop: one hung researcher must not hold a wave.
+            ResearcherTaskTimeoutMiddleware(task_tool_name="task"),
             SequentialSearchMiddleware(
                 search_tool_names={"advanced_web_search_tool", "web_search_tool", "exa_web_search_tool"}
             ),

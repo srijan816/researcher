@@ -20,6 +20,7 @@ import contextvars
 import hashlib
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -1561,6 +1562,51 @@ class SequentialSearchMiddleware(AgentMiddleware):
                 new_result.append(msg)
 
         return ModelResponse(result=new_result, structured_response=response.structured_response)
+
+
+class ResearcherTaskTimeoutMiddleware(AgentMiddleware):
+    """Wall-clock backstop for researcher `task` calls (tail-latency control).
+
+    The parallel research phase waits for its *slowest* researcher, so one
+    stuck subagent (hung fetch, provider stall) holds the whole wave. This
+    middleware bounds each `task` tool call; on timeout it returns a normal
+    ToolMessage telling the orchestrator to continue with what was gathered.
+    Sources the researcher captured before the timeout stay in the session
+    SourceRegistry, so partial evidence is not lost.
+    """
+
+    def __init__(self, *, task_tool_name: str = "task", timeout_seconds: float | None = None) -> None:
+        self.task_tool_name = task_tool_name
+        if timeout_seconds is None:
+            try:
+                timeout_seconds = float(os.environ.get("AIQ_RESEARCHER_TASK_TIMEOUT_SECONDS", "900"))
+            except ValueError:
+                timeout_seconds = 900.0
+        self.timeout_seconds = max(60.0, timeout_seconds)
+
+    async def awrap_tool_call(self, request, handler):
+        tool_name = ""
+        tool_call_id = ""
+        if hasattr(request, "tool_call") and isinstance(request.tool_call, dict):
+            tool_name = request.tool_call.get("name", "")
+            tool_call_id = request.tool_call.get("id", "")
+        if tool_name != self.task_tool_name:
+            return await handler(request)
+        try:
+            return await asyncio.wait_for(handler(request), timeout=self.timeout_seconds)
+        except TimeoutError:
+            logger.warning(
+                "[ResearcherTaskTimeout] researcher task exceeded %.0fs wall-clock budget; returning partial",
+                self.timeout_seconds,
+            )
+            return ToolMessage(
+                content=(
+                    f"RESEARCHER TASK TIMED OUT after {int(self.timeout_seconds)}s. "
+                    "Evidence captured before the timeout is already registered and usable. "
+                    "Do NOT relaunch this same task; continue with the next planned task or synthesis."
+                ),
+                tool_call_id=tool_call_id or "timeout",
+            )
 
 
 class TaskBatchLimitMiddleware(AgentMiddleware):
