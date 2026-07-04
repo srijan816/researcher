@@ -6,9 +6,9 @@
  *
  * Renders the official GenAlphAI logo artwork (public/brand/):
  * - 'horizontal': logo-dark.png — the real "Gen α i" logo (white text,
- *   rose α with circuit detail and glow) on a transparent background,
- *   produced from the brand upload with the α recolored to the rose accent.
- * - 'logo-only': alpha-mark.png — just the rose α glyph, square-cropped.
+ *   violet α with circuit detail and glow) on a transparent background,
+ *   produced from the brand upload with the α recolored to the violet accent.
+ * - 'logo-only': alpha-mark.png — just the violet α glyph, square-cropped.
  *
  * These are raster brand assets and intentionally do not theme with
  * currentColor; they are made for dark surfaces.

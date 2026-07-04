@@ -19,61 +19,63 @@
 
    The KUI theme variables are defined inside @layer base in kui-generated.css.
    These unlayered declarations map every interactive token to the GenAlphAI
-   accent rose and the editorial dark-neutral surface set.
+   accent violet and the editorial dark-neutral surface set.
 
    Surfaces: base #0F1112 / raised #17191C / sunken #0A0B0C / hover #1D2024
    Borders:  #26282E primary, #33363E hover
    Text:     #F3EFE6 strong / #C9CCD1 body / #8B8F98 muted / #5C616B faint
-   Accent:   #F43F5E primary, #FB7185 hover-light, #BE123C pressed
+   Accent:   #8B5CF6 primary, #A78BFA hover-light, #6D28D9 pressed
    ============================================================================= */
 
 :root {
-  --color-brand: #F43F5E;
-  --color-brand-secondary: #FB7185;
-  --color-green-025: #fff7f7;
-  --color-green-050: #fff1f2;
-  --color-green-100: #ffe4e6;
-  --color-green-200: #FB7185;
-  --color-green-300: #F43F5E;
-  --color-green-400: #e11d48;
-  --color-green-500: #BE123C;
-  --color-green-600: #9f1239;
-  --color-green-700: #881337;
-  --color-green-800: #63102b;
-  --color-green-900: #450a1e;
-  --color-green-950: #26040f;
-  --gx-glow: rgba(244, 63, 94, 0.16);
+  --color-brand: #8B5CF6;
+  --color-brand-secondary: #A78BFA;
+  --color-green-025: #fbfaff;
+  --color-green-050: #f5f3ff;
+  --color-green-100: #ede9fe;
+  --color-green-200: #A78BFA;
+  --color-green-300: #8B5CF6;
+  --color-green-400: #7C3AED;
+  --color-green-500: #6D28D9;
+  --color-green-600: #5B21B6;
+  --color-green-700: #4C1D95;
+  --color-green-800: #2E1065;
+  --color-green-900: #1F0A4D;
+  --color-green-950: #12062E;
+  --gx-glow: rgba(139, 92, 246, 0.18);
   --gx-warm: #E8E3D8;
+  /* Rose is reserved for error/destructive elements only */
+  --color-danger: #F43F5E;
 }
 
 /* Light theme brand tokens — per KUI spec */
 :where(:root, .nv-light) {
-  --background-color-interaction-primary-base: #F43F5E;
-  --background-color-interaction-primary-hover: #FB7185;
-  --background-color-interaction-primary-selected: #BE123C;
-  --border-color-interaction-primary-base: #F43F5E;
+  --background-color-interaction-primary-base: #8B5CF6;
+  --background-color-interaction-primary-hover: #A78BFA;
+  --background-color-interaction-primary-selected: #6D28D9;
+  --border-color-interaction-primary-base: #8B5CF6;
   --text-color-brand: var(--color-brand);
   --border-color-brand: var(--color-brand);
-  /* KUI brand buttons label with --text-color-accent-black; on the rose fill
+  /* KUI brand buttons label with --text-color-accent-black; on the violet fill
      the label reads as warm white. Token is only consumed by brand-filled
      controls, so the override is safe globally. */
-  --text-color-accent-black: #FFF7F7;
+  --text-color-accent-black: #F7F5FF;
 }
 
 /* Dark theme brand tokens — per KUI spec (same primary stops as light) */
 .nv-dark {
-  --background-color-interaction-primary-base: #F43F5E;
-  --background-color-interaction-primary-hover: #FB7185;
-  --background-color-interaction-primary-selected: #BE123C;
-  --border-color-interaction-primary-base: #F43F5E;
+  --background-color-interaction-primary-base: #8B5CF6;
+  --background-color-interaction-primary-hover: #A78BFA;
+  --background-color-interaction-primary-selected: #6D28D9;
+  --border-color-interaction-primary-base: #8B5CF6;
   --text-color-brand: var(--color-brand);
   --border-color-brand: var(--color-brand);
-  --text-color-accent-black: #FFF7F7;
+  --text-color-accent-black: #F7F5FF;
 }
 
 /* Brand selection color */
 ::selection {
-  background: rgba(244, 63, 94, 0.25);
+  background: rgba(139, 92, 246, 0.28);
 }
 
 /* =============================================================================
@@ -94,8 +96,8 @@
   --text-color-secondary: #C9CCD1;
   --text-color-subtle: #8B8F98;
   --border-color-base: #26282E;
-  --border-color-brand: #F43F5E;
-  --text-color-brand: #F43F5E;
+  --border-color-brand: #8B5CF6;
+  --text-color-brand: #8B5CF6;
 }
 
 /* Contextual strip shown above an active session */
@@ -125,8 +127,8 @@
 
 .gx-rail-button[aria-pressed='true'],
 .gx-rail-button.gx-rail-button--active {
-  color: #F43F5E;
-  background: rgba(244, 63, 94, 0.1);
+  color: #8B5CF6;
+  background: rgba(139, 92, 246, 0.1);
 }
 
 .gx-rail-logo {
@@ -135,7 +137,7 @@
 
 .gx-rail-logo:hover,
 .gx-rail-logo:focus-visible {
-  color: #F43F5E;
+  color: #8B5CF6;
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -181,7 +183,7 @@
 
 .deep-home-search:focus-within,
 .gx-composer:focus-within {
-  border-color: rgba(244, 63, 94, 0.65);
+  border-color: rgba(139, 92, 246, 0.65);
   box-shadow:
     0 8px 32px rgba(0, 0, 0, 0.35),
     0 0 0 3px var(--gx-glow);
@@ -215,7 +217,7 @@
 
 .gx-chip:hover,
 .gx-chip:focus-visible {
-  border-color: #F43F5E;
+  border-color: #8B5CF6;
   color: #C9CCD1;
 }
 
@@ -257,15 +259,15 @@
 }
 
 .gx-status-pill--live {
-  border-color: rgba(244, 63, 94, 0.5);
-  color: #FB7185;
+  border-color: rgba(139, 92, 246, 0.5);
+  color: #A78BFA;
 }
 
 .gx-status-dot {
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: #F43F5E;
+  background: #8B5CF6;
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -275,8 +277,8 @@
 }
 
 @keyframes gx-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.4); }
-  50% { opacity: 0.55; box-shadow: 0 0 0 4px rgba(244, 63, 94, 0); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.4); }
+  50% { opacity: 0.55; box-shadow: 0 0 0 4px rgba(139, 92, 246, 0); }
 }
 
 /* Activity timeline (research panel) */
@@ -307,12 +309,12 @@
 }
 
 .gx-timeline-dot--done {
-  background: #F43F5E;
-  border-color: #F43F5E;
+  background: #8B5CF6;
+  border-color: #8B5CF6;
 }
 
 .gx-timeline-dot--active {
-  border-color: #F43F5E;
+  border-color: #8B5CF6;
   background: #0F1112;
 }
 
@@ -546,17 +548,17 @@ body {
 
 /* Force the app accent on inlined SVG icons whose paths use fill="currentColor" */
 .nv-icon-green {
-  color: #F43F5E !important;
+  color: #8B5CF6 !important;
 }
 
 /* =============================================================================
    GenAlphAI Research polish utilities
-   Restrained rose accents; all motion gated behind prefers-reduced-motion.
+   Restrained violet accents; all motion gated behind prefers-reduced-motion.
    ============================================================================= */
 
-/* Link underline bloom — rose, grows from left on hover/focus */
+/* Link underline bloom — violet, grows from left on hover/focus */
 .ar-underline {
-  background-image: linear-gradient(90deg, #F43F5E, #F43F5E);
+  background-image: linear-gradient(90deg, #8B5CF6, #8B5CF6);
   background-repeat: no-repeat;
   background-position: 0 100%;
   background-size: 0% 1.5px;
@@ -568,10 +570,10 @@ body {
   background-size: 100% 1.5px;
 }
 
-/* Card lift hover with soft rose glow */
+/* Card lift hover with soft violet glow */
 .ar-card-lift:hover {
   transform: translateY(-3px);
-  box-shadow: 0 24px 60px -30px rgba(244, 63, 94, 0.2);
+  box-shadow: 0 24px 60px -30px rgba(139, 92, 246, 0.2);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -590,9 +592,9 @@ body {
   }
 }
 
-/* Signature warm→rose gradient text */
+/* Signature warm→violet gradient text */
 .ar-gradient-text {
-  background: linear-gradient(90deg, #E8E3D8, #F43F5E);
+  background: linear-gradient(90deg, #E8E3D8, #8B5CF6);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -602,7 +604,7 @@ body {
 .ar-gradient-bar {
   height: 2px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #F43F5E, #BE123C);
+  background: linear-gradient(90deg, #8B5CF6, #6D28D9);
 }
 
 /* Constrain spinner SVG inside the research panel toggle tab */
@@ -631,7 +633,7 @@ body {
 
 
 /* =============================================================================
-   Minimal progress indicators — rose dot-pulse / three-dot bounce.
+   Minimal progress indicators — violet dot-pulse / three-dot bounce.
    Replaces spinner/triangle indicators during research progress.
    ============================================================================= */
 .gx-dots {
@@ -644,7 +646,7 @@ body {
   width: 5px;
   height: 5px;
   border-radius: 999px;
-  background: #F43F5E;
+  background: #8B5CF6;
   opacity: 0.55;
 }
 
@@ -706,7 +708,7 @@ body {
     --text-color-base: #111111;
     --text-color-secondary: #333333;
     --text-color-subtle: #444444;
-    --text-color-brand: #9f1239;
+    --text-color-brand: #6D28D9;
     --background-color-surface-raised: #f4f4f4;
     --background-color-surface-sunken: #ffffff;
     --border-color-base: #cccccc;
@@ -714,7 +716,7 @@ body {
   }
 
   body.report-printing .report-print-area a {
-    color: #9f1239;
+    color: #6D28D9;
     text-decoration: underline;
   }
 
@@ -723,6 +725,6 @@ body {
     border: none;
     background: transparent;
     padding: 0;
-    color: #9f1239;
+    color: #6D28D9;
   }
 }

@@ -13,7 +13,7 @@ const DEFAULT_MAX_RADIUS = 50
 const DEFAULT_PARTICLE_SIZE = 2.0
 const DEFAULT_ROTATION_SPEED = 0.001
 const DEFAULT_SEED = 12345
-const DEFAULT_PARTICLE_COLOR = '244, 63, 94'
+const DEFAULT_PARTICLE_COLOR = '139, 92, 246'
 /** Secondary faint off-white used for ~25% of particles */
 const SECONDARY_PARTICLE_COLOR = '243, 239, 230'
 /** Every Nth particle renders in the secondary color */

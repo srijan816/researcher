@@ -9,7 +9,7 @@
  * its pixel alpha builds an allowed-position mask, and a small set of
  * particles drift and twinkle only inside that mask.
  *
- * - Rose + off-white particles, varied opacity, subtle by design.
+ * - Violet + off-white particles, varied opacity, subtle by design.
  * - requestAnimationFrame with capped DPR for performance.
  * - prefers-reduced-motion: renders a single static faint α made of dots.
  */
@@ -21,7 +21,7 @@ import { useReducedMotion } from '@/hooks/use-reduced-motion'
 
 const PARTICLE_COUNT = 200
 const MAX_DPR = 2
-const ROSE = '244, 63, 94'
+const VIOLET = '139, 92, 246'
 const OFF_WHITE = '243, 239, 230'
 /** Fraction of particles rendered in the off-white secondary color */
 const OFF_WHITE_RATIO = 0.3
@@ -122,7 +122,7 @@ export const AlphaParticles: FC<AlphaParticlesProps> = ({ className }) => {
       ctx.clearRect(0, 0, width, height)
       for (const p of particles) {
         ctx.globalAlpha = p.baseOpacity * GLOBAL_OPACITY * 0.8
-        ctx.fillStyle = p.isOffWhite ? `rgb(${OFF_WHITE})` : `rgb(${ROSE})`
+        ctx.fillStyle = p.isOffWhite ? `rgb(${OFF_WHITE})` : `rgb(${VIOLET})`
         ctx.beginPath()
         ctx.arc(p.homeX, p.homeY, p.size, 0, Math.PI * 2)
         ctx.fill()
@@ -150,7 +150,7 @@ export const AlphaParticles: FC<AlphaParticlesProps> = ({ className }) => {
         // Twinkle
         const twinkle = 0.6 + 0.4 * Math.sin(t * p.speed * 2 + p.phase)
         ctx.globalAlpha = p.baseOpacity * twinkle * GLOBAL_OPACITY
-        ctx.fillStyle = p.isOffWhite ? `rgb(${OFF_WHITE})` : `rgb(${ROSE})`
+        ctx.fillStyle = p.isOffWhite ? `rgb(${OFF_WHITE})` : `rgb(${VIOLET})`
         ctx.beginPath()
         ctx.arc(x, y, p.size, 0, Math.PI * 2)
         ctx.fill()

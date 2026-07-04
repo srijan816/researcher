@@ -19,7 +19,7 @@
 import { type FC, memo, useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import { Flex, Text, Button, Logo } from '@/adapters/ui'
 import { Document, Lock } from '@/adapters/ui/icons'
-import { AlphaParticles } from '@/shared/components/AlphaParticles'
+import { AnimatedWordmark } from '@/shared/components/AnimatedWordmark'
 import { useLayoutStore } from '../store'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore, AgentPrompt, AgentResponse, ErrorBanner, FileUploadBanner, DeepResearchBanner, UserMessage, ChatThinking } from '@/features/chat'
@@ -423,17 +423,16 @@ const WelcomeState: FC<WelcomeStateProps> = ({
           homeExperience ? 'max-w-3xl' : 'max-w-2xl'
         }`}
       >
-        <span className="text-[#F3EFE6]" aria-hidden="true">
-          <Logo kind="horizontal" size="small" />
-        </span>
-        {homeExperience && (
-          <div className="pointer-events-none h-24 w-24 sm:h-28 sm:w-28" aria-hidden="true">
-            <AlphaParticles className="h-full w-full" />
-          </div>
+        {homeExperience ? (
+          <AnimatedWordmark className="mx-auto mb-2 w-[min(620px,72vw)]" />
+        ) : (
+          <span className="text-[#F3EFE6]" aria-hidden="true">
+            <Logo kind="horizontal" size="small" />
+          </span>
         )}
         <Text
-          kind="title/lg"
-          className={homeExperience ? 'deep-home-heading text-primary' : 'text-primary'}
+          kind={homeExperience ? 'title/md' : 'title/lg'}
+          className="text-primary"
         >
           Research anything.
         </Text>

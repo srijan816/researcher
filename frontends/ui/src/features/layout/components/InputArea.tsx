@@ -556,7 +556,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                     disabled={disabled || isResearchSessionInProgress}
                     className={`h-7 min-w-0 rounded-full px-2.5 text-xs font-medium leading-none transition-colors ${
                       selected
-                        ? 'bg-[rgba(244,63,94,0.16)] text-[#FB7185]'
+                        ? 'bg-[rgba(139,92,246,0.16)] text-[#A78BFA]'
                         : 'text-subtle hover:bg-surface-raised hover:text-primary'
                     } disabled:cursor-not-allowed disabled:opacity-60`}
                     aria-label={`Research depth: ${option.label}`}
@@ -576,7 +576,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
               disabled={disabled || isResearchSessionInProgress}
               className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium leading-none transition-colors ${
                 includeImages
-                  ? 'border-[#F43F5E] bg-[rgba(244,63,94,0.16)] text-[#FB7185]'
+                  ? 'border-[#8B5CF6] bg-[rgba(139,92,246,0.16)] text-[#A78BFA]'
                   : 'border-base text-subtle hover:bg-surface-raised hover:text-primary'
               } disabled:cursor-not-allowed disabled:opacity-60`}
               aria-label="Toggle generated images"
