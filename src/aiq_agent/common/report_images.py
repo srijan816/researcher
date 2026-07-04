@@ -36,6 +36,13 @@ IMAGE_STAGE_BUDGET_SECONDS = 60.0
 
 _MINIMAX_IMAGE_URL = "https://api.minimax.io/v1/image_generation"
 _MINIMAX_IMAGE_MODEL = "image-01"
+_XAI_IMAGE_URL = "https://api.x.ai/v1/images/generations"
+_XAI_IMAGE_MODEL = "grok-2-image"
+_MINIMAX_ANTHROPIC_MESSAGES_URL = "https://api.minimax.io/anthropic/v1/messages"
+_PLANNING_MODEL = "MiniMax-M2.7-highspeed"
+_PLANNING_MAX_TOKENS = 1024
+_PLANNING_TIMEOUT_SECONDS = 45.0
+BACKFILL_BUDGET_SECONDS = 90.0
 _IMAGE_REQUEST_TIMEOUT_SECONDS = 45.0
 _DOWNLOAD_TIMEOUT_SECONDS = 30.0
 _SECTION_SNIPPET_CHARS = 200
@@ -66,6 +73,14 @@ Respond with ONLY a JSON array (no prose, no code fences) of objects:
 REPORT OUTLINE:
 {outline}
 """
+
+
+class ReportImagesError(RuntimeError):
+    """Raised by the non-fail-open backfill path when image work cannot proceed."""
+
+
+class ReportImagesTimeoutError(ReportImagesError):
+    """Raised when the backfill image stage exceeds its time budget."""
 
 
 @dataclass(frozen=True)
@@ -202,8 +217,8 @@ async def _run_image_stage(
     api_key: str | None,
     image_url_prefix: str,
 ) -> tuple[str, int]:
-    if llm is None or not api_key:
-        logger.warning("Report image stage skipped: missing %s", "LLM" if llm is None else "MINIMAX_API_KEY")
+    if llm is None or not (api_key or os.environ.get("XAI_API_KEY")):
+        logger.warning("Report image stage skipped: missing %s", "LLM" if llm is None else "image API key")
         return report, 0
 
     from langchain_core.messages import HumanMessage
@@ -215,13 +230,34 @@ async def _run_image_stage(
         logger.info("Report image stage: planner chose no image opportunities")
         return report, 0
 
+    images = await _generate_and_save_images(
+        specs, job_id=job_id, image_url_prefix=image_url_prefix, minimax_api_key=api_key
+    )
+    updated, inserted = insert_report_images(report, images)
+    if inserted:
+        logger.info("Report image stage inserted %d generated image(s) for job %s", inserted, job_id)
+    return updated, inserted
+
+
+async def _generate_and_save_images(
+    specs: list[ReportImageSpec],
+    *,
+    job_id: str,
+    image_url_prefix: str,
+    minimax_api_key: str | None,
+) -> list[tuple[ReportImageSpec, str]]:
+    """Generate each spec's image via the resolved provider, save to disk, return (spec, url) pairs.
+
+    Per-image failures are logged and skipped so one bad generation never
+    voids the rest; callers decide whether zero successes is an error.
+    """
     target_dir = report_images_dir(job_id)
     target_dir.mkdir(parents=True, exist_ok=True)
     images: list[tuple[ReportImageSpec, str]] = []
     async with httpx.AsyncClient(timeout=_IMAGE_REQUEST_TIMEOUT_SECONDS, follow_redirects=True) as client:
         for index, spec in enumerate(specs, start=1):
             try:
-                image_bytes = await _generate_minimax_image(client, spec.prompt, api_key)
+                image_bytes = await _generate_image(client, spec.prompt, minimax_api_key=minimax_api_key)
             except Exception:  # noqa: BLE001 - skip this image, keep the rest
                 logger.warning("Report image %d generation failed; skipping", index, exc_info=True)
                 continue
@@ -230,10 +266,172 @@ async def _run_image_stage(
             filename = f"image-{index}.{_image_extension(image_bytes)}"
             (target_dir / filename).write_bytes(image_bytes)
             images.append((spec, f"{image_url_prefix.rstrip('/')}/{filename}"))
+    return images
 
+
+def resolve_image_provider() -> str:
+    """Pick the image provider: AIQ_IMAGE_PROVIDER forces one; else xAI when XAI_API_KEY is set, else MiniMax."""
+    forced = os.environ.get("AIQ_IMAGE_PROVIDER", "").strip().lower()
+    if forced in {"minimax", "xai"}:
+        return forced
+    return "xai" if os.environ.get("XAI_API_KEY") else "minimax"
+
+
+async def _generate_image(
+    client: httpx.AsyncClient, prompt: str, *, minimax_api_key: str | None
+) -> bytes | None:
+    """Provider-dispatching image generation.
+
+    - provider "xai" (forced): xAI only; errors propagate.
+    - provider "xai" (auto, key present): try xAI, fall back to MiniMax on any error.
+    - provider "minimax": MiniMax only (original behavior).
+    """
+    provider = resolve_image_provider()
+    xai_key = os.environ.get("XAI_API_KEY")
+    forced = os.environ.get("AIQ_IMAGE_PROVIDER", "").strip().lower() in {"minimax", "xai"}
+
+    if provider == "xai":
+        if not xai_key:
+            raise ReportImagesError("AIQ_IMAGE_PROVIDER=xai but XAI_API_KEY is not set")
+        if forced:
+            return await _generate_xai_image(client, prompt, xai_key)
+        try:
+            return await _generate_xai_image(client, prompt, xai_key)
+        except Exception:  # noqa: BLE001 - auto mode falls back to MiniMax
+            logger.warning("xAI image generation failed; falling back to MiniMax", exc_info=True)
+
+    if not minimax_api_key:
+        raise ReportImagesError("MINIMAX_API_KEY is not set")
+    return await _generate_minimax_image(client, prompt, minimax_api_key)
+
+
+async def _generate_xai_image(client: httpx.AsyncClient, prompt: str, api_key: str) -> bytes | None:
+    """Generate one image via xAI's OpenAI-compatible image API and return its raw bytes.
+
+    Contract (docs.x.ai): ``POST https://api.x.ai/v1/images/generations`` with
+    ``{"model", "prompt", "n", "response_format"}``; response is OpenAI-shaped:
+    ``{"data": [{"url": ...}]}`` (or ``b64_json`` when requested).
+    """
+    endpoint = os.environ.get("AIQ_XAI_IMAGE_URL", _XAI_IMAGE_URL)
+    response = await client.post(
+        endpoint,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={
+            "model": os.environ.get("AIQ_XAI_IMAGE_MODEL", _XAI_IMAGE_MODEL),
+            "prompt": prompt,
+            "n": 1,
+            "response_format": "url",
+        },
+    )
+    response.raise_for_status()
+    payload = response.json()
+    entries = payload.get("data") or []
+    if not entries or not isinstance(entries[0], dict):
+        raise RuntimeError("xAI image generation returned no image data")
+    first = entries[0]
+    if first.get("b64_json"):
+        import base64
+
+        return base64.b64decode(first["b64_json"])
+    url = first.get("url")
+    if not url:
+        raise RuntimeError("xAI image generation returned neither url nor b64_json")
+    download = await client.get(str(url), timeout=_DOWNLOAD_TIMEOUT_SECONDS)
+    download.raise_for_status()
+    return download.content
+
+
+# ---------------------------------------------------------------------------
+# Backfill path: add images to an already-persisted report (explicit user
+# action; NOT fail-open — errors are raised so the API can report them).
+# ---------------------------------------------------------------------------
+
+_GENERATED_IMAGE_MARKDOWN_RE = re.compile(r"!\[[^\]]*\]\((?:/api|/v1)/jobs/async/job/[^)]*/images/")
+
+
+def report_contains_generated_images(report: str) -> bool:
+    """True when the report already embeds generated job-image markdown (idempotency guard)."""
+    return bool(report) and bool(_GENERATED_IMAGE_MARKDOWN_RE.search(report))
+
+
+async def plan_image_specs_via_minimax(
+    report: str,
+    *,
+    api_key: str,
+    model: str | None = None,
+    timeout_seconds: float = _PLANNING_TIMEOUT_SECONDS,
+) -> list[ReportImageSpec]:
+    """Run the image-planning prompt via a plain httpx call to MiniMax's Anthropic-compatible endpoint.
+
+    Keeps the API layer free of agent LLM internals. Raises ReportImagesError
+    on transport/HTTP errors; parse tolerance matches the agent path.
+    """
+    endpoint = os.environ.get("AIQ_MINIMAX_ANTHROPIC_URL", _MINIMAX_ANTHROPIC_MESSAGES_URL)
+    payload = {
+        "model": os.environ.get("AIQ_IMAGE_PLANNING_MODEL", model or _PLANNING_MODEL),
+        "max_tokens": _PLANNING_MAX_TOKENS,
+        "messages": [{"role": "user", "content": _PLANNING_PROMPT.format(outline=build_image_planning_outline(report))}],
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            response = await client.post(endpoint, headers=headers, json=payload)
+            response.raise_for_status()
+            body = response.json()
+    except httpx.HTTPError as exc:
+        raise ReportImagesError(f"Image planning LLM call failed: {exc}") from exc
+    parts = body.get("content") or []
+    text = "".join(
+        str(part.get("text") or "") for part in parts if isinstance(part, dict) and part.get("type") == "text"
+    )
+    return parse_image_specs(text)
+
+
+async def backfill_report_images(
+    *,
+    report: str,
+    job_id: str,
+    image_url_prefix: str,
+    budget_seconds: float = BACKFILL_BUDGET_SECONDS,
+) -> tuple[str, int]:
+    """Add generated images to an existing report. NOT fail-open: raises ReportImagesError.
+
+    Returns ``(updated report, images inserted)``. ``(report, 0)`` when the
+    planner legitimately picks no opportunities.
+    """
+    minimax_key = os.environ.get("MINIMAX_API_KEY")
+    if not minimax_key:
+        raise ReportImagesError("MINIMAX_API_KEY is not configured on the server")
+    try:
+        return await asyncio.wait_for(
+            _run_backfill(report=report, job_id=job_id, image_url_prefix=image_url_prefix, minimax_key=minimax_key),
+            timeout=budget_seconds,
+        )
+    except asyncio.TimeoutError as exc:
+        raise ReportImagesTimeoutError(
+            f"Image backfill exceeded its {budget_seconds:.0f}s time budget"
+        ) from exc
+
+
+async def _run_backfill(
+    *, report: str, job_id: str, image_url_prefix: str, minimax_key: str
+) -> tuple[str, int]:
+    specs = await plan_image_specs_via_minimax(report, api_key=minimax_key)
+    if not specs:
+        return report, 0
+    images = await _generate_and_save_images(
+        specs, job_id=job_id, image_url_prefix=image_url_prefix, minimax_api_key=minimax_key
+    )
+    if not images:
+        raise ReportImagesError("All image generations failed; report left unchanged")
     updated, inserted = insert_report_images(report, images)
-    if inserted:
-        logger.info("Report image stage inserted %d generated image(s) for job %s", inserted, job_id)
+    if not inserted:
+        raise ReportImagesError("Generated images could not be matched to any report heading")
     return updated, inserted
 
 

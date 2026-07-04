@@ -736,6 +736,27 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         media_type = "image/png" if image_path.suffix.lower() == ".png" else "image/jpeg"
         return FileResponse(image_path, media_type=media_type)
 
+    @app.post(
+        "/v1/jobs/async/job/{job_id}/images/generate",
+        tags=["async jobs"],
+        summary="Backfill generated images into an existing report",
+        description=(
+            "Generate up to three illustrative images for a completed job's final report and "
+            "persist the illustrated report. Idempotent: if the report already embeds generated "
+            "images, no new images are added. Same auth/ownership checks as job status."
+        ),
+        responses={
+            404: {"description": "Job not found"},
+            409: {"description": "Job is not finished or has no usable report text"},
+            500: {"description": "Image planning/generation failed or timed out"},
+        },
+    )
+    async def generate_job_images(job_id: str) -> dict:
+        """Backfill generated illustrations into an existing completed report."""
+        principal = require_verified_principal()
+        job = await authorize_job_access(job_store, db_url, job_id, principal)
+        return await _backfill_job_images(job_store, db_url, job_id, job)
+
     @app.get(
         "/v1/jobs/async/job/{job_id}/report",
         response_model=JobReportResponse,
@@ -1126,6 +1147,51 @@ def _get_final_report_for_job(job, db_url: str, job_id: str) -> str | None:
 
 def _job_has_final_report(job, db_url: str, job_id: str) -> bool:
     return bool(_get_final_report_for_job(job, db_url, job_id))
+
+
+async def _backfill_job_images(job_store, db_url: str, job_id: str, job) -> dict:
+    """Core of POST .../images/generate: validate, generate, persist. Raises HTTPException.
+
+    Persists the illustrated report through the same storage path the original
+    writer used (``job_store.update_status(..., output={"report": ...})``), so
+    the report endpoint and UI immediately serve the updated version.
+    """
+    from aiq_agent.common.report_images import ReportImagesError
+    from aiq_agent.common.report_images import ReportImagesTimeoutError
+    from aiq_agent.common.report_images import backfill_report_images
+    from aiq_agent.common.report_images import report_contains_generated_images
+
+    if not _is_terminal_status(getattr(job, "status", None)):
+        raise HTTPException(409, f"Job is not finished (status: {job.status}); cannot backfill images yet")
+
+    report = _get_final_report_for_job(job, db_url, job_id)
+    if not report:
+        raise HTTPException(409, f"Job has no usable final report text (status: {job.status})")
+
+    if report_contains_generated_images(report):
+        return {"ok": True, "images_added": 0, "already_had_images": True}
+
+    try:
+        updated_report, images_added = await backfill_report_images(
+            report=report,
+            job_id=job_id,
+            image_url_prefix=f"/api/jobs/async/job/{job_id}/images",
+        )
+    except ReportImagesTimeoutError as exc:
+        raise HTTPException(500, f"Image backfill timed out: {exc}")
+    except ReportImagesError as exc:
+        raise HTTPException(500, f"Image backfill failed: {exc}")
+
+    if images_added:
+        output = {**_job_output_dict(job), "report": updated_report}
+        await job_store.update_status(
+            job_id,
+            job.status,
+            error=job.error,
+            output_path=getattr(job, "output_path", None),
+            output=output,
+        )
+    return {"ok": True, "images_added": images_added, "already_had_images": False}
 
 
 def _agent_type_from_events(db_url: str, job_id: str) -> str | None:
