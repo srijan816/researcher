@@ -32,7 +32,7 @@ const MASK_SRC = '/brand/alpha-shape.png'
 const TEXT_OVERLAY_SRC = '/brand/text-overlay.png'
 const STATIC_LOGO_SRC = '/brand/logo-dark.png'
 
-const PARTICLE_COUNT = 220
+const PARTICLE_COUNT = 520
 const MAX_DPR = 2
 /** Mask alpha threshold (0–1) above which a pixel is an allowed position */
 const MASK_ALPHA_THRESHOLD = 0.35
