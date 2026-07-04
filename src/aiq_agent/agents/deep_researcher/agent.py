@@ -55,6 +55,8 @@ from aiq_agent.common.fact_ledger_store import lookup_prior_facts_block
 from aiq_agent.common.fact_ledger_store import persist_fact_ledger_json
 from aiq_agent.common.report_fact_audit import evaluate_report_fact_audit
 from aiq_agent.common.report_fact_audit import fact_audit_note
+from aiq_agent.common.report_images import generate_and_save_report_images
+from aiq_agent.common.report_images import report_images_enabled
 from aiq_agent.common.research_artifacts import build_virtual_research_artifacts
 from aiq_agent.common.research_artifacts import mirror_run_artifacts
 from aiq_agent.common.source_quality_gates import evaluate_source_quality as evaluate_url_source_quality
@@ -303,6 +305,7 @@ class DeepResearcherAgent:
         self._active_request_text = ""
         self._active_research_depth = "deeper"
         self._active_budget_profile: dict[str, Any] = {}
+        self._include_images = False
         self._dossier_compile_count = 0
 
         if self.verbose:
@@ -3446,6 +3449,7 @@ class DeepResearcherAgent:
         scope_request = self._query_without_context(self._latest_user_text(state))
         self._active_request_text = scope_request
         self._active_research_depth = str(state.research_depth or "deeper")
+        self._include_images = bool(getattr(state, "include_images", False))
         self._dossier_compile_count = 0
         try:
             self._active_budget_profile = self._budget_profile_for_state(state)
@@ -3782,6 +3786,17 @@ class DeepResearcherAgent:
             sanitization = sanitize_report(final_message)
             final_message = sanitization.sanitized_report
             final_message = sanitize_report_structure(final_message)
+            # Post-step: opt-in generated illustrations. Runs after
+            # sanitization so the inserted image markdown is never stripped;
+            # fully fail-open and time-bounded so it cannot break or delay
+            # report finalization.
+            if self._include_images and self.job_id and report_images_enabled():
+                final_message, _ = await generate_and_save_report_images(
+                    report=final_message,
+                    job_id=self.job_id,
+                    llm=self._resolve_verifier_llm(),
+                    image_url_prefix=f"/api/jobs/async/job/{self.job_id}/images",
+                )
             if result:
                 residual_audit = evaluate_report_fact_audit(
                     final_message,

@@ -119,8 +119,8 @@ async def register_local_auth_routes(app: FastAPI, db_url: str) -> None:
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         if not changed:
-            raise HTTPException(403, "Current password is incorrect")
-        return {"changed": True}
+            raise HTTPException(400, "Current password is incorrect")
+        return {"ok": True, "changed": True}
 
     @app.get("/v1/auth/users", response_model=UserListResponse, tags=["auth"])
     async def users() -> UserListResponse:

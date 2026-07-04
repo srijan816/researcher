@@ -32,10 +32,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 from fastapi import HTTPException
+from fastapi.responses import FileResponse
 from fastapi.responses import JSONResponse
 from fastapi.responses import Response
 from fastapi.responses import StreamingResponse
@@ -87,6 +89,13 @@ class JobSubmitRequest(BaseModel):
         description=(
             "Depth/source tier for research jobs: shallow, medium, deeper, or deep. "
             "Deeper and deep use larger adaptive reserve budgets for gap-filling and verification."
+        ),
+    )
+    include_images: bool = Field(
+        False,
+        description=(
+            "Opt-in: embed up to three generated illustrative images in the final report. "
+            "Images are generated after report finalization and served from the job's image endpoint."
         ),
     )
     job_id: str | None = Field(
@@ -440,6 +449,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 auth_token=auth_token,
                 data_sources=req.data_sources,
                 research_depth=req.research_depth,
+                include_images=req.include_images,
                 webhook_url=str(req.webhook_url) if req.webhook_url else None,
                 webhook_headers=req.webhook_headers,
                 webhook_secret=req.webhook_secret.get_secret_value() if req.webhook_secret else None,
@@ -663,6 +673,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             expiry_seconds=job.expiry_seconds or default_expiry_seconds,
             data_sources=submit_data.get("data_sources"),
             research_depth=submit_data.get("research_depth") or DEFAULT_RESEARCH_DEPTH,
+            include_images=bool(submit_data.get("include_images")),
             auth_token=get_auth_token(),
             resume_files=resume_files,
         )
@@ -698,6 +709,32 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             state=None,
             artifacts=artifacts,
         )
+
+    @app.get(
+        "/v1/jobs/async/job/{job_id}/images/{filename}",
+        tags=["async jobs"],
+        summary="Get a generated report image",
+        description=(
+            "Serve a generated illustration embedded in the final report of a job "
+            "submitted with include_images=true. Same auth/ownership checks as job status."
+        ),
+        responses={404: {"description": "Job or image not found"}},
+    )
+    async def get_job_image(job_id: str, filename: str) -> FileResponse:
+        """Serve a persisted report image for an owned job."""
+        from aiq_agent.common.report_images import report_images_dir
+
+        principal = require_verified_principal()
+        await authorize_job_access(job_store, db_url, job_id, principal)
+
+        if not re.fullmatch(r"[a-zA-Z0-9._-]+", filename) or ".." in filename:
+            raise HTTPException(404, "Image not found")
+        images_dir = report_images_dir(job_id).resolve()
+        image_path = (images_dir / filename).resolve()
+        if images_dir not in image_path.parents or not image_path.is_file():
+            raise HTTPException(404, "Image not found")
+        media_type = "image/png" if image_path.suffix.lower() == ".png" else "image/jpeg"
+        return FileResponse(image_path, media_type=media_type)
 
     @app.get(
         "/v1/jobs/async/job/{job_id}/report",
@@ -1429,6 +1466,7 @@ async def _resume_orphaned_startup_jobs(job_store, db_url: str, default_expiry_s
                     expiry_seconds=default_expiry_seconds,
                     data_sources=submit_data.get("data_sources"),
                     research_depth=submit_data.get("research_depth") or DEFAULT_RESEARCH_DEPTH,
+                    include_images=bool(submit_data.get("include_images")),
                     resume_files=resume_files,
                 )
                 logger.info("Successfully submitted auto-resume for job %s on startup", jid)

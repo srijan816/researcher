@@ -130,6 +130,7 @@ async def submit_agent_job(
     webhook_url: str | None = None,
     webhook_headers: dict[str, str] | None = None,
     webhook_secret: str | None = None,
+    include_images: bool = False,
 ) -> str:
     """
     Submit an agent job to the Dask cluster.
@@ -152,6 +153,8 @@ async def submit_agent_job(
         webhook_url: Optional terminal-status webhook endpoint.
         webhook_headers: Optional static headers sent with webhook delivery.
         webhook_secret: Optional HMAC signing secret for webhook delivery.
+        include_images: Opt-in flag to embed up to three generated images in
+            the final research report.
 
     Returns:
         The job ID.
@@ -262,6 +265,7 @@ async def submit_agent_job(
         research_depth,
         None,  # resume_files
         webhook_config,
+        include_images,
     ]
 
     try:
@@ -295,6 +299,7 @@ async def submit_agent_job(
                         "owner": owner,
                         "data_sources": data_sources,
                         "research_depth": research_depth,
+                        "include_images": include_images,
                         "webhook_url": webhook_url,
                     },
                 }
@@ -340,6 +345,7 @@ async def resume_agent_job(
     research_depth: ResearchDepthTier = DEFAULT_RESEARCH_DEPTH,
     auth_token: str | None = None,
     resume_files: dict[str, Any] | None = None,
+    include_images: bool = False,
 ) -> str:
     """Requeue an existing failed/interrupted job ID with recovered virtual files.
 
@@ -382,6 +388,7 @@ async def resume_agent_job(
                 "owner": owner,
                 "data_sources": data_sources,
                 "research_depth": research_depth,
+                "include_images": include_images,
                 "resume_files": sorted((resume_files or {}).keys()),
             },
         }
@@ -404,6 +411,7 @@ async def resume_agent_job(
         research_depth,
         resume_files,
         None,  # webhook_config — resume path doesn't carry a fresh webhook
+        include_images,
     ]
 
     if in_process:

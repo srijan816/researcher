@@ -261,6 +261,7 @@ async def run_agent_job(
     research_depth: ResearchDepthTier = DEFAULT_RESEARCH_DEPTH,
     resume_files: dict[str, Any] | None = None,
     webhook_config: dict[str, Any] | None = None,
+    include_images: bool = False,
 ):
     """
     Dask task to run any registered agent with cancellation support and telemetry.
@@ -309,6 +310,8 @@ async def run_agent_job(
             previous failed attempt for the same job.
         webhook_config: Optional terminal-status webhook config passed from
             the API submit request.
+        include_images: Opt-in flag to embed up to three generated images in
+            the final research report.
     """
 
     # Propagate auth token into the current async task's context so tools
@@ -591,6 +594,7 @@ async def run_agent_job(
                         available_documents=available_documents,
                         data_sources=data_sources,
                         research_depth=research_depth,
+                        include_images=include_images,
                         resume_files=resume_files,
                         event_store=event_store,
                     )
@@ -931,6 +935,7 @@ async def _run_agent(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     research_depth: ResearchDepthTier = DEFAULT_RESEARCH_DEPTH,
+    include_images: bool = False,
     resume_files: dict[str, Any] | None = None,
     event_store: EventStore | None = None,
 ) -> Any:
@@ -967,6 +972,7 @@ async def _run_agent(
             if data_sources is not None:
                 state_kwargs["data_sources"] = data_sources
             state_kwargs["research_depth"] = research_depth
+            state_kwargs["include_images"] = include_images
             if resume_files:
                 state_kwargs["files"] = resume_files
             if available_documents:
@@ -989,6 +995,7 @@ async def _run_agent(
             if data_sources is not None:
                 state["data_sources"] = data_sources
             state["research_depth"] = research_depth
+            state["include_images"] = include_images
             if resume_files:
                 state["files"] = resume_files
             if available_documents:
