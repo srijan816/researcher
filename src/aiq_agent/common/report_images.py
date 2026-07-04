@@ -58,7 +58,7 @@ _PLANNING_PROMPT = """You are choosing illustration opportunities for a finished
 
 Below is the report outline: its title, section headings, and the first ~200 characters of each section.
 
-Pick the sections where a generated illustration would genuinely help the reader visualize a concept, comparison, or scene. Do NOT propose charts, graphs, plots, or any image containing specific numbers, data, logos, or text — image generators cannot render those accurately. Prefer 2 images; never more than 3. If nothing is genuinely visual, return an empty list.
+The reader explicitly asked for this report to include visuals, so you MUST select the 2 best illustration opportunities (3 only when a third is clearly strong). Almost every research topic has visualizable moments: a process or mechanism in action, a place or scene, a comparison of physical things, a system overview rendered as a clean editorial illustration. Do NOT propose charts, graphs, plots, or any image containing specific numbers, data, logos, or text — image generators cannot render those accurately; recast such ideas as conceptual scenes instead. Return an empty list ONLY if the report is so abstract that any illustration would be decoration with zero explanatory value (this should be rare).
 
 Respond with ONLY a JSON array (no prose, no code fences) of objects:
 [{{"after_heading": "<exact heading text from the outline>", "prompt": "<detailed English image-generation prompt, photorealistic or clean editorial illustration style>", "caption": "<short figure caption>"}}]
