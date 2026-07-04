@@ -42,7 +42,7 @@ export const metadata: Metadata = {
   title: 'GenAlphAI Research',
   description: 'Agentic deep research: plans, searches, verifies, and writes cited reports. Depth over hype.',
   icons: {
-    icon: '/icon.svg',
+    icon: '/brand/alpha-mark.png',
   },
 }
 

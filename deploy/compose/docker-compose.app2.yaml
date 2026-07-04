@@ -49,6 +49,9 @@ services:
       # search wave at most ~6s before the local flashrank fallback kicks in.
       - AIQ_RERANK_TIMEOUT_SECONDS=${AIQ_RERANK_TIMEOUT_SECONDS:-4}
       - AIQ_RERANK_CACHE_DIR=${AIQ_RERANK_CACHE_DIR:-/app/data/flashrank}
+      # Generated report images live on the data volume (writer: agent stage;
+      # reader: /v1 images route).
+      - AIQ_REPORT_IMAGES_DIR=${AIQ_REPORT_IMAGES_DIR:-/app/data/report_images}
       # Persist HuggingFace downloads (model2vec potion-base-8M) across recreates.
       - HF_HOME=${HF_HOME:-/app/data/hf}
       # Model cascade (Wave 1): leaf/mechanical roles use the high-speed variant.

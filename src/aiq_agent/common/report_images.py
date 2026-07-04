@@ -42,7 +42,14 @@ _SECTION_SNIPPET_CHARS = 200
 _MAX_PROMPT_CHARS = 1200
 _MAX_CAPTION_CHARS = 300
 
-_DEFAULT_IMAGES_DIR = Path(".deep-research-runtime/report_images")
+# Prefer the mounted data volume (/app/data in the container) so images
+# survive container recreates and the path is absolute regardless of cwd;
+# fall back to a cwd-relative dir for host/dev runs.
+_DEFAULT_IMAGES_DIR = (
+    Path("/app/data/report_images")
+    if Path("/app/data").is_dir()
+    else Path(".deep-research-runtime/report_images")
+)
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 _SAFE_JOB_ID_RE = re.compile(r"[^a-zA-Z0-9_-]+")
 _FALSEY = {"0", "false", "no", "off"}
