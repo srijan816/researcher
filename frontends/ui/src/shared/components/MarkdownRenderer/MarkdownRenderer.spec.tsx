@@ -3,7 +3,7 @@
 
 import { render, screen, fireEvent } from '@/test-utils'
 import { describe, test, expect, vi } from 'vitest'
-import { MarkdownRenderer } from './MarkdownRenderer'
+import { MarkdownRenderer, isAllowedImageSrc } from './MarkdownRenderer'
 
 describe('MarkdownRenderer', () => {
   describe('basic rendering', () => {
@@ -315,6 +315,61 @@ Visit [our site](https://example.com) for more.
 
       // Should render without errors
       expect(screen.getByText(/Bold with/)).toBeInTheDocument()
+    })
+  })
+  describe('images', () => {
+    test('renders images with same-origin /api/ src and caption from alt text', () => {
+      const { container } = render(
+        <MarkdownRenderer content="![Figure 1: results](/api/jobs/async/job/j1/images/image-1.jpg)" />
+      )
+
+      const img = container.querySelector('img')
+      expect(img).toBeInTheDocument()
+      expect(img).toHaveAttribute('src', '/api/jobs/async/job/j1/images/image-1.jpg')
+      expect(img).toHaveAttribute('alt', 'Figure 1: results')
+      expect(screen.getByText('Figure 1: results')).toBeInTheDocument()
+    })
+
+    test('renders images with same-origin /v1/ src', () => {
+      const { container } = render(<MarkdownRenderer content="![chart](/v1/files/chart.png)" />)
+
+      expect(container.querySelector('img')).toHaveAttribute('src', '/v1/files/chart.png')
+    })
+
+    test('renders images with https src', () => {
+      const { container } = render(
+        <MarkdownRenderer content="![remote](https://example.com/a.png)" />
+      )
+
+      expect(container.querySelector('img')).toHaveAttribute('src', 'https://example.com/a.png')
+    })
+
+    test('blocks data: URI image sources', () => {
+      const { container } = render(
+        <MarkdownRenderer content="![x](data:image/png;base64,AAAA)" />
+      )
+
+      expect(container.querySelector('img')).toBeNull()
+    })
+
+    test('blocks http: and other non-allowed image sources', () => {
+      const { container } = render(
+        <MarkdownRenderer content="![a](http://example.com/a.png) ![b](/other/path.png)" />
+      )
+
+      expect(container.querySelector('img')).toBeNull()
+    })
+
+    test('isAllowedImageSrc enforces the allowlist', () => {
+      expect(isAllowedImageSrc('/api/jobs/async/job/x/images/image-1.jpg')).toBe(true)
+      expect(isAllowedImageSrc('/v1/files/a.png')).toBe(true)
+      expect(isAllowedImageSrc('https://example.com/a.png')).toBe(true)
+      expect(isAllowedImageSrc('data:image/png;base64,AAAA')).toBe(false)
+      expect(isAllowedImageSrc('http://example.com/a.png')).toBe(false)
+      expect(isAllowedImageSrc('javascript:alert(1)')).toBe(false)
+      expect(isAllowedImageSrc('//example.com/a.png')).toBe(false)
+      expect(isAllowedImageSrc('')).toBe(false)
+      expect(isAllowedImageSrc(undefined)).toBe(false)
     })
   })
 })

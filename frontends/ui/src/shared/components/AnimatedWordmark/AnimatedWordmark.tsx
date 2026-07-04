@@ -40,8 +40,8 @@ const MASK_ALPHA_THRESHOLD = 0.35
 const OFF_WHITE_RATIO = 0.12
 /** Maximum drift distance (CSS px) around a particle's home point */
 const DRIFT_RADIUS = 3.5
-const MIN_RADIUS = 0.8
-const MAX_RADIUS = 2.2
+const MIN_RADIUS = 1.6
+const MAX_RADIUS = 4.4
 const GLOBAL_OPACITY = 0.9
 
 /** Brand gradient endpoints across the glyph (left → right) */

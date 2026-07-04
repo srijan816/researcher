@@ -17,6 +17,8 @@
 import { type FC, type MouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Flex, Text, Button, Spinner } from '@/adapters/ui'
 import { useShallow } from 'zustand/react/shallow'
+import { getJobReport } from '@/adapters/api'
+import { useAuth } from '@/adapters/auth'
 import { ArrowLeft, ArrowRight, Document, Pause, Play, Stop, Volume } from '@/adapters/ui/icons'
 import { MarkdownRenderer } from '@/shared/components/MarkdownRenderer'
 import { useChatStore } from '@/features/chat'
@@ -127,14 +129,17 @@ const splitSpeechIntoNarrationChunks = (text: string): string[] => {
  * Renders research notes with a subtle preview treatment and the final report at full prominence.
  */
 export const ReportTab: FC<ReportTabProps> = ({ children }) => {
-  const { reportContent, reportContentCategory, isStreaming, currentStatus, deepResearchCitations } =
+  const { reportContent, reportContentCategory, isStreaming, currentStatus, deepResearchCitations, deepResearchJobId } =
     useChatStore(useShallow((s) => ({
       reportContent: s.reportContent,
       reportContentCategory: s.reportContentCategory,
       isStreaming: s.isStreaming,
       currentStatus: s.currentStatus,
       deepResearchCitations: s.deepResearchCitations,
+      deepResearchJobId: s.deepResearchJobId,
     })))
+  const setReportContent = useChatStore((s) => s.setReportContent)
+  const { idToken } = useAuth()
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [isPreparingAudio, setIsPreparingAudio] = useState(false)
   const [audioError, setAudioError] = useState<string | null>(null)
@@ -151,6 +156,7 @@ export const ReportTab: FC<ReportTabProps> = ({ children }) => {
   const isPreparingAudioRef = useRef(false)
   const waitingForNextChunkRef = useRef(false)
   const narrationSignatureRef = useRef<string | null>(null)
+  const refreshedReportJobRef = useRef<string | null>(null)
 
   const reportContentStr = typeof reportContent === 'string' ? reportContent : ''
   const isEmpty = !reportContentStr.trim()
@@ -182,6 +188,37 @@ export const ReportTab: FC<ReportTabProps> = ({ children }) => {
     },
     [citationDetails]
   )
+
+  // Refresh the report from the backend when the tab shows a finished report.
+  // The store copy usually comes from the SSE stream, which is emitted before
+  // the backend embeds report images — the fresh GET .../report response is
+  // the authoritative copy (it includes ![caption](/api/...) image markdown).
+  useEffect(() => {
+    if (!isFinalReport || isStreaming || !deepResearchJobId) return
+    if (refreshedReportJobRef.current === deepResearchJobId) return
+    refreshedReportJobRef.current = deepResearchJobId
+
+    let cancelled = false
+    getJobReport(deepResearchJobId, idToken || undefined)
+      .then((response) => {
+        if (cancelled || !response.has_report || !response.report) return
+        const current = useChatStore.getState().reportContent
+        if (response.report !== current) {
+          setReportContent(response.report, 'final_report')
+        }
+      })
+      .catch((error) => {
+        // Allow a retry on the next open if the refresh failed
+        if (refreshedReportJobRef.current === deepResearchJobId) {
+          refreshedReportJobRef.current = null
+        }
+        console.warn('Failed to refresh report content:', error)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [isFinalReport, isStreaming, deepResearchJobId, idToken, setReportContent])
 
   useEffect(() => {
     audioUrlRef.current = audioUrl

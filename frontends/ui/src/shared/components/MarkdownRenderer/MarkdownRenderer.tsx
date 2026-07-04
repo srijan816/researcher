@@ -20,6 +20,16 @@ function getTextFromChildren(node: ReactNode): string {
   return ''
 }
 
+/**
+ * Only render images from same-origin API routes (`/api/`, `/v1/`) or https.
+ * Blocks data:, javascript:, http:, protocol-relative and other schemes.
+ */
+export function isAllowedImageSrc(src: string | undefined | null): src is string {
+  if (!src) return false
+  if (src.startsWith('/api/') || src.startsWith('/v1/')) return true
+  return src.startsWith('https://')
+}
+
 function slugify(text: string): string {
   return text
     .toLowerCase()
@@ -167,6 +177,29 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
             <Anchor href={href ?? '#'} target="_blank" rel="noopener noreferrer" kind="inline">
               {children}
             </Anchor>
+          )
+        },
+
+        // Images — figure-quality presentation with caption from alt text.
+        // Only same-origin API paths (/api/, /v1/) and https sources render;
+        // everything else (data:, http:, javascript:, …) is dropped.
+        // Rendered with <span>s (block-styled) because images arrive inside <p>.
+        img: ({ src, alt }) => {
+          const srcStr = typeof src === 'string' ? src : undefined
+          if (!isAllowedImageSrc(srcStr)) return null
+          return (
+            <span className="my-4 block text-center">
+              {/* eslint-disable-next-line @next/next/no-img-element -- report images are same-origin authed API assets */}
+              <img
+                src={srcStr}
+                alt={alt ?? ''}
+                loading="lazy"
+                className="mx-auto block h-auto max-w-full rounded-[14px] border border-[#26282E]"
+              />
+              {alt ? (
+                <span className="text-subtle mt-2 block font-mono text-xs">{alt}</span>
+              ) : null}
+            </span>
           )
         },
 

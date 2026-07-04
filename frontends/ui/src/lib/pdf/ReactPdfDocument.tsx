@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import React from 'react'
-import { Document, Page, Text, View, StyleSheet, Font, Link } from '@react-pdf/renderer'
+import { Document, Page, Text, View, StyleSheet, Font, Link, Image } from '@react-pdf/renderer'
 import { marked } from 'marked'
 
 type Token = ReturnType<typeof marked.lexer>[number]
@@ -140,6 +140,22 @@ const styles = StyleSheet.create({
     color: '#0066cc',
     textDecoration: 'underline',
   },
+  imageBlock: {
+    marginTop: 10,
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  image: {
+    maxWidth: '100%',
+    objectFit: 'contain',
+  },
+  imageCaption: {
+    marginTop: 4,
+    fontSize: 8,
+    color: '#666666',
+    fontFamily: 'Courier',
+    textAlign: 'center',
+  },
 })
 
 interface MarkdownPDFProps {
@@ -197,11 +213,53 @@ function renderHeading(token: HeadingToken, index: number): React.ReactNode {
   )
 }
 
-function renderParagraph(token: ParagraphToken, index: number): React.ReactNode {
+interface InlineImageToken {
+  type: 'image'
+  href: string
+  text?: string
+}
+
+/** Only data URIs (client-inlined same-origin assets) and https images are embeddable server-side */
+function isRenderablePdfImageSrc(href: string): boolean {
+  return href.startsWith('data:image/') || href.startsWith('https://')
+}
+
+function renderPdfImage(image: InlineImageToken, key: string): React.ReactNode {
+  if (!isRenderablePdfImageSrc(image.href)) return null
   return (
-    <Text key={index} style={styles.paragraph}>
-      {parseInlineFormatting(token.text)}
-    </Text>
+    <View key={key} style={styles.imageBlock} wrap={false}>
+      <Image src={image.href} style={styles.image} />
+      {image.text ? <Text style={styles.imageCaption}>{image.text}</Text> : null}
+    </View>
+  )
+}
+
+/** Matches markdown image syntax (URL without parens — data URIs and https URLs) */
+const IMAGE_MARKDOWN_RE = /!\[[^\]]*\]\([^)\s]+\)/g
+
+function renderParagraph(token: ParagraphToken, index: number): React.ReactNode {
+  const imageTokens = (token.tokens ?? []).filter(
+    (t): t is InlineImageToken & Token => t.type === 'image'
+  )
+
+  if (imageTokens.length === 0) {
+    return (
+      <Text key={index} style={styles.paragraph}>
+        {parseInlineFormatting(token.text)}
+      </Text>
+    )
+  }
+
+  // Split images out of the paragraph: images render as blocks, remaining text as usual
+  const textWithoutImages = token.text.replace(IMAGE_MARKDOWN_RE, '').trim()
+
+  return (
+    <View key={index}>
+      {textWithoutImages ? (
+        <Text style={styles.paragraph}>{parseInlineFormatting(textWithoutImages)}</Text>
+      ) : null}
+      {imageTokens.map((image, imageIndex) => renderPdfImage(image, `${index}-img-${imageIndex}`))}
+    </View>
   )
 }
 

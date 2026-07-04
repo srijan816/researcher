@@ -160,7 +160,7 @@ export const NavRail: FC<NavRailProps> = memo(function NavRail({
           title="GenAlphAI Research"
           className="gx-rail-logo flex h-12 w-14 items-center justify-center outline-none disabled:cursor-not-allowed disabled:opacity-40"
         >
-          <Logo kind="horizontal" size="small" />
+          <Logo kind="horizontal" size="small" className="h-[31px] w-[50px]" />
         </button>
 
         <Flex direction="col" align="center" gap="1" className="w-full">

@@ -424,7 +424,7 @@ const WelcomeState: FC<WelcomeStateProps> = ({
         }`}
       >
         {homeExperience ? (
-          <AnimatedWordmark className="mx-auto mb-2 w-[min(620px,72vw)]" />
+          <AnimatedWordmark className="mx-auto mb-2 w-[min(558px,65vw)]" />
         ) : (
           <span className="text-[#F3EFE6]" aria-hidden="true">
             <Logo kind="horizontal" size="small" />

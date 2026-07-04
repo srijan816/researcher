@@ -3,7 +3,7 @@
 
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { vi, describe, test, expect, beforeEach, afterEach } from 'vitest'
-import { useDownloadPdfRoute } from './use-download-pdf'
+import { useDownloadPdfRoute, inlineSameOriginImages } from './use-download-pdf'
 
 describe('useDownloadPdfRoute', () => {
   const originalFetch = global.fetch
@@ -227,5 +227,62 @@ describe('useDownloadPdfRoute', () => {
 
     // Error should be cleared
     expect(result.current.error).toBeNull()
+  })
+})
+
+describe('inlineSameOriginImages', () => {
+  const originalFetch = global.fetch
+
+  afterEach(() => {
+    global.fetch = originalFetch
+    vi.restoreAllMocks()
+  })
+
+  test('returns markdown unchanged when there are no same-origin images', async () => {
+    global.fetch = vi.fn() as typeof fetch
+    const markdown = 'text ![remote](https://example.com/a.png) more'
+
+    const result = await inlineSameOriginImages(markdown)
+
+    expect(result).toBe(markdown)
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  test('replaces /api/ image URLs with data URLs', async () => {
+    const blob = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' })
+    global.fetch = vi.fn(() =>
+      Promise.resolve({ ok: true, blob: () => Promise.resolve(blob) })
+    ) as unknown as typeof fetch
+
+    const result = await inlineSameOriginImages(
+      'before ![cap](/api/jobs/async/job/j1/images/image-1.jpg) after'
+    )
+
+    expect(global.fetch).toHaveBeenCalledWith('/api/jobs/async/job/j1/images/image-1.jpg', {
+      credentials: 'same-origin',
+    })
+    expect(result).toContain('![cap](data:image/jpeg;base64,')
+    expect(result).not.toContain('](/api/jobs/async/job/j1/images/image-1.jpg)')
+  })
+
+  test('leaves the original URL when the fetch fails', async () => {
+    global.fetch = vi.fn(() => Promise.reject(new Error('network'))) as typeof fetch
+    const markdown = '![cap](/api/jobs/async/job/j1/images/image-1.jpg)'
+
+    const result = await inlineSameOriginImages(markdown)
+
+    expect(result).toBe(markdown)
+  })
+
+  test('leaves the original URL when the response is not an image', async () => {
+    const blob = new Blob(['{}'], { type: 'application/json' })
+    global.fetch = vi.fn(() =>
+      Promise.resolve({ ok: true, blob: () => Promise.resolve(blob) })
+    ) as unknown as typeof fetch
+    const markdown = '![cap](/v1/files/report.json)'
+
+    const result = await inlineSameOriginImages(markdown)
+
+    expect(result).toBe(markdown)
   })
 })

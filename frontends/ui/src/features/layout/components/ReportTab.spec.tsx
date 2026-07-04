@@ -5,6 +5,22 @@ import { fireEvent, render, screen, waitFor } from '@/test-utils'
 import { vi, describe, test, expect, afterEach } from 'vitest'
 import { ReportTab } from './ReportTab'
 
+// Mock auth + report API (used by the fresh-report refetch effect)
+vi.mock('@/adapters/auth', () => ({
+  useAuth: () => ({
+    idToken: null,
+    isAuthenticated: false,
+    authRequired: false,
+    user: null,
+    signIn: vi.fn(),
+    signOut: vi.fn(),
+  }),
+}))
+
+vi.mock('@/adapters/api', () => ({
+  getJobReport: vi.fn(() => Promise.resolve({ has_report: false })),
+}))
+
 // Mock the chat store
 vi.mock('@/features/chat', () => ({
   useChatStore: vi.fn((selector?: (s: any) => any) => {
