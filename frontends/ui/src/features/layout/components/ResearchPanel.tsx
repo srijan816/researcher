@@ -187,7 +187,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
         } ${
           !showToggle && !isOpen ? 'hidden' : ''
         } ${
-          isAuthenticated ? 'cursor-pointer hover:border-[#C7FF3D]' : 'cursor-not-allowed opacity-50'
+          isAuthenticated ? 'cursor-pointer hover:border-[#5AA7FF]' : 'cursor-not-allowed opacity-50'
         }`}
         style={{ height: 'calc(var(--spacing) * 38)' }}
         aria-label={isOpen ? 'Close research panel' : 'Open research panel'}
@@ -210,7 +210,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
           className="absolute left-1/2 -translate-x-1/2 -rotate-90 whitespace-nowrap text-primary"
           style={{ top: 'calc(var(--spacing) * 21)' }}
         >
-          Show Research
+          Research
         </Text>
       </button>
 
@@ -235,7 +235,37 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
                 : 'opacity 100ms ease-in-out 500ms, visibility 0ms 600ms',
           }}
         >
-        {/* Header with tabs and close button */}
+        {/* Panel header: mono label + live status pill */}
+        <Flex align="center" justify="between" className="border-base shrink-0 gap-2 border-b px-3 pt-3 sm:pl-6 sm:pr-8">
+          <Flex align="center" gap="3" className="min-w-0 pb-3">
+            <span className="gx-panel-label">Research</span>
+            {isDeepResearchStreaming ? (
+              <span className="gx-status-pill gx-status-pill--live">
+                <span className="gx-status-dot" aria-hidden="true" />
+                Researching&hellip;
+              </span>
+            ) : deepResearchStatus === 'success' ? (
+              <span className="gx-status-pill">Complete</span>
+            ) : deepResearchStatus === 'failure' ? (
+              <span className="gx-status-pill">Failed</span>
+            ) : null}
+          </Flex>
+          <Flex align="center" gap="density-xl" className="pb-3">
+            {/* Close button */}
+            <Button
+              kind="tertiary"
+              size="small"
+              onClick={handleClose}
+              aria-label="Close research panel"
+              title="Close research panel"
+              data-testid="research-panel-close"
+            >
+              <Close className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          </Flex>
+        </Flex>
+
+        {/* Tabs and stop control */}
         <Flex align="center" justify="between" className="border-base shrink-0 flex-wrap gap-2 border-b px-3 py-3 sm:pl-6 sm:pr-8 sm:py-4">
           <Flex align="center" gap="density-xl" className="min-w-0 flex-1 overflow-x-auto scrollbar-hide">
             <SegmentedControl
@@ -245,9 +275,9 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
               items={[
                 { value: 'plan', children: 'Plan' },
                 { value: 'batch', children: 'Batch' },
-                { value: 'tasks', children: 'Tasks' },
+                { value: 'tasks', children: 'Activity' },
                 { value: 'thinking', children: 'Thinking' },
-                { value: 'citations', children: 'Citations' },
+                { value: 'citations', children: 'Sources' },
                 { value: 'report', children: 'Report' },
               ]}
             />
@@ -263,19 +293,6 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
             >
               <StopCircle className="h-4 w-4 sm:mr-2" aria-hidden="true" />
               <span className="hidden sm:inline">{isCancelling ? 'Cancelling...' : 'Cancel Research'}</span>
-            </Button>
-          </Flex>
-          <Flex align="center" gap="density-xl">
-            {/* Close button */}
-            <Button
-              kind="tertiary"
-              size="small"
-              onClick={handleClose}
-              aria-label="Close research panel"
-              title="Close research panel"
-              data-testid="research-panel-close"
-            >
-              <Close className="h-4 w-4" aria-hidden="true" />
             </Button>
           </Flex>
         </Flex>

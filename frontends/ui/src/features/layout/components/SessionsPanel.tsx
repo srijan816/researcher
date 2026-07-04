@@ -160,7 +160,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
 
   return (
     <SidePanel
-      className="z-[70] bg-surface-base top-[var(--header-height)] h-[calc(100dvh-var(--header-height)-var(--mobile-nav-height))] sm:h-[calc(100dvh-var(--header-height))] w-screen max-w-none rounded-none sm:max-w-[406px] sm:rounded-r-2xl"
+      className="z-[70] bg-surface-sunken top-0 h-[calc(100dvh-var(--mobile-nav-height))] sm:h-[100dvh] w-screen max-w-none rounded-none border-r border-base sm:max-w-[300px] sm:rounded-none md:left-[var(--nav-rail-width)]"
       open={isSessionsPanelOpen}
       onOpenChange={handleOpenChange}
       side="left"
@@ -170,7 +170,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
       slotHeading={
         <Flex align="center" gap="2">
           <Chat />
-          Sessions
+          Library
         </Flex>
       }
       slotFooter={
@@ -327,9 +327,7 @@ const SessionDateGroups: FC<SessionDateGroupsProps> = ({
     <>
       {Object.entries(groupedSessions).map(([dateLabel, dateSessions]) => (
         <Flex key={dateLabel} direction="col" gap="2" className="mb-4">
-          <Text kind="label/semibold/xs" className="text-subtle uppercase">
-            {dateLabel}
-          </Text>
+          <span className="gx-mono">{dateLabel.toUpperCase()}</span>
           {dateSessions.map((session) => (
             <SessionItem
               key={session.id}
@@ -454,15 +452,15 @@ const SessionItem: FC<SessionItemProps> = ({
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       className={`
-        group flex min-h-12 w-full items-center gap-2 rounded-md
-        border p-2 text-left transition-colors
+        group flex min-h-12 w-full items-center gap-2 rounded-lg
+        border-l-2 p-2 pl-3 text-left transition-colors
         outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand
         sm:min-h-10
         ${isBusy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}
         ${
           isSelected
-            ? 'bg-surface-raised border border-accent-primary'
-            : 'border-base hover:bg-surface-raised-50 bg-transparent'
+            ? 'bg-surface-raised border-l-[#5AA7FF]'
+            : 'border-l-transparent hover:bg-surface-raised-50 bg-transparent'
         }
       `}
       aria-label={isBusy ? `Session: ${session.title} (processing in progress)` : `Session: ${session.title}`}
@@ -496,6 +494,17 @@ const SessionItem: FC<SessionItemProps> = ({
           <Text kind="body/regular/sm" className="text-primary min-w-0 flex-1 truncate">
             {session.title}
           </Text>
+
+          {/* Mono timestamp - hidden when hover actions show */}
+          {!(isHovered || isSelected) && (
+            <span className="gx-mono shrink-0">
+              {new Date(session.date).toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+              })}
+            </span>
+          )}
 
           {/* Action icons - shown on hover */}
           {(isHovered || isSelected) && (

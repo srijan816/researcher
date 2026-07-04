@@ -13,13 +13,13 @@ const DEFAULT_MAX_RADIUS = 50
 const DEFAULT_PARTICLE_SIZE = 2.0
 const DEFAULT_ROTATION_SPEED = 0.001
 const DEFAULT_SEED = 12345
-const DEFAULT_PARTICLE_COLOR = '199, 255, 61'
-/** Secondary accent color (blue) used for ~25% of particles */
-const SECONDARY_PARTICLE_COLOR = '90, 167, 255'
+const DEFAULT_PARTICLE_COLOR = '90, 167, 255'
+/** Secondary faint off-white used for ~25% of particles */
+const SECONDARY_PARTICLE_COLOR = '243, 239, 230'
 /** Every Nth particle renders in the secondary color */
 const SECONDARY_PARTICLE_INTERVAL = 4
 /** Global dimming factor to keep the field subtle on dark surfaces */
-const PARTICLE_OPACITY_SCALE = 0.85
+const PARTICLE_OPACITY_SCALE = 0.45
 
 /**
  * Animated starfield background using canvas.

@@ -49,7 +49,7 @@ describe('ChatArea', () => {
   test('renders welcome state when not authenticated', () => {
     render(<ChatArea isAuthenticated={false} />)
 
-    expect(screen.getByText('Alpha Research')).toBeInTheDocument()
+    expect(screen.getByText('GenAlphAI Research')).toBeInTheDocument()
     expect(screen.getByText(/focused research session/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^sign in$/i })).toBeInTheDocument()
   })
@@ -57,8 +57,8 @@ describe('ChatArea', () => {
   test('renders welcome state when authenticated with no messages', () => {
     render(<ChatArea isAuthenticated={true} />)
 
-    expect(screen.getByText('What should we research?')).toBeInTheDocument()
-    expect(screen.getByText(/cited report/i)).toBeInTheDocument()
+    expect(screen.getByText('Research anything.')).toBeInTheDocument()
+    expect(screen.getByText(/with receipts/i)).toBeInTheDocument()
   })
 
   test('calls onSignIn when sign in button clicked', async () => {
@@ -266,7 +266,7 @@ describe('ChatArea', () => {
     render(<ChatArea isAuthenticated={true} />)
 
     // Should show welcome state since assistant messages are filtered out
-    expect(screen.getByText('What should we research?')).toBeInTheDocument()
+    expect(screen.getByText('Research anything.')).toBeInTheDocument()
   })
 
   test('renders chat messages area with aria-label', () => {
@@ -291,7 +291,7 @@ describe('ChatArea', () => {
     render(<ChatArea isAuthenticated={true} />)
 
     // Should render welcome state
-    expect(screen.getByText('What should we research?')).toBeInTheDocument()
+    expect(screen.getByText('Research anything.')).toBeInTheDocument()
   })
 
   test('renders file upload banners', () => {

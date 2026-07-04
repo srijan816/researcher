@@ -81,7 +81,7 @@ curl -N -H "Authorization: Bearer $AIQ_API_KEY" \\
         <DocSection title="Clarifying Questions">
           <Text kind="body/regular/sm" className="text-subtle">
             Browser chat uses the WebSocket path and may ask clarifying questions. If no answer arrives within five
-            minutes, Alpha Research now continues with a skip response. Headless async job submission starts directly from the
+            minutes, GenAlphAI Research now continues with a skip response. Headless async job submission starts directly from the
             provided input.
           </Text>
         </DocSection>

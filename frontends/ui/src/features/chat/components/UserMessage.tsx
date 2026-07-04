@@ -4,7 +4,8 @@
 /**
  * UserMessage Component
  *
- * User message bubble displayed in the chat area.
+ * User query rendered Perplexity-style: a display (Fraunces) heading at the
+ * top of its turn instead of a right-aligned chat bubble.
  */
 
 'use client'
@@ -38,7 +39,7 @@ const copyText = async (value: string): Promise<void> => {
 }
 
 /**
- * User message bubble component
+ * User query heading component
  */
 export const UserMessage: FC<UserMessageProps> = ({ content, timestamp }) => {
   const [copied, setCopied] = useState(false)
@@ -51,12 +52,12 @@ export const UserMessage: FC<UserMessageProps> = ({ content, timestamp }) => {
   }, [content])
 
   return (
-    <Flex justify="end" className="w-full">
-      <Flex direction="col" align="end" className="max-w-[80%]">
-        <Flex className="bg-surface-sunken-opaque border border-base rounded-bl-xl rounded-tl-xl rounded-tr-xl p-4">
+    <Flex justify="start" className="w-full">
+      <Flex direction="col" align="start" className="w-full">
+        <div className="gx-query-heading w-full pt-2 [&_p]:m-0">
           <MarkdownRenderer content={content} />
-        </Flex>
-        <Flex align="center" gap="2" className="mt-1 ml-3 self-start">
+        </div>
+        <Flex align="center" gap="2" className="mt-1 self-start">
           {content.trim() && (
             <Button
               type="button"

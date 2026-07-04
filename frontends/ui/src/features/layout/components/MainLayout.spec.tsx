@@ -75,16 +75,14 @@ vi.mock('@/adapters/api', () => ({
 }))
 
 // Mock child components
-vi.mock('./AppBar', () => ({
-  AppBar: ({
-    sessionTitle,
+vi.mock('./NavRail', () => ({
+  NavRail: ({
     onNewSession,
   }: {
-    sessionTitle: string
     onNewSession?: () => void
   }) => (
     <>
-      <div data-testid="app-bar">{sessionTitle}</div>
+      <div data-testid="nav-rail">Nav Rail</div>
       <button type="button" onClick={onNewSession}>
         Header New Session
       </button>
@@ -145,7 +143,7 @@ describe('MainLayout', () => {
   test('renders all main sections', () => {
     render(<MainLayout />)
 
-    expect(screen.getByTestId('app-bar')).toBeInTheDocument()
+    expect(screen.getByTestId('nav-rail')).toBeInTheDocument()
     expect(screen.getByTestId('sessions-panel')).toBeInTheDocument()
     expect(screen.getByTestId('chat-area')).toBeInTheDocument()
     expect(screen.getByTestId('input-area')).toBeInTheDocument()
@@ -154,13 +152,25 @@ describe('MainLayout', () => {
     expect(screen.getByTestId('settings-panel')).toBeInTheDocument()
   })
 
-  test('passes session title to AppBar', () => {
-    render(<MainLayout />)
+  test('shows the session title in the context strip inside an active session', () => {
+    vi.mocked(useChatStore).mockImplementation((selector?: (state: any) => any) => {
+      const state = {
+        ...defaultChatState(),
+        currentConversation: {
+          id: 'session-1',
+          title: 'Test Session',
+          messages: [{ id: 'm1', role: 'user', messageType: 'user', content: 'hi' }],
+        },
+      }
+      return selector ? selector(state) : state
+    })
 
-    expect(screen.getByTestId('app-bar')).toHaveTextContent('Test Session')
+    render(<MainLayout isAuthenticated={true} />)
+
+    expect(screen.getByTestId('context-strip')).toHaveTextContent('Test Session')
   })
 
-  test('shows "New Session" when no current conversation', () => {
+  test('hides the context strip when there is no active session content', () => {
     vi.mocked(useChatStore).mockImplementation((selector?: (state: any) => any) => {
       const state = { ...defaultChatState(), currentConversation: null }
       return selector ? selector(state) : state
@@ -168,7 +178,7 @@ describe('MainLayout', () => {
 
     render(<MainLayout />)
 
-    expect(screen.getByTestId('app-bar')).toHaveTextContent('New Session')
+    expect(screen.queryByTestId('context-strip')).not.toBeInTheDocument()
   })
 
   test('passes auth state to components', () => {
@@ -181,12 +191,12 @@ describe('MainLayout', () => {
     )
 
     // Components render - props are passed to mocked child components
-    expect(screen.getByTestId('app-bar')).toBeInTheDocument()
+    expect(screen.getByTestId('nav-rail')).toBeInTheDocument()
     expect(screen.getByTestId('chat-area')).toBeInTheDocument()
     expect(screen.getByTestId('input-area')).toBeInTheDocument()
   })
 
-  test('wires the AppBar new session action to draft session flow', async () => {
+  test('wires the nav rail new session action to draft session flow', async () => {
     const user = userEvent.setup()
 
     render(<MainLayout />)

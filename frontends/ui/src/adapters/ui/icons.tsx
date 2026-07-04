@@ -214,7 +214,7 @@ export const Generate: FC<IconProps> = ({ className }) => {
       data-src={`${CDN_BASE}/line/generate.svg`}
       width="24"
       height="24"
-      fill="#C7FF3D"
+      fill="#5AA7FF"
       className={`nv-icon-green ${className ?? ''}`}
       aria-hidden="true"
     />

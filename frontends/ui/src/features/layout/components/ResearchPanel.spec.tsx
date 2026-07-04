@@ -126,9 +126,9 @@ describe('ResearchPanel', () => {
 
       expect(screen.getByText('Plan')).toBeInTheDocument()
       expect(screen.getByText('Batch')).toBeInTheDocument()
-      expect(screen.getByText('Tasks')).toBeInTheDocument()
+      expect(screen.getByText('Activity')).toBeInTheDocument()
       expect(screen.getByText('Thinking')).toBeInTheDocument()
-      expect(screen.getByText('Citations')).toBeInTheDocument()
+      expect(screen.getByText('Sources')).toBeInTheDocument()
       expect(screen.getByText('Report')).toBeInTheDocument()
     })
 
@@ -146,7 +146,7 @@ describe('ResearchPanel', () => {
       await user.click(screen.getByText('Thinking'))
       expect(mockSetResearchPanelTab).toHaveBeenCalledWith('thinking')
 
-      await user.click(screen.getByText('Citations'))
+      await user.click(screen.getByText('Sources'))
       expect(mockSetResearchPanelTab).toHaveBeenCalledWith('citations')
     })
 
@@ -261,9 +261,9 @@ describe('ResearchPanel', () => {
 
       expect(screen.getByText('Plan')).toBeInTheDocument()
       expect(screen.getByText('Batch')).toBeInTheDocument()
-      expect(screen.getByText('Tasks')).toBeInTheDocument()
+      expect(screen.getByText('Activity')).toBeInTheDocument()
       expect(screen.getByText('Thinking')).toBeInTheDocument()
-      expect(screen.getByText('Citations')).toBeInTheDocument()
+      expect(screen.getByText('Sources')).toBeInTheDocument()
       expect(screen.getByText('Report')).toBeInTheDocument()
     })
   })
@@ -274,7 +274,7 @@ describe('ResearchPanel', () => {
 
       // The toggle tag button has a specific data-testid
       expect(screen.getByTestId('research-panel-toggle')).toBeInTheDocument()
-      expect(screen.getByText('Show Research')).toBeInTheDocument()
+      expect(screen.getAllByText('Research').length).toBeGreaterThan(0)
     })
 
     test('closes panel when tag clicked while open', async () => {

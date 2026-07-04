@@ -64,7 +64,7 @@ export const TasksTab: FC = () => {
       <Flex direction="col" gap="1" className="shrink-0">
         <Flex align="center" gap="2">
           <Text kind="label/semibold/md" className="text-subtle">
-            Tasks
+            Activity
           </Text>
           {deepResearchJobId && (
             <Text kind="body/regular/xs" className="text-tertiary">
@@ -92,7 +92,7 @@ export const TasksTab: FC = () => {
         >
           <CheckCircle className="text-subtle mb-3 h-8 w-8" />
           <Text kind="body/regular/md" className="text-subtle">
-            Research tasks will appear here.
+            Research activity will appear here.
           </Text>
           <Text kind="body/regular/sm" className="text-subtle mt-2">
             Shows the plan breakdown and progress during deep research.
@@ -118,7 +118,7 @@ export const TasksTab: FC = () => {
           {showLiveProgress && (
             <Flex direction="col" gap="1" className="shrink-0 rounded-md border border-base bg-surface-raised px-3 py-2">
               <Flex align="center" gap="2">
-                <div className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+                <div className="h-2 w-2 animate-pulse rounded-full bg-[#5AA7FF]" />
                 <Text kind="body/semibold/sm" className="text-primary">
                   Live research lanes
                 </Text>
@@ -143,14 +143,14 @@ export const TasksTab: FC = () => {
             </Flex>
           )}
 
-          {/* Task list */}
-          <Flex direction="col" gap="2">
+          {/* Activity timeline */}
+          <div className="gx-timeline flex flex-col">
             {deepResearchTodos.map((todo) => (
               <div key={todo.id} className="shrink-0">
                 <TaskCard todo={todo} />
               </div>
             ))}
-          </Flex>
+          </div>
         </Flex>
       )}
     </Flex>

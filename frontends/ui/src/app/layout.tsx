@@ -39,7 +39,7 @@ const fontMono = JetBrains_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'Alpha Research',
+  title: 'GenAlphAI Research',
   description: 'Agentic deep research: plans, searches, verifies, and writes cited reports. Depth over hype.',
   icons: {
     icon: '/icon.svg',

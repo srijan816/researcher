@@ -25,23 +25,10 @@ describe('TaskCard', () => {
       expect(screen.getByText('Analyze competitors')).toBeInTheDocument()
     })
 
-    test('renders checkbox', () => {
-      render(<TaskCard todo={createTodo()} />)
+    test('renders a timeline dot', () => {
+      const { container } = render(<TaskCard todo={createTodo()} />)
 
-      expect(screen.getByRole('checkbox')).toBeInTheDocument()
-    })
-
-    test('checkbox is always disabled (read-only)', () => {
-      render(<TaskCard todo={createTodo()} />)
-
-      expect(screen.getByRole('checkbox')).toBeDisabled()
-    })
-
-    test('checkbox exists', () => {
-      render(<TaskCard todo={createTodo({ content: 'My task' })} />)
-
-      // Verify checkbox is rendered
-      expect(screen.getByRole('checkbox')).toBeInTheDocument()
+      expect(container.querySelector('.gx-timeline-dot')).toBeInTheDocument()
     })
   })
 
@@ -71,63 +58,41 @@ describe('TaskCard', () => {
     })
   })
 
-  describe('checkbox state', () => {
-    test('checkbox is checked when task is completed', () => {
-      render(<TaskCard todo={createTodo({ status: 'completed' })} />)
+  describe('timeline dot state', () => {
+    test('dot is filled when task is completed', () => {
+      const { container } = render(<TaskCard todo={createTodo({ status: 'completed' })} />)
 
-      expect(screen.getByRole('checkbox')).toBeChecked()
+      expect(container.querySelector('.gx-timeline-dot--done')).toBeInTheDocument()
     })
 
-    test('checkbox is unchecked when task is pending', () => {
-      render(<TaskCard todo={createTodo({ status: 'pending' })} />)
+    test('dot pulses when task is in progress', () => {
+      const { container } = render(<TaskCard todo={createTodo({ status: 'in_progress' })} />)
 
-      expect(screen.getByRole('checkbox')).not.toBeChecked()
+      expect(container.querySelector('.gx-timeline-dot--active')).toBeInTheDocument()
     })
 
-    test('checkbox is unchecked when task is in progress', () => {
-      render(<TaskCard todo={createTodo({ status: 'in_progress' })} />)
+    test('dot is faint when task is pending', () => {
+      const { container } = render(<TaskCard todo={createTodo({ status: 'pending' })} />)
 
-      expect(screen.getByRole('checkbox')).not.toBeChecked()
-    })
-
-    test('checkbox is unchecked when task is stopped', () => {
-      render(<TaskCard todo={createTodo({ status: 'stopped' })} />)
-
-      expect(screen.getByRole('checkbox')).not.toBeChecked()
+      expect(container.querySelector('.gx-timeline-dot--done')).not.toBeInTheDocument()
+      expect(container.querySelector('.gx-timeline-dot--active')).not.toBeInTheDocument()
+      expect(container.querySelector('.gx-timeline-dot')).toBeInTheDocument()
     })
   })
 
   describe('completed task styling', () => {
-    test('completed tasks have reduced opacity', () => {
-      render(<TaskCard todo={createTodo({ status: 'completed' })} />)
-
-      // Find the card element by test id and check for opacity class
-      const flexElements = screen.getAllByTestId('nv-flex')
-      // The outer Flex should have opacity-70 class
-      const hasOpacity = flexElements.some((el) => el.classList.contains('opacity-70'))
-      expect(hasOpacity).toBe(true)
-    })
-
-    test('non-completed tasks do not have reduced opacity', () => {
-      render(<TaskCard todo={createTodo({ status: 'pending' })} />)
-
-      const flexElements = screen.getAllByTestId('nv-flex')
-      const hasOpacity = flexElements.some((el) => el.classList.contains('opacity-70'))
-      expect(hasOpacity).toBe(false)
-    })
-
-    test('completed task text has strikethrough', () => {
+    test('completed task text is muted', () => {
       render(<TaskCard todo={createTodo({ status: 'completed', content: 'Done task' })} />)
 
       const taskText = screen.getByText('Done task')
-      expect(taskText).toHaveClass('line-through')
+      expect(taskText).toHaveClass('text-subtle')
     })
 
-    test('non-completed task text does not have strikethrough', () => {
+    test('non-completed task text is not muted', () => {
       render(<TaskCard todo={createTodo({ status: 'pending', content: 'Pending task' })} />)
 
       const taskText = screen.getByText('Pending task')
-      expect(taskText).not.toHaveClass('line-through')
+      expect(taskText).not.toHaveClass('text-subtle')
     })
   })
 })

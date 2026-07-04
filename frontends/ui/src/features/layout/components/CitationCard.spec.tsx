@@ -36,10 +36,10 @@ describe('CitationCard', () => {
       expect(screen.getByText('example.com')).toBeInTheDocument()
     })
 
-    test('displays full URL', () => {
+    test('falls back to the full URL when no content snippet exists', () => {
       render(
         <CitationCard
-          citation={createCitation({ url: 'https://example.com/full/path/here' })}
+          citation={createCitation({ url: 'https://example.com/full/path/here', content: '' })}
         />
       )
 

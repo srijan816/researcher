@@ -16,7 +16,7 @@
 
 import { type FC } from 'react'
 import { Flex, Text } from '@/adapters/ui'
-import { Link, Check } from '@/adapters/ui/icons'
+import { Check } from '@/adapters/ui/icons'
 import type { CitationSource } from '@/features/chat/types'
 
 interface CitationCardProps {
@@ -45,64 +45,52 @@ const getDomain = (url: string): string => {
 }
 
 /**
- * Non-collapsible card showing a citation source as a clickable link.
+ * Compact source card: favicon, mono-caps domain, clamped title/content,
+ * hover lift with blue border.
  */
 export const CitationCard: FC<CitationCardProps> = ({ citation }) => {
+  const domain = getDomain(citation.url)
   return (
     <a
       href={citation.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="block"
+      className="ar-card-lift block h-full rounded-xl border border-base bg-surface-raised p-3 transition-colors hover:border-[#5AA7FF]"
     >
-      <Flex
-        direction="col"
-        className="rounded-lg border overflow-hidden bg-surface-sunken border-base hover:bg-surface-raised-50 transition-colors"
-      >
-        {/* Header */}
-        <Flex align="center" gap="2" className="w-full px-3 py-2">
-          {/* Status Icon - Cited vs Referenced */}
-          <span
-            className="shrink-0"
-            style={{
-              color: citation.isCited
-                ? 'var(--text-color-feedback-success)'
-                : 'var(--text-color-subtle)',
+      <Flex direction="col" gap="2" className="h-full min-w-0">
+        {/* Favicon + domain + timestamp */}
+        <Flex align="center" gap="2" className="min-w-0">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`}
+            alt=""
+            width={16}
+            height={16}
+            loading="lazy"
+            className="h-4 w-4 shrink-0 rounded-sm"
+            onError={(event) => {
+              event.currentTarget.style.display = 'none'
             }}
-            aria-hidden="true"
-          >
-            {citation.isCited ? (
-              <Check className="h-4 w-4" />
-            ) : (
-              <Link className="h-4 w-4" />
-            )}
-          </span>
-
-          {/* Citation Title */}
-          <Text
-            kind="label/semibold/sm"
-            className="flex-1 min-w-0 truncate"
-            style={{
-              color: citation.isCited
-                ? 'var(--text-color-feedback-success)'
-                : 'var(--text-color-subtle)',
-            }}
-          >
-            {getDomain(citation.url)}
-          </Text>
-
-          {/* Timestamp */}
+          />
+          <span className="gx-mono min-w-0 flex-1 truncate uppercase">{domain}</span>
+          {citation.isCited && (
+            <span
+              className="shrink-0"
+              style={{ color: 'var(--text-color-brand)' }}
+              aria-label="Cited in report"
+            >
+              <Check className="h-3.5 w-3.5" />
+            </span>
+          )}
           <Text kind="body/regular/xs" className="text-subtle shrink-0">
             {formatTime(citation.timestamp)}
           </Text>
         </Flex>
 
-        {/* Full URL */}
-        <Flex className="px-3 pb-2 border-t border-base">
-          <Text kind="body/regular/sm" className="text-subtle truncate mt-1 break-all">
-            {citation.url}
-          </Text>
-        </Flex>
+        {/* Title / content, 2-line clamp */}
+        <Text kind="body/regular/sm" className="text-secondary line-clamp-2 break-all">
+          {citation.content?.trim() || citation.url}
+        </Text>
       </Flex>
     </a>
   )

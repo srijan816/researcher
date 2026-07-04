@@ -28,7 +28,7 @@ Line 3`
     const { container } = render(<UserMessage content="" />)
 
     // Component should still render, just with empty text
-    expect(container.querySelector('[class*="rounded"]')).toBeInTheDocument()
+    expect(container.querySelector('.gx-query-heading')).toBeInTheDocument()
   })
 
   test('renders long content', () => {

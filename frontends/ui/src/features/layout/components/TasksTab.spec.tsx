@@ -35,7 +35,7 @@ describe('TasksTab', () => {
     test('shows empty state when no tasks', () => {
       render(<TasksTab />)
 
-      expect(screen.getByText('Research tasks will appear here.')).toBeInTheDocument()
+      expect(screen.getByText('Research activity will appear here.')).toBeInTheDocument()
       expect(screen.getByText(/Shows the plan breakdown and progress/)).toBeInTheDocument()
     })
 
@@ -54,7 +54,7 @@ describe('TasksTab', () => {
 
       render(<TasksTab />)
 
-      expect(screen.getByText('Tasks')).toBeInTheDocument()
+      expect(screen.getByText('Activity')).toBeInTheDocument()
     })
 
     test('shows progress count in header', () => {

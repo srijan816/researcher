@@ -101,7 +101,7 @@ describe('SessionsPanel', () => {
   test('renders panel with heading', () => {
     render(<SessionsPanel sessions={mockSessions} />)
 
-    expect(screen.getByText('Sessions')).toBeInTheDocument()
+    expect(screen.getByText('Library')).toBeInTheDocument()
   })
 
   test('renders new session button', () => {
@@ -113,8 +113,8 @@ describe('SessionsPanel', () => {
   test('renders session list grouped by date', () => {
     render(<SessionsPanel sessions={mockSessions} />)
 
-    expect(screen.getByText('Today')).toBeInTheDocument()
-    expect(screen.getByText('Yesterday')).toBeInTheDocument()
+    expect(screen.getByText('TODAY')).toBeInTheDocument()
+    expect(screen.getByText('YESTERDAY')).toBeInTheDocument()
     expect(screen.getByText('First Session')).toBeInTheDocument()
     expect(screen.getByText('Second Session')).toBeInTheDocument()
   })
@@ -187,7 +187,7 @@ describe('SessionsPanel', () => {
 
     // SidePanel has forceMount, so DOM exists but should be hidden
     // Check that sessions heading is not accessible when closed
-    const sessionsHeading = screen.queryByText('Sessions')
+    const sessionsHeading = screen.queryByText('Library')
     // Panel content may be in DOM due to forceMount but not visible
     expect(sessionsHeading).toBeInTheDocument() // forceMount keeps it in DOM
   })

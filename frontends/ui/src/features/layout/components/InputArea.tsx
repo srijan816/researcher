@@ -31,8 +31,8 @@ export type ConnectionMode = 'sse' | 'websocket'
 export type InputAreaVariant = 'dock' | 'hero'
 
 const RESEARCH_DEPTH_OPTIONS: Array<{ value: ResearchDepth; label: string; title: string }> = [
-  { value: 'shallow', label: 'Shallow', title: 'Target 10-20 sources' },
-  { value: 'medium', label: 'Medium', title: 'Target 32-64 sources, faster thinking-off research' },
+  { value: 'shallow', label: 'Quick', title: 'Target 10-20 sources' },
+  { value: 'medium', label: 'Standard', title: 'Target 32-64 sources, faster thinking-off research' },
   { value: 'deeper', label: 'Deeper', title: 'Target 32-64 sources' },
   { value: 'deep', label: 'Deep', title: 'Target 90-150+ sources' },
 ]
@@ -66,7 +66,7 @@ interface InputAreaProps {
  * - Shows visual indicator
  */
 export const InputArea: FC<InputAreaProps> = memo(function InputArea({
-  placeholder = 'Check data sources and ask a research question...',
+  placeholder = 'Ask a research question\u2026',
   isAuthenticated = false,
   connectionMode = 'websocket',
   variant = 'dock',
@@ -470,7 +470,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
         direction="col"
         className={`
           relative border border-base p-3 shadow-sm transition-colors sm:p-4
-          ${isHero ? 'deep-home-search' : 'bg-surface-raised rounded-lg'}
+          ${isHero ? 'deep-home-search' : 'gx-composer'}
           ${isDisabledByAuth ? 'opacity-60' : ''}
           ${isDragging && isUnsupportedDrag ? 'border-error border-dashed' : isDragging ? 'border-brand border-dashed' : ''}
         `}
@@ -552,9 +552,9 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                       type="button"
                       onClick={() => setResearchDepth(option.value)}
                       disabled={disabled || isResearchSessionInProgress}
-                      className={`h-8 min-w-0 rounded px-2 text-[11px] font-medium leading-none transition-colors sm:h-6 sm:px-1 sm:text-xs ${
+                      className={`h-8 min-w-0 rounded-full px-2 text-[11px] font-medium leading-none transition-colors sm:h-6 sm:px-1 sm:text-xs ${
                         selected
-                          ? 'bg-surface-sunken text-primary shadow-sm'
+                          ? 'bg-[rgba(90,167,255,0.16)] text-[#8AC3FF]'
                           : 'text-subtle hover:bg-surface-raised hover:text-primary'
                       } disabled:cursor-not-allowed disabled:opacity-60`}
                       aria-label={`Research mode: ${option.label}`}
@@ -590,9 +590,9 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                       type="button"
                       onClick={() => setResearchEngine(option.value)}
                       disabled={disabled || isResearchSessionInProgress}
-                      className={`h-8 min-w-0 rounded px-2 text-[11px] font-medium leading-none transition-colors sm:h-6 sm:px-1 sm:text-xs ${
+                      className={`h-8 min-w-0 rounded-full px-2 text-[11px] font-medium leading-none transition-colors sm:h-6 sm:px-1 sm:text-xs ${
                         selected
-                          ? 'bg-surface-sunken text-primary shadow-sm'
+                          ? 'bg-[rgba(90,167,255,0.16)] text-[#8AC3FF]'
                           : 'text-subtle hover:bg-surface-raised hover:text-primary'
                       } disabled:cursor-not-allowed disabled:opacity-60`}
                       aria-label={`Research engine: ${option.label}`}
@@ -748,6 +748,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                 disabled={!message.trim() || disabled}
                 aria-label={isResponseMode ? 'Send response' : 'Send message'}
                 title="Send query"
+                className="rounded-full"
               >
                 {isLoading ? <span className="animate-pulse">...</span> : <Paperplane className="h-4 w-4" />}
               </Button>

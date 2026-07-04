@@ -4,10 +4,8 @@
 /**
  * TaskCard Component
  *
- * Row-like card displaying a single task/todo item with:
- * - KUI Checkbox (checked when complete, not clickable)
- * - Task name in label/semibold/md text
- * - Status badge with color based on status
+ * Timeline entry for a single task/todo item with a progress dot,
+ * one-line summary, and a status badge.
  *
  * SSE Events: artifact.update with type: "todo"
  */
@@ -15,7 +13,7 @@
 'use client'
 
 import { type FC } from 'react'
-import { Flex, Text, Checkbox, Badge } from '@/adapters/ui'
+import { Flex, Text, Badge } from '@/adapters/ui'
 import { LoadingSpinner } from '@/adapters/ui/icons'
 import type { DeepResearchTodo, DeepResearchTodoStatus } from '@/features/chat/types'
 
@@ -65,33 +63,29 @@ const getStatusText = (status: DeepResearchTodoStatus): string => {
 }
 
 /**
- * Card showing a single task's checkbox, name, and status badge.
+ * Timeline row showing a single task: status dot on a vertical line,
+ * one-line summary, and a status badge (spinner while in progress).
  */
 export const TaskCard: FC<TaskCardProps> = ({ todo }) => {
   const isComplete = todo.status === 'completed'
+  const isActive = todo.status === 'in_progress'
   const badgeColor = getBadgeColor(todo.status)
   const statusText = getStatusText(todo.status)
 
   return (
-    <Flex
-      align="center"
-      gap="3"
-      className={`
-        p-3 rounded-lg border border-base
-        ${isComplete ? 'opacity-70' : ''}
-      `}
-    >
-      {/* Checkbox - checked when complete, always disabled (read-only) */}
-      <Checkbox
-        checked={isComplete}
-        disabled
-        aria-label={`Task: ${todo.content}`}
+    <Flex align="start" gap="3" className="py-1.5 pl-0">
+      {/* Timeline dot: filled when done, pulsing when active, faint when pending */}
+      <span
+        className={`gx-timeline-dot ${
+          isComplete ? 'gx-timeline-dot--done' : isActive ? 'gx-timeline-dot--active' : ''
+        }`}
+        aria-hidden="true"
       />
 
       {/* Task Name */}
       <Text
-        kind="label/semibold/md"
-        className={`flex-1 min-w-0 ${isComplete ? 'line-through text-subtle' : 'text-primary'}`}
+        kind="body/regular/md"
+        className={`flex-1 min-w-0 ${isComplete ? 'text-subtle' : isActive ? 'text-primary' : 'text-secondary opacity-70'}`}
       >
         {todo.content}
       </Text>

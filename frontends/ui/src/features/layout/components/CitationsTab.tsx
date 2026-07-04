@@ -105,13 +105,11 @@ export const CitationsTab: FC = () => {
           </Text>
         </Flex>
       ) : (
-        <Flex direction="col" gap="2" className="flex-1 min-h-0 overflow-y-auto">
+        <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-1 gap-2 overflow-y-auto lg:grid-cols-2">
           {filteredCitations.map((citation) => (
-            <div key={citation.id} className="shrink-0">
-              <CitationCard citation={citation} />
-            </div>
+            <CitationCard key={citation.id} citation={citation} />
           ))}
-        </Flex>
+        </div>
       )}
     </Flex>
   )

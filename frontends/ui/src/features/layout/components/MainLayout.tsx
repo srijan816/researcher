@@ -5,8 +5,9 @@
  * MainLayout Component
  *
  * The main application layout container that orchestrates:
- * - AppBar (top)
- * - SessionsPanel (left, overlay)
+ * - NavRail (left, full-height primary chrome)
+ * - Contextual strip (top, only inside an active session)
+ * - SessionsPanel "Library" (left, slides next to the rail)
  * - ChatArea + InputArea (center, responsive width)
  * - ResearchPanel (right, pushes content - takes 60% when open)
  * - DataSourcesPanel / SettingsPanel / DocsPanel (right, overlay)
@@ -18,9 +19,9 @@
 
 import { type FC, useCallback, useEffect, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Flex } from '@/adapters/ui'
+import { Flex, Text } from '@/adapters/ui'
 import { useReducedMotion } from '@/hooks/use-reduced-motion'
-import { AppBar } from './AppBar'
+import { NavRail } from './NavRail'
 import { SessionsPanel } from './SessionsPanel'
 import { ChatArea } from './ChatArea'
 import { InputArea } from './InputArea'
@@ -51,7 +52,7 @@ interface MainLayoutProps {
   isAuthenticated?: boolean
   /** Whether authentication is required (false = using default user) */
   authRequired?: boolean
-  /** User information for AppBar */
+  /** User information for the nav rail */
   user?: {
     name?: string
     email?: string
@@ -199,16 +200,16 @@ export const MainLayout: FC<MainLayoutProps> = ({
 
   const showHomeExperience =
     isAuthenticated && currentUserId === 'srijan' && !hasDisplayableMessages && !isResearchPanelOpen
+  const showContextStrip = isAuthenticated && !showHomeExperience && hasDisplayableMessages
+
   return (
     <Flex
-      direction="col"
       className={`deep-app-shell h-[100dvh] w-full overflow-hidden ${
         showHomeExperience ? 'deep-app-shell--home' : ''
       }`}
     >
-      {/* AppBar - Fixed at top */}
-      <AppBar
-        sessionTitle={currentConversation?.title || 'New Session'}
+      {/* Left navigation rail - primary chrome */}
+      <NavRail
         isAuthenticated={isAuthenticated}
         authRequired={authRequired}
         user={user}
@@ -216,6 +217,20 @@ export const MainLayout: FC<MainLayoutProps> = ({
         onSignIn={onSignIn}
         onSignOut={onSignOut}
       />
+
+      <Flex direction="col" className="min-w-0 flex-1 overflow-hidden">
+      {/* Contextual strip - only inside an active session */}
+      {showContextStrip && (
+        <div
+          className="deep-context-strip flex h-[var(--header-height)] shrink-0 items-center border-b border-base px-4"
+          data-testid="context-strip"
+        >
+          <span className="gx-mono mr-3 hidden shrink-0 sm:inline">SESSION</span>
+          <Text kind="body/regular/md" className="min-w-0 flex-1 truncate text-secondary">
+            {currentConversation?.title || 'New Session'}
+          </Text>
+        </div>
+      )}
 
       {/* Main Content Area - using explicit widths instead of flex for smoother animation */}
       <div className="relative flex min-w-0 flex-1 overflow-hidden">
@@ -325,6 +340,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
           </button>
         </div>
       )}
+      </Flex>
     </Flex>
   )
 }

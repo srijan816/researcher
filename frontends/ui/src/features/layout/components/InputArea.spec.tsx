@@ -179,8 +179,8 @@ describe('InputArea', () => {
     render(<InputArea isAuthenticated={true} />)
 
     expect(screen.getByRole('group', { name: /research mode/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^research mode: shallow$/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^research mode: medium$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^research mode: quick$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^research mode: standard$/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^research mode: deeper$/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^research mode: deep$/i })).toBeInTheDocument()
   })
@@ -189,7 +189,7 @@ describe('InputArea', () => {
     const user = userEvent.setup()
     render(<InputArea isAuthenticated={true} />)
 
-    await user.click(screen.getByRole('button', { name: /^research mode: shallow$/i }))
+    await user.click(screen.getByRole('button', { name: /^research mode: quick$/i }))
 
     expect(mockSetResearchDepth).toHaveBeenCalledWith('shallow')
   })
@@ -198,7 +198,7 @@ describe('InputArea', () => {
     const user = userEvent.setup()
     render(<InputArea isAuthenticated={true} />)
 
-    await user.click(screen.getByRole('button', { name: /^research mode: medium$/i }))
+    await user.click(screen.getByRole('button', { name: /^research mode: standard$/i }))
 
     expect(mockSetResearchDepth).toHaveBeenCalledWith('medium')
   })
@@ -206,7 +206,7 @@ describe('InputArea', () => {
   test('renders text area with default placeholder', () => {
     render(<InputArea isAuthenticated={true} />)
 
-    expect(screen.getByPlaceholderText('Check data sources and ask a research question...')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Ask a research question\u2026')).toBeInTheDocument()
   })
 
   test('renders with custom placeholder', () => {

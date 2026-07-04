@@ -17,8 +17,9 @@
 'use client'
 
 import { type FC, memo, useRef, useEffect, useCallback, useState, useMemo } from 'react'
-import { Flex, Text, Button } from '@/adapters/ui'
+import { Flex, Text, Button, Logo } from '@/adapters/ui'
 import { Document, Lock } from '@/adapters/ui/icons'
+import { StarfieldAnimation } from '@/shared/components/StarfieldAnimation'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore, AgentPrompt, AgentResponse, ErrorBanner, FileUploadBanner, DeepResearchBanner, UserMessage, ChatThinking } from '@/features/chat'
 import type { ChatMessage } from '@/features/chat'
@@ -137,7 +138,7 @@ export const ChatArea: FC<ChatAreaProps> = memo(function ChatArea({
           homeExperience={homeExperience}
         />
       ) : (
-        <Flex direction="col" gap="4" className="mx-auto w-full max-w-3xl px-4 pt-4 pb-24">
+        <Flex direction="col" gap="4" className="mx-auto w-full max-w-3xl px-4 pt-6 pb-24 leading-[1.7]">
           {displayableMessages.map((message, index) => {
             const isUserMessage = message.messageType === 'user' || message.role === 'user'
             const messageSteps = isUserMessage ? getStepsForUserMessage(message.id) : []
@@ -381,7 +382,7 @@ const WelcomeState: FC<WelcomeStateProps> = ({
             <Lock />
           </span>
           <Text kind="title/lg" className="text-primary">
-            Alpha Research
+            GenAlphAI Research
           </Text>
           <Text kind="body/regular/md" className="text-subtle">
             Sign in to start a focused research session.
@@ -403,44 +404,50 @@ const WelcomeState: FC<WelcomeStateProps> = ({
     )
   }
 
-  // Logged in state - ready to chat
+  // Logged in state - centered answer-engine hero
   return (
     <Flex
       direction="col"
       align="center"
       justify={homeExperience ? 'end' : 'center'}
-      className={homeExperience ? 'relative flex-none px-4 pb-5 pt-10 sm:pt-14' : 'relative flex-1 p-8'}
+      className={homeExperience ? 'relative flex-none px-4 pb-5 pt-16 sm:pt-24' : 'relative flex-1 p-8'}
     >
+      {homeExperience && (
+        <div className="pointer-events-none absolute inset-0 opacity-30" aria-hidden="true">
+          <StarfieldAnimation />
+        </div>
+      )}
       <Flex
         direction="col"
         align="center"
         gap={homeExperience ? '3' : '4'}
         className={`relative z-10 w-full text-center ${
-          homeExperience ? 'max-w-4xl' : 'max-w-2xl'
+          homeExperience ? 'max-w-3xl' : 'max-w-2xl'
         }`}
       >
+        <span className="text-[#F3EFE6]" aria-hidden="true">
+          <Logo kind="horizontal" size="small" />
+        </span>
         <Text
           kind="title/lg"
           className={homeExperience ? 'deep-home-heading text-primary' : 'text-primary'}
         >
-          What should we research?
+          Research anything.
         </Text>
         <Text
           kind="body/regular/md"
           className={homeExperience ? 'deep-home-subtitle whitespace-normal px-4 text-subtle' : 'text-subtle'}
         >
-          Ask a question, compare sources, or turn a messy topic into a cited report.
+          Agentic deep research: plans, searches, verifies, writes &mdash; with receipts.
         </Text>
         <Flex align="center" justify="center" gap="2" className="mt-2 flex-wrap">
-          {['Market map', 'Technical brief', 'Source-backed answer', 'Long-form report'].map((label) => (
-            <span
-              key={label}
-              className={
-                homeExperience
-                  ? 'rounded-md border border-base bg-surface-raised-30 px-3 py-1 text-sm text-subtle'
-                  : 'rounded-md border border-base bg-surface-raised px-3 py-1 text-sm text-subtle'
-              }
-            >
+          {[
+            'Map the small-modular-reactor supply chain',
+            'Compare vector databases for RAG at scale',
+            'What changed in EU AI Act enforcement this year?',
+            'State of solid-state batteries, with sources',
+          ].map((label) => (
+            <span key={label} className="gx-chip">
               {label}
             </span>
           ))}
