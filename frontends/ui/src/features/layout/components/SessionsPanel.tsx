@@ -459,7 +459,7 @@ const SessionItem: FC<SessionItemProps> = ({
         ${isBusy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}
         ${
           isSelected
-            ? 'bg-surface-raised border-l-[#5AA7FF]'
+            ? 'bg-surface-raised border-l-[#F43F5E]'
             : 'border-l-transparent hover:bg-surface-raised-50 bg-transparent'
         }
       `}

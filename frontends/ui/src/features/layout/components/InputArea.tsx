@@ -22,8 +22,8 @@ import { useCancelDeepResearchJob, useWebSocketChat, useChatStore, useIsCurrentS
 import { useLayoutStore } from '../store'
 import { useAppConfig } from '@/shared/context'
 import { useFileUpload, useFileDragDrop, useFileUploadBanners } from '@/features/documents'
-import { Globe, Document, Paperclip, Paperplane, Cancel, StopCircle, Clock } from '@/adapters/ui/icons'
-import type { ResearchDepth, ResearchEngine } from '../types'
+import { Globe, Document, Image, Layers, Paperclip, Paperplane, Cancel, StopCircle, Clock } from '@/adapters/ui/icons'
+import type { ResearchDepth } from '../types'
 import { BatchResearchQueue } from './BatchResearchQueue'
 
 /** Connection mode for the chat */
@@ -35,11 +35,6 @@ const RESEARCH_DEPTH_OPTIONS: Array<{ value: ResearchDepth; label: string; title
   { value: 'medium', label: 'Standard', title: 'Target 32-64 sources, faster thinking-off research' },
   { value: 'deeper', label: 'Deeper', title: 'Target 32-64 sources' },
   { value: 'deep', label: 'Deep', title: 'Target 90-150+ sources' },
-]
-
-const RESEARCH_ENGINE_OPTIONS: Array<{ value: ResearchEngine; label: string; title: string }> = [
-  { value: 'aiq', label: 'AIQ', title: 'Use the standard AIQ deep research pipeline' },
-  { value: 'claude_code', label: 'Claude Code', title: 'Use the Claude Code research lane with run-folder artifacts' },
 ]
 
 interface InputAreaProps {
@@ -210,6 +205,10 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
 
   const { sendMessage, isLoading, respondToInteraction, pendingInteraction } = wsChat
 
+  // Composer wrapper ref — used to focus the inner textarea when a
+  // suggestion chip pushes draft text into the composer.
+  const composerRef = useRef<HTMLDivElement>(null)
+
   // Register respondToInteraction in the store so sibling components (e.g. AgentPrompt) can use it
   const setRespondToInteractionFn = useChatStore((state) => state.setRespondToInteractionFn)
   useEffect(() => {
@@ -228,7 +227,19 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   const researchDepth = useLayoutStore((s) => s.researchDepth)
   const setResearchDepth = useLayoutStore((s) => s.setResearchDepth)
   const researchEngine = useLayoutStore((s) => s.researchEngine)
-  const setResearchEngine = useLayoutStore((s) => s.setResearchEngine)
+  const includeImages = useLayoutStore((s) => s.includeImages)
+  const setIncludeImages = useLayoutStore((s) => s.setIncludeImages)
+  const composerDraft = useLayoutStore((s) => s.composerDraft)
+  const setComposerDraft = useLayoutStore((s) => s.setComposerDraft)
+
+  // Consume one-shot drafts from suggestion chips: type the text into the
+  // input and focus it. Never auto-submits.
+  useEffect(() => {
+    if (composerDraft == null) return
+    setMessage(composerDraft)
+    setComposerDraft(null)
+    composerRef.current?.querySelector('textarea')?.focus()
+  }, [composerDraft, setComposerDraft])
 
   // Check if we're in response mode (responding to a HITL prompt)
   const isResponseMode = !!pendingInteraction
@@ -347,8 +358,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
     })
 
     setMessage('')
-    setResearchPanelTab('batch')
-    openRightPanel('research')
+    openRightPanel('batch-queue')
   }, [
     addFileUploadStatusCard,
     disabled,
@@ -367,7 +377,6 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
     isResponseMode,
     sessionFiles,
     setMessage,
-    setResearchPanelTab,
   ])
 
   const handleKeyDown = useCallback(
@@ -468,6 +477,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
     >
       <Flex
         direction="col"
+        ref={composerRef}
         className={`
           relative border border-base p-3 shadow-sm transition-colors sm:p-4
           ${isHero ? 'deep-home-search' : 'gx-composer'}
@@ -528,91 +538,58 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
           justify="between"
           className={`gap-2 max-sm:!flex-col max-sm:!items-stretch ${isHero ? 'mt-2' : 'mt-3'}`}
         >
-          <div className="flex min-w-0 flex-wrap items-center gap-2 max-sm:w-full max-sm:flex-col max-sm:items-stretch">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 max-sm:w-full">
+            {/* Research depth pills */}
             <div
-              className={`flex min-w-0 flex-1 items-center gap-2 rounded-md border border-accent-primary p-1 max-sm:w-full max-sm:flex-col max-sm:items-stretch max-sm:p-2 sm:flex-none ${
-                isHero ? 'bg-surface-raised-30' : 'bg-surface-base'
-              }`}
+              className="flex min-w-0 items-center gap-0.5 rounded-full border border-base bg-surface-raised-30 p-0.5"
+              role="group"
+              aria-label="Research depth"
             >
-              <span className="shrink-0 px-1 text-[11px] font-semibold uppercase tracking-normal text-accent-primary max-sm:px-0">
-                Mode
-              </span>
-              <div
-                className={`grid min-w-0 flex-1 grid-cols-2 gap-1 rounded border border-base p-0.5 sm:w-[16.5rem] sm:flex-none sm:grid-cols-4 sm:gap-0 ${
-                  isHero ? 'bg-surface-raised-30' : 'bg-surface-base'
-                }`}
-                role="group"
-                aria-label="Research mode"
-              >
-                {RESEARCH_DEPTH_OPTIONS.map((option) => {
-                  const selected = researchDepth === option.value
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setResearchDepth(option.value)}
-                      disabled={disabled || isResearchSessionInProgress}
-                      className={`h-8 min-w-0 rounded-full px-2 text-[11px] font-medium leading-none transition-colors sm:h-6 sm:px-1 sm:text-xs ${
-                        selected
-                          ? 'bg-[rgba(90,167,255,0.16)] text-[#8AC3FF]'
-                          : 'text-subtle hover:bg-surface-raised hover:text-primary'
-                      } disabled:cursor-not-allowed disabled:opacity-60`}
-                      aria-label={`Research mode: ${option.label}`}
-                      aria-pressed={selected}
-                      title={option.title}
-                    >
-                      <span className="block min-w-0 truncate">{option.label}</span>
-                    </button>
-                  )
-                })}
-              </div>
+              <Layers className="ml-2 h-3.5 w-3.5 shrink-0 text-subtle" aria-hidden="true" />
+              {RESEARCH_DEPTH_OPTIONS.map((option) => {
+                const selected = researchDepth === option.value
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setResearchDepth(option.value)}
+                    disabled={disabled || isResearchSessionInProgress}
+                    className={`h-7 min-w-0 rounded-full px-2.5 text-xs font-medium leading-none transition-colors ${
+                      selected
+                        ? 'bg-[rgba(244,63,94,0.16)] text-[#FB7185]'
+                        : 'text-subtle hover:bg-surface-raised hover:text-primary'
+                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                    aria-label={`Research depth: ${option.label}`}
+                    aria-pressed={selected}
+                    title={option.title}
+                  >
+                    <span className="block min-w-0 truncate">{option.label}</span>
+                  </button>
+                )
+              })}
             </div>
-            <div
-              className={`flex min-w-0 items-center gap-2 rounded-md border border-base p-1 max-sm:w-full max-sm:flex-col max-sm:items-stretch max-sm:p-2 ${
-                isHero ? 'bg-surface-raised-30' : 'bg-surface-base'
-              }`}
+
+            {/* Images toggle — request generated visuals in the report */}
+            <button
+              type="button"
+              onClick={() => setIncludeImages(!includeImages)}
+              disabled={disabled || isResearchSessionInProgress}
+              className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium leading-none transition-colors ${
+                includeImages
+                  ? 'border-[#F43F5E] bg-[rgba(244,63,94,0.16)] text-[#FB7185]'
+                  : 'border-base text-subtle hover:bg-surface-raised hover:text-primary'
+              } disabled:cursor-not-allowed disabled:opacity-60`}
+              aria-label="Toggle generated images"
+              aria-pressed={includeImages}
+              title="Blend up to 3 generated visuals into the report"
             >
-              <span className="shrink-0 px-1 text-[11px] font-semibold uppercase tracking-normal text-subtle max-sm:px-0">
-                Engine
-              </span>
-              <div
-                className={`grid min-w-0 flex-1 grid-cols-2 rounded border border-base p-0.5 sm:w-[10.5rem] sm:flex-none ${
-                  isHero ? 'bg-surface-raised-30' : 'bg-surface-base'
-                }`}
-                role="group"
-                aria-label="Research engine"
-              >
-                {RESEARCH_ENGINE_OPTIONS.map((option) => {
-                  const selected = researchEngine === option.value
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setResearchEngine(option.value)}
-                      disabled={disabled || isResearchSessionInProgress}
-                      className={`h-8 min-w-0 rounded-full px-2 text-[11px] font-medium leading-none transition-colors sm:h-6 sm:px-1 sm:text-xs ${
-                        selected
-                          ? 'bg-[rgba(90,167,255,0.16)] text-[#8AC3FF]'
-                          : 'text-subtle hover:bg-surface-raised hover:text-primary'
-                      } disabled:cursor-not-allowed disabled:opacity-60`}
-                      aria-label={`Research engine: ${option.label}`}
-                      aria-pressed={selected}
-                      title={option.title}
-                    >
-                      <span className="block min-w-0 truncate">{option.label}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-            <span className="hidden rounded-md border border-base bg-surface-base px-2 py-1 text-xs text-subtle sm:inline-flex">
-              Web
+              <Image className="h-3.5 w-3.5" aria-hidden="true" />
+              Images
+            </button>
+
+            <span className="gx-kbd-hint hidden md:inline" aria-hidden="true">
+              &#9166; to research
             </span>
-            {attachedFilesCount > 0 && (
-              <span className="rounded-md border border-base bg-surface-base px-2 py-1 text-xs text-subtle">
-                Files
-              </span>
-            )}
           </div>
 
           {/* Right Actions: Counters, Attach, Research, Submit */}

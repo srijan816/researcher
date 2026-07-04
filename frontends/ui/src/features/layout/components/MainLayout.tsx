@@ -29,6 +29,8 @@ import { ResearchPanel } from './ResearchPanel'
 import { DataSourcesPanel } from './DataSourcesPanel'
 import { SettingsPanel } from './SettingsPanel'
 import { DocsPanel } from './DocsPanel'
+import { BatchQueuePanel } from './BatchQueuePanel'
+import { AccountPanel } from './AccountPanel'
 import { useChatStore, useDeepResearch, useBatchResearchQueue, NoSourcesBanner } from '@/features/chat'
 import { hasActiveDeepResearchJob } from '@/features/chat/lib/session-activity'
 import { deleteAllConversationSnapshots, deleteConversationSnapshot } from '@/adapters/api'
@@ -288,6 +290,12 @@ export const MainLayout: FC<MainLayoutProps> = ({
 
       {/* Docs Panel (Right) - Overlay */}
       <DocsPanel />
+
+      {/* Batch Research Queue Panel (Right) - Overlay */}
+      <BatchQueuePanel />
+
+      {/* Account Panel (Right) - Overlay */}
+      <AccountPanel />
 
       {/* Mobile Bottom Navigation Bar */}
       {isMobileViewport && isAuthenticated && (

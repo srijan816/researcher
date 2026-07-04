@@ -197,12 +197,12 @@ describe('ChatThinking', () => {
       expect(screen.getByText('Tool Step')).toBeVisible()
     })
 
-    test('renders expandable Claude Code artifact previews', async () => {
+    test('renders expandable research artifact previews', async () => {
       const user = userEvent.setup()
       const steps = [
         createStep({
           functionName: 'claude_artifact:/claude_research/job-1/logs/progress.md:123',
-          displayName: 'Claude Code updated progress.md',
+          displayName: 'GenAlphAI updated progress.md',
           content: 'File: /claude_research/job-1/logs/progress.md\n\n- Planning started.',
         }),
       ]

@@ -18,7 +18,6 @@ import type {
   DataSourcesPanelTab,
   ThemeMode,
   ResearchDepth,
-  ResearchEngine,
 } from './types'
 import { createDataSourcesClient, type DataSourceFromAPI } from '@/adapters/api'
 
@@ -33,6 +32,8 @@ const initialState: LayoutState = {
   enabledDataSourceIds: [], // Start empty, populated when data sources are fetched
   researchDepth: 'deeper',
   researchEngine: 'aiq',
+  includeImages: false,
+  composerDraft: null,
   theme: 'dark',
   availableDataSources: null,
   knowledgeLayerAvailable: false, // Default to false until API confirms availability
@@ -89,8 +90,11 @@ export const useLayoutStore = create<LayoutStore>()(
       setResearchDepth: (depth: ResearchDepth) =>
         set({ researchDepth: depth }, false, 'setResearchDepth'),
 
-      setResearchEngine: (engine: ResearchEngine) =>
-        set({ researchEngine: engine }, false, 'setResearchEngine'),
+      setIncludeImages: (include: boolean) =>
+        set({ includeImages: include }, false, 'setIncludeImages'),
+
+      setComposerDraft: (draft: string | null) =>
+        set({ composerDraft: draft }, false, 'setComposerDraft'),
 
       setTheme: (_theme: ThemeMode) => set({ theme: 'dark' }, false, 'setTheme'),
 

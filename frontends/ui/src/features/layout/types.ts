@@ -15,14 +15,17 @@ export type ThemeMode = 'light' | 'dark' | 'system'
 /** Research source/depth tiers */
 export type ResearchDepth = 'shallow' | 'medium' | 'deeper' | 'deep'
 
-/** Research execution engine options */
-export type ResearchEngine = 'aiq' | 'claude_code'
+/**
+ * Research execution engine. The UI always uses the default engine; the type
+ * is retained only for API compatibility with persisted sessions.
+ */
+export type ResearchEngine = 'aiq'
 
 /** Panels that can be opened on the right side */
-export type RightPanelType = 'research' | 'data-sources' | 'settings' | 'docs' | null
+export type RightPanelType = 'research' | 'data-sources' | 'settings' | 'docs' | 'batch-queue' | 'account' | null
 
 /** Tabs within the Research panel */
-export type ResearchPanelTab = 'plan' | 'batch' | 'tasks' | 'thinking' | 'citations' | 'report'
+export type ResearchPanelTab = 'plan' | 'tasks' | 'thinking' | 'citations' | 'report'
 
 /** Tabs within the DataSources panel */
 export type DataSourcesPanelTab = 'connections' | 'files'
@@ -41,8 +44,15 @@ export interface LayoutState {
   enabledDataSourceIds: string[]
   /** Selected research source/depth tier */
   researchDepth: ResearchDepth
-  /** Selected research execution engine */
+  /** Selected research execution engine (always the default engine) */
   researchEngine: ResearchEngine
+  /** Whether generated visuals should be blended into the report */
+  includeImages: boolean
+  /**
+   * One-shot draft text pushed into the composer (e.g. from suggestion chips).
+   * The composer consumes it and resets it to null.
+   */
+  composerDraft: string | null
   /** Current theme mode */
   theme: ThemeMode
   /** Dynamic data sources from API (null = not loaded yet) */
@@ -83,8 +93,10 @@ export interface LayoutActions {
   setEnabledDataSources: (ids: string[]) => void
   /** Set the research source/depth tier */
   setResearchDepth: (depth: ResearchDepth) => void
-  /** Set the research execution engine */
-  setResearchEngine: (engine: ResearchEngine) => void
+  /** Set whether generated visuals are requested with research */
+  setIncludeImages: (include: boolean) => void
+  /** Push draft text into the composer (chips); null clears the request */
+  setComposerDraft: (draft: string | null) => void
   /** Set the theme mode */
   setTheme: (theme: ThemeMode) => void
   /** Fetch data sources from API. Only web_search is enabled by default */

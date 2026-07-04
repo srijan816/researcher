@@ -17,8 +17,8 @@ import { Flex, Button, SegmentedControl, Spinner, Text } from '@/adapters/ui'
 import { Close, Generate, StopCircle } from '@/adapters/ui/icons'
 import { useCancelDeepResearchJob, useChatStore, useLoadJobData } from '@/features/chat'
 import { useReducedMotion } from '@/hooks/use-reduced-motion'
+import { sanitizeEngineText } from '@/shared/utils/display-text'
 import { useLayoutStore } from '../store'
-import { BatchResearchQueue } from './BatchResearchQueue'
 import { PlanTab } from './PlanTab'
 import { TasksTab } from './TasksTab'
 import { ThinkingTab } from './ThinkingTab'
@@ -65,7 +65,6 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
   const deepResearchJobId = useChatStore((state) => state.deepResearchJobId)
   const deepResearchStreamLoaded = useChatStore((state) => state.deepResearchStreamLoaded)
   const deepResearchStatus = useChatStore((state) => state.deepResearchStatus)
-  const deepResearchEngine = useChatStore((state) => state.deepResearchEngine)
   const deepResearchActivity = useChatStore((state) => state.deepResearchActivity)
   const deepResearchAgents = useChatStore((state) => state.deepResearchAgents)
   const deepResearchToolCalls = useChatStore((state) => state.deepResearchToolCalls)
@@ -98,7 +97,6 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
     const completedTools = deepResearchToolCalls.filter((tool) => tool.status === 'complete').length
     return { runningAgents, completedAgents, runningTools, completedTools, files: deepResearchFiles.length }
   }, [deepResearchAgents, deepResearchToolCalls, deepResearchFiles])
-  const researchEngineLabel = deepResearchEngine === 'claude_code' ? 'Claude Code' : 'AIQ'
 
   const handleClose = useCallback(() => {
     closeRightPanel()
@@ -187,7 +185,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
         } ${
           !showToggle && !isOpen ? 'hidden' : ''
         } ${
-          isAuthenticated ? 'cursor-pointer hover:border-[#5AA7FF]' : 'cursor-not-allowed opacity-50'
+          isAuthenticated ? 'cursor-pointer hover:border-[#F43F5E]' : 'cursor-not-allowed opacity-50'
         }`}
         style={{ height: 'calc(var(--spacing) * 38)' }}
         aria-label={isOpen ? 'Close research panel' : 'Open research panel'}
@@ -200,7 +198,9 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
           style={{ top: 'calc(var(--spacing) * 3)', width: 'calc(var(--spacing) * 6)', height: 'calc(var(--spacing) * 6)' }}
         >
           {isDeepResearchStreaming ? (
-            <Spinner size="small" aria-label="Researching" />
+            <span className="gx-dots" role="status" aria-label="Researching">
+              <span /><span /><span />
+            </span>
           ) : (
             <Generate className="h-[calc(var(--spacing)*6)] w-[calc(var(--spacing)*6)]" />
           )}
@@ -274,7 +274,6 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
               size="medium"
               items={[
                 { value: 'plan', children: 'Plan' },
-                { value: 'batch', children: 'Batch' },
                 { value: 'tasks', children: 'Activity' },
                 { value: 'thinking', children: 'Thinking' },
                 { value: 'citations', children: 'Sources' },
@@ -302,19 +301,21 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
             <Flex align="center" justify="between" gap="3" className="min-w-0">
               <Flex align="center" gap="3" className="min-w-0 flex-1">
                 {isDeepResearchStreaming ? (
-                  <Spinner size="small" aria-label="Research activity" />
+                  <span className="gx-dots shrink-0" role="status" aria-label="Research activity">
+                    <span /><span /><span />
+                  </span>
                 ) : (
                   <Generate className="h-4 w-4 shrink-0 text-subtle" aria-hidden="true" />
                 )}
                 <Flex direction="col" gap="0" className="min-w-0 flex-1">
                   <Text kind="label/semibold/sm" className="truncate text-primary">
-                    {deepResearchActivity?.message ||
+                    {sanitizeEngineText(deepResearchActivity?.message) ||
                       (deepResearchStatus === 'submitted'
-                        ? `${researchEngineLabel} research job queued`
-                        : `${researchEngineLabel} research activity`)}
+                        ? 'Research job queued'
+                        : 'Research activity')}
                   </Text>
                   <Text kind="body/regular/xs" className="truncate text-subtle">
-                    {deepResearchActivity?.detail || 'Waiting for the next research event'}
+                    {sanitizeEngineText(deepResearchActivity?.detail) || 'Waiting for the next research event'}
                   </Text>
                 </Flex>
               </Flex>
@@ -358,7 +359,6 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
           ) : (
             <>
               {researchPanelTab === 'plan' && <PlanTab />}
-              {researchPanelTab === 'batch' && <BatchResearchQueue />}
               {researchPanelTab === 'tasks' && <TasksTab />}
               {researchPanelTab === 'thinking' && <ThinkingTab />}
               {researchPanelTab === 'citations' && <CitationsTab />}

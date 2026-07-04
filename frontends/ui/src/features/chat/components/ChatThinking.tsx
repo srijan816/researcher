@@ -19,6 +19,7 @@ import { CheckCircle, Warning, Clock } from '@/adapters/ui/icons'
 import { formatTime } from '@/shared/utils/format-time'
 import type { ThinkingStep } from '../types'
 import { extractFunctionInput, extractFunctionOutput } from '../lib/intermediate-step-parser'
+import { sanitizeEngineText } from '@/shared/utils/display-text'
 
 export interface ChatThinkingProps {
   /** Array of thinking steps to display */
@@ -161,7 +162,7 @@ export const ChatThinking: FC<ChatThinkingProps> = ({
               >
                 <Flex align="center" justify="between" className="w-full">
                   <Text kind="body/regular/sm" className="text-primary min-w-0 truncate">
-                    {step.displayName}
+                    {sanitizeEngineText(step.displayName)}
                   </Text>
                   <Text kind="body/regular/xs" className="text-secondary shrink-0 pl-4">
                     {formatTime(step.timestamp)}

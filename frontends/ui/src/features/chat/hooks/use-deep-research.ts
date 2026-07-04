@@ -748,7 +748,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
                 const stepId = addThinkingStep({
                   category: 'agents',
                   functionName: `claude_artifact:${filename}:${timestamp || Date.now()}`,
-                  displayName: `Claude Code updated ${basename(filename)}`,
+                  displayName: `GenAlphAI updated ${basename(filename)}`,
                   content: buildClaudeArtifactPreview(filename, content),
                   isComplete: false,
                 })
@@ -758,7 +758,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             setDeepResearchActivity({
               kind: filename.endsWith('report.md') || filename.endsWith('final.md') ? 'report' : 'file',
               message: isClaudeResearchFile(filename)
-                ? `Claude Code updated ${basename(filename)}`
+                ? `GenAlphAI updated ${basename(filename)}`
                 : filename.endsWith('report.md')
                   ? 'Rendering report draft'
                   : 'Saved research file',

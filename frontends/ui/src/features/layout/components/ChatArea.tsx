@@ -19,7 +19,8 @@
 import { type FC, memo, useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import { Flex, Text, Button, Logo } from '@/adapters/ui'
 import { Document, Lock } from '@/adapters/ui/icons'
-import { StarfieldAnimation } from '@/shared/components/StarfieldAnimation'
+import { AlphaParticles } from '@/shared/components/AlphaParticles'
+import { useLayoutStore } from '../store'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore, AgentPrompt, AgentResponse, ErrorBanner, FileUploadBanner, DeepResearchBanner, UserMessage, ChatThinking } from '@/features/chat'
 import type { ChatMessage } from '@/features/chat'
@@ -373,6 +374,8 @@ const WelcomeState: FC<WelcomeStateProps> = ({
   onSignIn,
   homeExperience = false,
 }) => {
+  const setComposerDraft = useLayoutStore((s) => s.setComposerDraft)
+
   if (!isAuthenticated) {
     // Logged out state - prompt to sign in
     return (
@@ -412,11 +415,6 @@ const WelcomeState: FC<WelcomeStateProps> = ({
       justify={homeExperience ? 'end' : 'center'}
       className={homeExperience ? 'relative flex-none px-4 pb-5 pt-16 sm:pt-24' : 'relative flex-1 p-8'}
     >
-      {homeExperience && (
-        <div className="pointer-events-none absolute inset-0 opacity-30" aria-hidden="true">
-          <StarfieldAnimation />
-        </div>
-      )}
       <Flex
         direction="col"
         align="center"
@@ -428,28 +426,32 @@ const WelcomeState: FC<WelcomeStateProps> = ({
         <span className="text-[#F3EFE6]" aria-hidden="true">
           <Logo kind="horizontal" size="small" />
         </span>
+        {homeExperience && (
+          <div className="pointer-events-none h-24 w-24 sm:h-28 sm:w-28" aria-hidden="true">
+            <AlphaParticles className="h-full w-full" />
+          </div>
+        )}
         <Text
           kind="title/lg"
           className={homeExperience ? 'deep-home-heading text-primary' : 'text-primary'}
         >
           Research anything.
         </Text>
-        <Text
-          kind="body/regular/md"
-          className={homeExperience ? 'deep-home-subtitle whitespace-normal px-4 text-subtle' : 'text-subtle'}
-        >
-          Agentic deep research: plans, searches, verifies, writes &mdash; with receipts.
-        </Text>
         <Flex align="center" justify="center" gap="2" className="mt-2 flex-wrap">
           {[
-            'Map the small-modular-reactor supply chain',
-            'Compare vector databases for RAG at scale',
-            'What changed in EU AI Act enforcement this year?',
-            'State of solid-state batteries, with sources',
+            'Compare the top 3 open-source LLMs right now',
+            'What changed in AI regulation this quarter?',
+            'Is intermittent fasting supported by recent evidence?',
+            'State of solid-state batteries 2026',
           ].map((label) => (
-            <span key={label} className="gx-chip">
+            <button
+              key={label}
+              type="button"
+              className="gx-chip"
+              onClick={() => setComposerDraft(label)}
+            >
               {label}
-            </span>
+            </button>
           ))}
         </Flex>
       </Flex>

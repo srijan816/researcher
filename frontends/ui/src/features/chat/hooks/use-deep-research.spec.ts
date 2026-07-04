@@ -854,7 +854,7 @@ describe('useDeepResearch', () => {
       expect(mockSetCurrentStatus).not.toHaveBeenCalledWith('writing')
     })
 
-    test('onFileUpdate surfaces Claude Code artifacts as chat thinking actions', async () => {
+    test('onFileUpdate surfaces research artifacts as chat thinking actions', async () => {
       await setupConnectedHook()
 
       act(() => {
@@ -868,14 +868,14 @@ describe('useDeepResearch', () => {
       expect(mockAddThinkingStep).toHaveBeenCalledWith({
         category: 'agents',
         functionName: 'claude_artifact:/claude_research/job-1/logs/progress.md:2026-06-06T18:38:38.000Z',
-        displayName: 'Claude Code updated progress.md',
+        displayName: 'GenAlphAI updated progress.md',
         content: expect.stringContaining('Planning started.'),
         isComplete: false,
       })
       expect(mockCompleteThinkingStep).toHaveBeenCalledWith('step-1')
       expect(mockSetDeepResearchActivity).toHaveBeenCalledWith({
         kind: 'file',
-        message: 'Claude Code updated progress.md',
+        message: 'GenAlphAI updated progress.md',
         detail: '/claude_research/job-1/logs/progress.md',
       })
     })

@@ -75,7 +75,8 @@ vi.mock('../store', () => ({
         researchDepth: 'deeper',
         researchEngine: 'aiq',
         setResearchDepth: mockSetResearchDepth,
-        setResearchEngine: vi.fn(),
+        setIncludeImages: vi.fn(),
+        setComposerDraft: vi.fn(),
       }
       return typeof selector === 'function' ? selector(state) : state
     }),
@@ -93,7 +94,8 @@ vi.mock('../store', () => ({
         researchDepth: 'deeper',
         researchEngine: 'aiq',
         setResearchDepth: mockSetResearchDepth,
-        setResearchEngine: vi.fn(),
+        setIncludeImages: vi.fn(),
+        setComposerDraft: vi.fn(),
       })),
     }
   ),
@@ -178,18 +180,19 @@ describe('InputArea', () => {
   test('renders visible research mode controls', () => {
     render(<InputArea isAuthenticated={true} />)
 
-    expect(screen.getByRole('group', { name: /research mode/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^research mode: quick$/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^research mode: standard$/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^research mode: deeper$/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^research mode: deep$/i })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: /research depth/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^research depth: quick$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^research depth: standard$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^research depth: deeper$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^research depth: deep$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /toggle generated images/i })).toBeInTheDocument()
   })
 
   test('updates selected research mode when a mode button is clicked', async () => {
     const user = userEvent.setup()
     render(<InputArea isAuthenticated={true} />)
 
-    await user.click(screen.getByRole('button', { name: /^research mode: quick$/i }))
+    await user.click(screen.getByRole('button', { name: /^research depth: quick$/i }))
 
     expect(mockSetResearchDepth).toHaveBeenCalledWith('shallow')
   })
@@ -198,7 +201,7 @@ describe('InputArea', () => {
     const user = userEvent.setup()
     render(<InputArea isAuthenticated={true} />)
 
-    await user.click(screen.getByRole('button', { name: /^research mode: standard$/i }))
+    await user.click(screen.getByRole('button', { name: /^research depth: standard$/i }))
 
     expect(mockSetResearchDepth).toHaveBeenCalledWith('medium')
   })
@@ -269,7 +272,7 @@ describe('InputArea', () => {
     await user.click(screen.getByRole('button', { name: /queue research task/i }))
 
     expect(mockEnqueueBatchResearchItem).toHaveBeenCalled()
-    expect(mockOpenRightPanel).toHaveBeenCalledWith('research')
+    expect(mockOpenRightPanel).toHaveBeenCalledWith('batch-queue')
   })
 
   test('clears input after sending message', async () => {

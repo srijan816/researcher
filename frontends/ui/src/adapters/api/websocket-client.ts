@@ -27,7 +27,6 @@ import {
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 type ResearchDepth = 'shallow' | 'medium' | 'deeper' | 'deep'
-type ResearchEngine = 'aiq' | 'claude_code'
 
 /** Context passed with connection status changes */
 export interface ConnectionChangeContext {
@@ -135,25 +134,27 @@ export class NATWebSocketClient {
    * @param content - The message text content (query)
    * @param enabledDataSources - Optional array of enabled data source IDs to include in the query
    * @param researchDepth - Optional source/depth tier for deep research
+   * @param includeImages - Whether to blend generated visuals into the report
    */
   sendMessage = (
     content: string,
     enabledDataSources?: string[],
     researchDepth: ResearchDepth = 'deeper',
-    researchEngine: ResearchEngine = 'aiq'
+    includeImages: boolean = false
   ): void => {
     const forceDeepResearch =
       apiConfig.forceDeepResearch || researchDepth === 'medium' || researchDepth === 'deeper' || researchDepth === 'deep'
     const dataSources = enabledDataSources && enabledDataSources.length > 0 ? enabledDataSources : ['web_search']
-    const agentType = researchEngine === 'claude_code' ? 'claude_researcher' : 'deep_researcher'
 
     // Format the text content as JSON with query and data_sources
     const textContent = JSON.stringify({
       query: content,
       data_sources: dataSources,
       research_depth: researchDepth,
-      agent_type: agentType,
+      // The UI always runs the default engine; kept for API compatibility.
+      agent_type: 'deep_researcher',
       force_deep_research: forceDeepResearch,
+      include_images: includeImages,
     })
 
     const messageId = this.generateMessageId()

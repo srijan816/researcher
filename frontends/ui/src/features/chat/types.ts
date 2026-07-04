@@ -27,8 +27,11 @@ export type MessageType =
 /** Deep research banner types for status notifications */
 export type DeepResearchBannerType = 'starting' | 'success' | 'failure' | 'cancelled'
 
-/** Research execution engine selected for an async run */
-export type ResearchEngine = 'aiq' | 'claude_code'
+/**
+ * Research execution engine for an async run. The UI always uses the default
+ * engine; the type is retained only for compatibility with persisted sessions.
+ */
+export type ResearchEngine = 'aiq'
 
 /** Queue status for batch deep research tasks */
 export type BatchResearchItemStatus =

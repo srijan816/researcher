@@ -161,7 +161,7 @@ export const useBatchResearchQueue = (): void => {
         })
 
         const submission = await submitDeepResearchJob({
-          agent_type: nextItem.researchEngine === 'claude_code' ? 'claude_researcher' : 'deep_researcher',
+          agent_type: 'deep_researcher',
           input: nextItem.query,
           data_sources: nextItem.enabledDataSources,
           research_depth: nextItem.researchDepth,

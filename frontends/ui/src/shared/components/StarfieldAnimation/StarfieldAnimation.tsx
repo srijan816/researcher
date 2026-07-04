@@ -13,7 +13,7 @@ const DEFAULT_MAX_RADIUS = 50
 const DEFAULT_PARTICLE_SIZE = 2.0
 const DEFAULT_ROTATION_SPEED = 0.001
 const DEFAULT_SEED = 12345
-const DEFAULT_PARTICLE_COLOR = '90, 167, 255'
+const DEFAULT_PARTICLE_COLOR = '244, 63, 94'
 /** Secondary faint off-white used for ~25% of particles */
 const SECONDARY_PARTICLE_COLOR = '243, 239, 230'
 /** Every Nth particle renders in the secondary color */
@@ -124,7 +124,7 @@ export const StarfieldAnimation: FC<StarfieldAnimationProps> = ({
       // Scale factor for particle positions and sizes based on canvas size
       const scaleFactor = currentScale
 
-      // Render particles as triangles; every Nth particle uses the blue accent
+      // Render particles as soft dots; every Nth particle uses the off-white mix
       const primaryFill = `rgba(${particleColor}, 1)`
       const secondaryFill = `rgba(${SECONDARY_PARTICLE_COLOR}, 1)`
 
@@ -133,24 +133,11 @@ export const StarfieldAnimation: FC<StarfieldAnimationProps> = ({
         ctx.fillStyle = i % SECONDARY_PARTICLE_INTERVAL === 0 ? secondaryFill : primaryFill
         const x = centerX + Math.cos(p.angle + rotation) * p.radius * scaleFactor
         const y = centerY + Math.sin(p.angle + rotation) * p.radius * scaleFactor
-        const size = p.size * scaleFactor * 1.5 // Scale up slightly for triangles
+        const size = p.size * scaleFactor
 
         ctx.globalAlpha = p.opacity * PARTICLE_OPACITY_SCALE
         ctx.beginPath()
-
-        // Draw equilateral triangle pointing outward from center
-        const triangleRotation = p.angle + rotation
-        const cos0 = Math.cos(triangleRotation - Math.PI / 2)
-        const sin0 = Math.sin(triangleRotation - Math.PI / 2)
-        const cos1 = Math.cos(triangleRotation + Math.PI / 6)
-        const sin1 = Math.sin(triangleRotation + Math.PI / 6)
-        const cos2 = Math.cos(triangleRotation + (5 * Math.PI) / 6)
-        const sin2 = Math.sin(triangleRotation + (5 * Math.PI) / 6)
-
-        ctx.moveTo(x + cos0 * size, y + sin0 * size)
-        ctx.lineTo(x + cos1 * size, y + sin1 * size)
-        ctx.lineTo(x + cos2 * size, y + sin2 * size)
-        ctx.closePath()
+        ctx.arc(x, y, size, 0, Math.PI * 2)
         ctx.fill()
       }
 

@@ -350,8 +350,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           }
 
           // Add 'starting' banner as a persistent message
-          const selectedResearchEngine = useLayoutStore.getState().researchEngine ?? 'aiq'
-          addDeepResearchBanner('starting', jobId, undefined, undefined, selectedResearchEngine)
+          addDeepResearchBanner('starting', jobId)
 
           // Create tracking message with empty content (won't render due to content guard)
           // This message carries job metadata for session restoration
@@ -366,7 +365,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
             }
           )
           // Start deep research SSE streaming bound to this message
-          startDeepResearch(jobId, messageId, selectedResearchEngine)
+          startDeepResearch(jobId, messageId)
           // Keep isStreaming=true to block input - deep research will release it on completion
           setLoading(false)
           // Don't add this as final response - let SSE handle the rest
@@ -632,7 +631,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       const enabledDataSources =
         layoutState.enabledDataSourceIds.length > 0 ? layoutState.enabledDataSourceIds : ['web_search']
       const researchDepth = layoutState.researchDepth
-      const researchEngine = layoutState.researchEngine ?? 'aiq'
+      const includeImages = layoutState.includeImages ?? false
 
       // Get session files
       const sessionId = useChatStore.getState().currentConversation?.id
@@ -683,7 +682,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       // Helper to actually send the message
       const doSend = () => {
         if (wsClientRef.current?.isConnected()) {
-          wsClientRef.current.sendMessage(content, dataSourcesForMessage, researchDepth, researchEngine)
+          wsClientRef.current.sendMessage(content, dataSourcesForMessage, researchDepth, includeImages)
           setLoading(false)
         } else {
           addErrorCard('connection.failed', 'WebSocket connection failed')

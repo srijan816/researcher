@@ -166,7 +166,7 @@ describe('NATWebSocketClient auth observability', () => {
     })
   })
 
-  test('sends Claude Code research engine as claude_researcher agent type', async () => {
+  test('sends include_images flag with the default engine agent type', async () => {
     const client = new NATWebSocketClient({
       conversationId: 'conv-1',
       websocketUrl: 'ws://localhost/websocket',
@@ -177,7 +177,7 @@ describe('NATWebSocketClient auth observability', () => {
     const ws = MockWebSocket.instances[0]
     ws.onopen?.(new Event('open'))
 
-    client.sendMessage('Audit the research workflow', ['web_search'], 'deeper', 'claude_code')
+    client.sendMessage('Audit the research workflow', ['web_search'], 'deeper', true)
 
     const envelope = JSON.parse(ws.send.mock.calls[0][0])
     const payload = JSON.parse(envelope.content.messages[0].content[0].text)
@@ -185,8 +185,9 @@ describe('NATWebSocketClient auth observability', () => {
     expect(payload).toMatchObject({
       query: 'Audit the research workflow',
       research_depth: 'deeper',
-      agent_type: 'claude_researcher',
+      agent_type: 'deep_researcher',
       force_deep_research: true,
+      include_images: true,
     })
   })
 })

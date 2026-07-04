@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * In-app API documentation panel.
+ * In-app documentation panel for GenAlphAI Research.
  */
 
 'use client'
@@ -11,8 +11,6 @@ import { type FC, type ReactNode, useCallback } from 'react'
 import { Flex, SidePanel, Text } from '@/adapters/ui'
 import { Book } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
-
-const baseUrl = 'http://localhost:9000'
 
 export const DocsPanel: FC = () => {
   const { rightPanel, closeRightPanel, openRightPanel } = useLayoutStore()
@@ -40,57 +38,54 @@ export const DocsPanel: FC = () => {
       slotHeading={
         <Flex align="center" gap="2">
           <Book className="h-5 w-5" />
-          API Docs
+          How It Works
         </Flex>
       }
     >
       <Flex direction="col" gap="5">
-        <DocSection title="API Keys">
+        <DocSection title="What GenAlphAI Research Does">
           <Text kind="body/regular/sm" className="text-subtle">
-            Generate a key in Settings, copy it once, then send it as a bearer token from external apps.
+            Ask a question and GenAlphAI Research plans the work, fans out multi-engine research
+            across the live web, adversarially verifies what it finds, and writes a fully cited
+            report. Every claim traces back to a source you can open.
           </Text>
         </DocSection>
 
-        <DocSection title="Start Research">
-          <CodeBlock>
-{`curl -X POST "${baseUrl}/v1/jobs/async/submit" \\
-  -H "Authorization: Bearer $AIQ_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "agent_type": "deep_researcher",
-    "input": "Research the current AI chip market with citations",
-    "data_sources": ["web_search"],
-    "research_depth": "deeper"
-  }'`}
-          </CodeBlock>
-        </DocSection>
-
-        <DocSection title="Read Results">
-          <CodeBlock>
-{`curl -H "Authorization: Bearer $AIQ_API_KEY" \\
-  "${baseUrl}/v1/jobs/async/job/$JOB_ID"
-
-curl -H "Authorization: Bearer $AIQ_API_KEY" \\
-  "${baseUrl}/v1/jobs/async/job/$JOB_ID/report"
-
-curl -N -H "Authorization: Bearer $AIQ_API_KEY" \\
-  "${baseUrl}/v1/jobs/async/job/$JOB_ID/stream"`}
-          </CodeBlock>
-        </DocSection>
-
-        <DocSection title="Clarifying Questions">
+        <DocSection title="Research Depths">
           <Text kind="body/regular/sm" className="text-subtle">
-            Browser chat uses the WebSocket path and may ask clarifying questions. If no answer arrives within five
-            minutes, GenAlphAI Research now continues with a skip response. Headless async job submission starts directly from the
-            provided input.
+            Pick a depth in the composer: Quick for a fast pass, Standard for everyday questions,
+            Deeper for broad coverage, and Deep for exhaustive runs targeting 90&ndash;150+ sources.
+            Deeper runs take longer but verify more.
           </Text>
         </DocSection>
 
-        <DocSection title="Current Search Stack">
+        <DocSection title="Audio & Images">
           <Text kind="body/regular/sm" className="text-subtle">
-            Web research is wired through local SearXNG for result discovery and Jina Reader for clean full-page
-            extraction. Live market prices still need a finance quote source because search snippets can be stale.
+            Finished reports can be narrated as audio directly from the report view. Toggle
+            &ldquo;Images&rdquo; in the composer to blend up to 3 generated visuals into the report.
           </Text>
+        </DocSection>
+
+        <DocSection title="Following a Run">
+          <Text kind="body/regular/sm" className="text-subtle">
+            The research panel shows the Plan being executed, a live Activity feed of agents and
+            tool calls, and Sources as citations are collected. You can step away &mdash; the run
+            continues and the report lands in your session.
+          </Text>
+        </DocSection>
+
+        <DocSection title="Batch Research">
+          <Text kind="body/regular/sm" className="text-subtle">
+            Queue several questions at once from the Batch entry in the left rail. Items run one
+            by one and each produces its own cited report in its session.
+          </Text>
+        </DocSection>
+
+        <DocSection title="Public API">
+          <Text kind="body/regular/sm" className="text-subtle">
+            A public research API is available. See the overview and usage details at:
+          </Text>
+          <CodeBlock>{`GET https://app2.sniperip.com/about`}</CodeBlock>
         </DocSection>
       </Flex>
     </SidePanel>

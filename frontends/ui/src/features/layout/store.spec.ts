@@ -194,11 +194,21 @@ describe('useLayoutStore', () => {
     })
   })
 
-  describe('setResearchEngine', () => {
-    test('sets research engine', () => {
-      useLayoutStore.getState().setResearchEngine('claude_code')
+  describe('setIncludeImages', () => {
+    test('toggles generated images flag', () => {
+      useLayoutStore.getState().setIncludeImages(true)
 
-      expect(useLayoutStore.getState().researchEngine).toBe('claude_code')
+      expect(useLayoutStore.getState().includeImages).toBe(true)
+    })
+  })
+
+  describe('setComposerDraft', () => {
+    test('sets and clears composer draft text', () => {
+      useLayoutStore.getState().setComposerDraft('Compare vector databases')
+      expect(useLayoutStore.getState().composerDraft).toBe('Compare vector databases')
+
+      useLayoutStore.getState().setComposerDraft(null)
+      expect(useLayoutStore.getState().composerDraft).toBeNull()
     })
   })
 })

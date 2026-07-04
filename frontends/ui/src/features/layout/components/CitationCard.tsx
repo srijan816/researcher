@@ -55,7 +55,7 @@ export const CitationCard: FC<CitationCardProps> = ({ citation }) => {
       href={citation.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="ar-card-lift block h-full rounded-xl border border-base bg-surface-raised p-3 transition-colors hover:border-[#5AA7FF]"
+      className="ar-card-lift block h-full rounded-xl border border-base bg-surface-raised p-3 transition-colors hover:border-[#F43F5E]"
     >
       <Flex direction="col" gap="2" className="h-full min-w-0">
         {/* Favicon + domain + timestamp */}

@@ -63,7 +63,6 @@ export const BatchResearchQueue: FC<BatchResearchQueueProps> = memo(function Bat
   const approveBatchResearchItem = useChatStore((state) => state.approveBatchResearchItem)
   const removeBatchResearchItem = useChatStore((state) => state.removeBatchResearchItem)
   const openRightPanel = useLayoutStore((state) => state.openRightPanel)
-  const setResearchPanelTab = useLayoutStore((state) => state.setResearchPanelTab)
 
   const [, setNowTick] = useState(Date.now())
   useEffect(() => {
@@ -114,10 +113,7 @@ export const BatchResearchQueue: FC<BatchResearchQueueProps> = memo(function Bat
           <Button
             kind="tertiary"
             size="small"
-            onClick={() => {
-              setResearchPanelTab('batch')
-              openRightPanel('research')
-            }}
+            onClick={() => openRightPanel('batch-queue')}
             aria-label="Open batch queue"
           >
             Open Queue
@@ -179,7 +175,7 @@ export const BatchResearchQueue: FC<BatchResearchQueueProps> = memo(function Bat
                   {item.researchDepth}
                 </span>
                 <span className="rounded-md border border-base bg-surface-base px-2 py-1 text-[11px] uppercase text-subtle">
-                  {item.researchEngine === 'claude_code' ? 'Claude Code' : 'AIQ'}
+                  GenAlphAI
                 </span>
                 <span className="rounded-md border border-base bg-surface-base px-2 py-1 text-[11px] uppercase text-subtle">
                   {statusLabel(item.status)}

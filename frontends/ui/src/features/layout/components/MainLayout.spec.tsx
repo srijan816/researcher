@@ -114,6 +114,14 @@ vi.mock('./SettingsPanel', () => ({
   SettingsPanel: () => <div data-testid="settings-panel">Settings Panel</div>,
 }))
 
+vi.mock('./BatchQueuePanel', () => ({
+  BatchQueuePanel: () => <div data-testid="batch-queue-panel" />,
+}))
+
+vi.mock('./AccountPanel', () => ({
+  AccountPanel: () => <div data-testid="account-panel" />,
+}))
+
 vi.mock('./DocsPanel', () => ({
   DocsPanel: () => <div data-testid="docs-panel">Docs Panel</div>,
 }))

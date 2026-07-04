@@ -33,6 +33,7 @@ import { FilesTab } from './FilesTab'
 import type { ThoughtInfo } from './ThoughtCard'
 import type { ToolCallInfo } from './ToolCallCard'
 import type { DeepResearchLLMStep, DeepResearchToolCall } from '@/features/chat/types'
+import { sanitizeEngineText } from '@/shared/utils/display-text'
 
 /** Sub-tab types within ThinkingTab */
 type ThinkingSubTab = 'thoughts' | 'agents' | 'tools' | 'files'
@@ -42,10 +43,10 @@ type ThinkingSubTab = 'thoughts' | 'agents' | 'tools' | 'files'
  */
 const mapLLMStepToThoughtInfo = (step: DeepResearchLLMStep): ThoughtInfo => ({
   id: step.id,
-  modelName: step.name,
-  content: coerceSSEText(step.content),
+  modelName: sanitizeEngineText(step.name),
+  content: sanitizeEngineText(coerceSSEText(step.content)),
   thinking: coerceSSEText((step as DeepResearchLLMStep & { thinking?: unknown }).thinking) || undefined,
-  workflow: step.workflow,
+  workflow: step.workflow ? sanitizeEngineText(step.workflow) : step.workflow,
   isStreaming: !step.isComplete,
   timestamp: step.timestamp,
   usage: step.usage

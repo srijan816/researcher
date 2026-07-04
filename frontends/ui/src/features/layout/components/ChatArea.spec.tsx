@@ -58,7 +58,6 @@ describe('ChatArea', () => {
     render(<ChatArea isAuthenticated={true} />)
 
     expect(screen.getByText('Research anything.')).toBeInTheDocument()
-    expect(screen.getByText(/with receipts/i)).toBeInTheDocument()
   })
 
   test('calls onSignIn when sign in button clicked', async () => {

@@ -15,7 +15,7 @@
 
 import { type FC, type ReactNode, memo, useCallback, useState } from 'react'
 import { Flex, Text, Button, Avatar, Popover, Divider, Logo } from '@/adapters/ui'
-import { Menu, Globe, Settings, Book, Lock, Logout, Plus, Info } from '@/adapters/ui/icons'
+import { Menu, Globe, Settings, Book, Lock, Logout, Plus, Info, Clock } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
 
 interface NavRailProps {
@@ -98,7 +98,7 @@ export const NavRail: FC<NavRailProps> = memo(function NavRail({
   }, [isAuthenticated, isSessionsPanelOpen, toggleSessionsPanel])
 
   const togglePanel = useCallback(
-    (panel: 'data-sources' | 'settings' | 'docs') => {
+    (panel: 'data-sources' | 'settings' | 'docs' | 'batch-queue' | 'account') => {
       const { rightPanel, closeRightPanel, openRightPanel } = useLayoutStore.getState()
       setSessionsPanelOpen(false)
       if (rightPanel === panel) {
@@ -122,6 +122,16 @@ export const NavRail: FC<NavRailProps> = memo(function NavRail({
 
   const handleDocsClick = useCallback(() => {
     togglePanel('docs')
+  }, [togglePanel])
+
+  const handleBatchClick = useCallback(() => {
+    if (!isAuthenticated) return
+    togglePanel('batch-queue')
+  }, [isAuthenticated, togglePanel])
+
+  const handleAccountClick = useCallback(() => {
+    setIsUserMenuOpen(false)
+    togglePanel('account')
   }, [togglePanel])
 
   const handleNewSessionClick = useCallback(() => {
@@ -184,6 +194,16 @@ export const NavRail: FC<NavRailProps> = memo(function NavRail({
           </RailButton>
 
           <RailButton
+            label="Batch"
+            ariaLabel="Open batch research queue"
+            active={rightPanel === 'batch-queue'}
+            disabled={!isAuthenticated}
+            onClick={handleBatchClick}
+          >
+            <Clock className="h-5 w-5" />
+          </RailButton>
+
+          <RailButton
             label="Settings"
             ariaLabel="Open settings"
             active={rightPanel === 'settings'}
@@ -229,7 +249,7 @@ export const NavRail: FC<NavRailProps> = memo(function NavRail({
             onOpenChange={setIsUserMenuOpen}
             side="right"
             align="end"
-            slotContent={<UserDropdownContent user={user} onSignOut={handleSignOut} />}
+            slotContent={<UserDropdownContent user={user} onSignOut={handleSignOut} onAccount={handleAccountClick} />}
           >
             <button
               type="button"
@@ -264,9 +284,10 @@ interface UserDropdownContentProps {
     image?: string
   }
   onSignOut?: () => void
+  onAccount?: () => void
 }
 
-const UserDropdownContent: FC<UserDropdownContentProps> = ({ user, onSignOut }) => {
+const UserDropdownContent: FC<UserDropdownContentProps> = ({ user, onSignOut, onAccount }) => {
   return (
     <Flex direction="col" gap="3" className="min-w-[240px] p-4">
       <Flex align="center" gap="3">
@@ -288,6 +309,20 @@ const UserDropdownContent: FC<UserDropdownContentProps> = ({ user, onSignOut }) 
       </Flex>
 
       <Divider />
+
+      <Button
+        kind="secondary"
+        size="small"
+        onClick={onAccount}
+        className="w-full"
+        aria-label="Open account settings"
+        title="Account"
+      >
+        <Flex align="center" justify="center" gap="2">
+          <Settings className="h-4 w-4" />
+          <Text kind="label/regular/sm">Account</Text>
+        </Flex>
+      </Button>
 
       <Button
         kind="secondary"

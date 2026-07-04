@@ -118,7 +118,7 @@ export const TasksTab: FC = () => {
           {showLiveProgress && (
             <Flex direction="col" gap="1" className="shrink-0 rounded-md border border-base bg-surface-raised px-3 py-2">
               <Flex align="center" gap="2">
-                <div className="h-2 w-2 animate-pulse rounded-full bg-[#5AA7FF]" />
+                <div className="h-2 w-2 animate-pulse rounded-full bg-[#F43F5E]" />
                 <Text kind="body/semibold/sm" className="text-primary">
                   Live research lanes
                 </Text>

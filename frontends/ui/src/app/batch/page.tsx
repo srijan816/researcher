@@ -4,7 +4,7 @@
 /**
  * Batch Queue Page
  *
- * Route alias for the main app with the Research panel opened to Batch.
+ * Route alias for the main app with the Batch queue panel opened.
  * This prevents stale/direct /batch links from falling through to Next's 404.
  */
 
@@ -16,12 +16,10 @@ import { MainLayout, useLayoutStore } from '@/features/layout'
 
 const BatchRouteOpener = (): null => {
   const openRightPanel = useLayoutStore((s) => s.openRightPanel)
-  const setResearchPanelTab = useLayoutStore((s) => s.setResearchPanelTab)
 
   useEffect(() => {
-    setResearchPanelTab('batch')
-    openRightPanel('research')
-  }, [openRightPanel, setResearchPanelTab])
+    openRightPanel('batch-queue')
+  }, [openRightPanel])
 
   return null
 }

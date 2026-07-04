@@ -214,12 +214,32 @@ export const Generate: FC<IconProps> = ({ className }) => {
       data-src={`${CDN_BASE}/line/generate.svg`}
       width="24"
       height="24"
-      fill="#5AA7FF"
+      fill="#F43F5E"
       className={`nv-icon-green ${className ?? ''}`}
       aria-hidden="true"
     />
   )
 }
+
+/** Layers icon (stacked squares) for research depth — inline, no CDN dependency */
+export const Layers: FC<IconProps> = ({ className, width = 20, height = 20, 'aria-label': ariaLabel }) => (
+  <svg
+    viewBox="0 0 24 24"
+    width={width}
+    height={height}
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.6"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden={!ariaLabel}
+    aria-label={ariaLabel}
+  >
+    <rect x="8" y="3" width="13" height="13" rx="2" />
+    <path d="M16.5 16v2.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2.5" />
+  </svg>
+)
 
 /** StopCircle icon for stop/cancel actions */
 export const StopCircle = createIcon('shape-circle-off')

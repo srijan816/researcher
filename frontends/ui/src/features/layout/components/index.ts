@@ -13,6 +13,8 @@ export { ChatArea } from './ChatArea'
 export { InputArea } from './InputArea'
 export { SettingsPanel } from './SettingsPanel'
 export { DocsPanel } from './DocsPanel'
+export { BatchQueuePanel } from './BatchQueuePanel'
+export { AccountPanel } from './AccountPanel'
 
 // Research panel and tabs
 export { ResearchPanel } from './ResearchPanel'
