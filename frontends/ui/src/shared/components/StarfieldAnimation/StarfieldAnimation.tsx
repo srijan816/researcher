@@ -13,7 +13,13 @@ const DEFAULT_MAX_RADIUS = 50
 const DEFAULT_PARTICLE_SIZE = 2.0
 const DEFAULT_ROTATION_SPEED = 0.001
 const DEFAULT_SEED = 12345
-const DEFAULT_PARTICLE_COLOR = '118, 185, 0'
+const DEFAULT_PARTICLE_COLOR = '199, 255, 61'
+/** Secondary accent color (blue) used for ~25% of particles */
+const SECONDARY_PARTICLE_COLOR = '90, 167, 255'
+/** Every Nth particle renders in the secondary color */
+const SECONDARY_PARTICLE_INTERVAL = 4
+/** Global dimming factor to keep the field subtle on dark surfaces */
+const PARTICLE_OPACITY_SCALE = 0.85
 
 /**
  * Animated starfield background using canvas.
@@ -118,16 +124,18 @@ export const StarfieldAnimation: FC<StarfieldAnimationProps> = ({
       // Scale factor for particle positions and sizes based on canvas size
       const scaleFactor = currentScale
 
-      // Batch render all particles as triangles
-      ctx.fillStyle = `rgba(${particleColor}, 1)`
+      // Render particles as triangles; every Nth particle uses the blue accent
+      const primaryFill = `rgba(${particleColor}, 1)`
+      const secondaryFill = `rgba(${SECONDARY_PARTICLE_COLOR}, 1)`
 
       for (let i = 0; i < particles.length; i++) {
         const p = particles[i]
+        ctx.fillStyle = i % SECONDARY_PARTICLE_INTERVAL === 0 ? secondaryFill : primaryFill
         const x = centerX + Math.cos(p.angle + rotation) * p.radius * scaleFactor
         const y = centerY + Math.sin(p.angle + rotation) * p.radius * scaleFactor
         const size = p.size * scaleFactor * 1.5 // Scale up slightly for triangles
 
-        ctx.globalAlpha = p.opacity
+        ctx.globalAlpha = p.opacity * PARTICLE_OPACITY_SCALE
         ctx.beginPath()
 
         // Draw equilateral triangle pointing outward from center

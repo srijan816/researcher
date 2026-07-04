@@ -39,7 +39,7 @@ describe('AppBar', () => {
   test('renders logo and title', () => {
     render(<AppBar />)
 
-    expect(screen.getByText('Deep Research')).toBeInTheDocument()
+    expect(screen.getByText('Alpha Research')).toBeInTheDocument()
   })
 
   test('renders history label beside the menu button', () => {

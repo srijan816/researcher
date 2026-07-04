@@ -126,12 +126,12 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
             className="shrink-0"
           >
             <Flex align="center" gap="density-lg">
-              <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#20808d] text-sm font-semibold text-white">
-                D
+              <span className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-[#C7FF3D] text-sm font-semibold italic text-[#0B0C0E] transition-shadow duration-200 hover:shadow-[0_0_12px_rgba(199,255,61,0.35)] motion-reduce:transition-none">
+                α
               </span>
 
               <Text kind="label/semibold/lg" className="hidden whitespace-nowrap text-primary sm:block">
-                Deep Research
+                Alpha Research
               </Text>
             </Flex>
           </Button>
@@ -256,7 +256,7 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
               onClick={onSignIn}
               aria-label="Sign in"
               title="Sign in"
-              className="sm:ml-2 bg-[#20808d] hover:bg-[#155e69]"
+              className="sm:ml-2 bg-[#C7FF3D] text-[#0B0C0E] hover:bg-[#A6D633]"
             >
               <Flex align="center" gap="1">
                 <Lock className="h-4 w-4" />

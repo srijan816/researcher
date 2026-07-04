@@ -187,7 +187,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
         } ${
           !showToggle && !isOpen ? 'hidden' : ''
         } ${
-          isAuthenticated ? 'cursor-pointer hover:border-[#20808d]' : 'cursor-not-allowed opacity-50'
+          isAuthenticated ? 'cursor-pointer hover:border-[#C7FF3D]' : 'cursor-not-allowed opacity-50'
         }`}
         style={{ height: 'calc(var(--spacing) * 38)' }}
         aria-label={isOpen ? 'Close research panel' : 'Open research panel'}

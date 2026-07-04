@@ -74,7 +74,7 @@ export const ERROR_REGISTRY: Record<ErrorCode, ErrorMeta> = {
   },
   'agent.deep_research_failed': {
     status: 'error',
-    title: 'Deep Research Failed',
+    title: 'Research Failed',
     defaultMessage: 'The deep research process encountered an error.',
   },
   'agent.deep_research_load_failed': {

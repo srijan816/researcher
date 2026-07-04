@@ -381,7 +381,7 @@ const WelcomeState: FC<WelcomeStateProps> = ({
             <Lock />
           </span>
           <Text kind="title/lg" className="text-primary">
-            Deep Research
+            Alpha Research
           </Text>
           <Text kind="body/regular/md" className="text-subtle">
             Sign in to start a focused research session.

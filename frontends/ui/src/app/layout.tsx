@@ -13,6 +13,7 @@
 
 import { type ReactNode } from 'react'
 import { type Metadata } from 'next'
+import { Inter, Fraunces, JetBrains_Mono } from 'next/font/google'
 import { connection } from 'next/server'
 import { Providers } from './providers'
 import type { AppConfig } from '@/shared/context'
@@ -20,11 +21,28 @@ import { getFileUploadConfigFromEnv } from '@/shared/config/file-upload'
 import { isAuthRequired, AUTH_PROVIDER_ID, TOKEN_REFRESH_BUFFER_SECONDS } from '@/adapters/auth/config'
 import './globals.css'
 
+const fontSans = Inter({
+  subsets: ['latin'],
+  weight: ['400', '500', '600'],
+  variable: '--font-sans',
+})
+
+const fontDisplay = Fraunces({
+  subsets: ['latin'],
+  variable: '--font-display',
+})
+
+const fontMono = JetBrains_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500'],
+  variable: '--font-mono',
+})
+
 export const metadata: Metadata = {
-  title: 'Deep Research',
-  description: 'AI-powered research assistant',
+  title: 'Alpha Research',
+  description: 'Agentic deep research: plans, searches, verifies, and writes cited reports. Depth over hype.',
   icons: {
-    icon: '/favicon.ico',
+    icon: '/icon.svg',
   },
 }
 
@@ -48,7 +66,12 @@ const RootLayout = async ({ children }: RootLayoutProps): Promise<ReactNode> => 
   const config = getAppConfig()
 
   return (
-    <html lang="en" id="style-root" suppressHydrationWarning>
+    <html
+      lang="en"
+      id="style-root"
+      className={`${fontSans.variable} ${fontDisplay.variable} ${fontMono.variable}`}
+      suppressHydrationWarning
+    >
       <head>
         {/* CDN SVG icon loader - inlines <svg data-src="..."> elements */}
         <script
@@ -56,7 +79,7 @@ const RootLayout = async ({ children }: RootLayoutProps): Promise<ReactNode> => 
           async
         />
       </head>
-      <body className="bg-surface-base">
+      <body className={`${fontSans.className} bg-surface-base`}>
         <Providers config={config}>{children}</Providers>
       </body>
     </html>

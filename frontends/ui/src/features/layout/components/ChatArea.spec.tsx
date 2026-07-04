@@ -49,7 +49,7 @@ describe('ChatArea', () => {
   test('renders welcome state when not authenticated', () => {
     render(<ChatArea isAuthenticated={false} />)
 
-    expect(screen.getByText('Deep Research')).toBeInTheDocument()
+    expect(screen.getByText('Alpha Research')).toBeInTheDocument()
     expect(screen.getByText(/focused research session/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^sign in$/i })).toBeInTheDocument()
   })
