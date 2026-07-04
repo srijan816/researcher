@@ -52,6 +52,9 @@ services:
       # Generated report images live on the data volume (writer: agent stage;
       # reader: /v1 images route).
       - AIQ_REPORT_IMAGES_DIR=${AIQ_REPORT_IMAGES_DIR:-/app/data/report_images}
+      # Image provider auto-order: grok CLI -> xai (if key) -> minimax.
+      - AIQ_GROK_CLI=${AIQ_GROK_CLI:-/grok-home/.grok/bin/grok}
+      - AIQ_GROK_HOME=${AIQ_GROK_HOME:-/grok-home}
       # Persist HuggingFace downloads (model2vec potion-base-8M) across recreates.
       - HF_HOME=${HF_HOME:-/app/data/hf}
       # Model cascade (Wave 1): leaf/mechanical roles use the high-speed variant.
@@ -93,6 +96,9 @@ services:
       - aiq-data:/app/data
       - ../../data/prepared_debate_corpus:/app/data/prepared_debate_corpus:ro
       - ${CLAUDE_CODE_BINARY_HOST_PATH:-/usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe}:${CLAUDE_CODE_BINARY_CONTAINER_PATH:-/usr/local/bin/claude}:ro
+      # Grok Build CLI + authenticated session (container-owned copy) for the
+      # 'grok' image provider; MiniMax remains the fallback.
+      - /opt/stacks/app2/grok-home:/grok-home
     networks:
       - aiq-network
     depends_on:

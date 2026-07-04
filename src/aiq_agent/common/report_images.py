@@ -269,11 +269,24 @@ async def _generate_and_save_images(
     return images
 
 
+def grok_cli_available() -> bool:
+    """True when the Grok Build CLI (authenticated session) is mounted and executable."""
+    cli = os.environ.get("AIQ_GROK_CLI", "").strip()
+    return bool(cli) and os.access(cli, os.X_OK)
+
+
 def resolve_image_provider() -> str:
-    """Pick the image provider: AIQ_IMAGE_PROVIDER forces one; else xAI when XAI_API_KEY is set, else MiniMax."""
+    """Pick the image provider.
+
+    AIQ_IMAGE_PROVIDER forces one of minimax|xai|grok. Auto order:
+    grok CLI (subscription, free) -> xAI (if XAI_API_KEY) -> MiniMax.
+    Auto-selected providers fall back down the chain on failure.
+    """
     forced = os.environ.get("AIQ_IMAGE_PROVIDER", "").strip().lower()
-    if forced in {"minimax", "xai"}:
+    if forced in {"minimax", "xai", "grok"}:
         return forced
+    if grok_cli_available():
+        return "grok"
     return "xai" if os.environ.get("XAI_API_KEY") else "minimax"
 
 
@@ -288,7 +301,26 @@ async def _generate_image(
     """
     provider = resolve_image_provider()
     xai_key = os.environ.get("XAI_API_KEY")
-    forced = os.environ.get("AIQ_IMAGE_PROVIDER", "").strip().lower() in {"minimax", "xai"}
+    forced = os.environ.get("AIQ_IMAGE_PROVIDER", "").strip().lower() in {"minimax", "xai", "grok"}
+
+    if provider == "grok":
+        if forced:
+            return await _generate_grok_image(prompt)
+        try:
+            data = await _generate_grok_image(prompt)
+            if data:
+                return data
+            logger.warning("Grok image generation returned nothing; falling back")
+        except Exception:  # noqa: BLE001 - auto mode falls back down the chain
+            logger.warning("Grok image generation failed; falling back", exc_info=True)
+        if xai_key:
+            try:
+                return await _generate_xai_image(client, prompt, xai_key)
+            except Exception:  # noqa: BLE001
+                logger.warning("xAI fallback failed; falling back to MiniMax", exc_info=True)
+        if not minimax_api_key:
+            raise ReportImagesError("Grok failed and MINIMAX_API_KEY is not set")
+        return await _generate_minimax_image(client, prompt, minimax_api_key)
 
     if provider == "xai":
         if not xai_key:
@@ -433,6 +465,62 @@ async def _run_backfill(
     if not inserted:
         raise ReportImagesError("Generated images could not be matched to any report heading")
     return updated, inserted
+
+
+async def _generate_grok_image(prompt: str, *, timeout_seconds: float | None = None) -> bytes | None:
+    """Generate an image via the mounted Grok Build CLI (authenticated subscription).
+
+    Runs a single-turn headless prompt instructing the agent to call its
+    native image tool and save the file to a temp path we control, then
+    reads the bytes back. Slower than a direct API (~1-3 min) but free.
+    """
+    import tempfile
+
+    cli = os.environ.get("AIQ_GROK_CLI", "").strip()
+    if not cli or not os.access(cli, os.X_OK):
+        raise ReportImagesError("Grok CLI is not available (AIQ_GROK_CLI)")
+    if timeout_seconds is None:
+        try:
+            timeout_seconds = float(os.environ.get("AIQ_GROK_IMAGE_TIMEOUT_SECONDS", "210"))
+        except ValueError:
+            timeout_seconds = 210.0
+    grok_home = os.environ.get("AIQ_GROK_HOME", "").strip() or os.path.expanduser("~")
+    with tempfile.TemporaryDirectory(prefix="grok-img-") as tmp:
+        out_path = os.path.join(tmp, "image.jpg")
+        instruction = (
+            "Call your image generation tool with this exact prompt and aspect_ratio '16:9', "
+            f"then save/copy the resulting image file to {out_path} and stop. "
+            "Use the image tool only - no code, no matplotlib, no SVG. Prompt: " + prompt
+        )
+        env = {**os.environ, "HOME": grok_home}
+        proc = await asyncio.create_subprocess_exec(
+            cli,
+            "-p",
+            instruction,
+            "--always-approve",
+            "--cwd",
+            tmp,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+        )
+        try:
+            await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+        except TimeoutError:
+            proc.kill()
+            raise ReportImagesError(f"Grok image generation timed out after {timeout_seconds:.0f}s")
+        if not os.path.exists(out_path) or os.path.getsize(out_path) < 1024:
+            # The agent sometimes writes a differently-named file in cwd.
+            candidates = [
+                os.path.join(tmp, f)
+                for f in os.listdir(tmp)
+                if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")) and os.path.getsize(os.path.join(tmp, f)) >= 1024
+            ]
+            if not candidates:
+                raise ReportImagesError("Grok run finished but produced no image file")
+            out_path = candidates[0]
+        with open(out_path, "rb") as fh:
+            return fh.read()
 
 
 async def _generate_minimax_image(client: httpx.AsyncClient, prompt: str, api_key: str) -> bytes | None:
