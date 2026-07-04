@@ -32,6 +32,11 @@ import httpx
 logger = logging.getLogger(__name__)
 
 MAX_REPORT_IMAGES = 3
+def _stage_budget_default() -> float:
+    """Grok CLI generations take 1-3 min each; API providers are fast."""
+    return 480.0 if grok_cli_available() and os.environ.get("AIQ_IMAGE_PROVIDER", "").lower() != "minimax" else 60.0
+
+
 IMAGE_STAGE_BUDGET_SECONDS = 60.0
 
 _MINIMAX_IMAGE_URL = "https://api.minimax.io/v1/image_generation"
@@ -186,13 +191,15 @@ async def generate_and_save_report_images(
     llm: Any,
     api_key: str | None = None,
     image_url_prefix: str,
-    budget_seconds: float = IMAGE_STAGE_BUDGET_SECONDS,
+    budget_seconds: float | None = None,
 ) -> tuple[str, int]:
     """Full image stage: plan → generate → save → insert. Fully fail-open.
 
     Returns ``(possibly-updated report, images inserted)``. On any error the
     original report is returned unchanged with a single warning log.
     """
+    if budget_seconds is None:
+        budget_seconds = _stage_budget_default()
     try:
         return await asyncio.wait_for(
             _run_image_stage(
@@ -429,7 +436,7 @@ async def backfill_report_images(
     report: str,
     job_id: str,
     image_url_prefix: str,
-    budget_seconds: float = BACKFILL_BUDGET_SECONDS,
+    budget_seconds: float | None = None,
 ) -> tuple[str, int]:
     """Add generated images to an existing report. NOT fail-open: raises ReportImagesError.
 
@@ -439,6 +446,8 @@ async def backfill_report_images(
     minimax_key = os.environ.get("MINIMAX_API_KEY")
     if not minimax_key:
         raise ReportImagesError("MINIMAX_API_KEY is not configured on the server")
+    if budget_seconds is None:
+        budget_seconds = 480.0 if resolve_image_provider() == "grok" else BACKFILL_BUDGET_SECONDS
     try:
         return await asyncio.wait_for(
             _run_backfill(report=report, job_id=job_id, image_url_prefix=image_url_prefix, minimax_key=minimax_key),
