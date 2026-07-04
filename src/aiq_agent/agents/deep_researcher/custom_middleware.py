@@ -270,6 +270,39 @@ class EmptyContentFixMiddleware(AgentMiddleware):
         return await handler(request.override(messages=fixed_messages))
 
 
+class ThinkTagScrubMiddleware(AgentMiddleware):
+    """Strip stray ``</think>``/``<think>`` tag fragments from model output.
+
+    MiniMax M3's Anthropic-compatible endpoint parses the model's <think>
+    block into a proper `thinking` content block but leaks the closing tag as
+    a separate text block (observed as ``{'text': '</think>'}`` on nearly
+    every thinking turn). Those fragments pollute the UI thoughts/answer
+    stream and can leak into drafts. This scrub is deterministic and only
+    touches bare tag fragments — real text is never dropped.
+    """
+
+    _TAG_RE = re.compile(r"^\s*(?:</?think>\s*)+", re.IGNORECASE)
+
+    async def awrap_model_call(self, request, handler):
+        response = await handler(request)
+        result = getattr(response, "result", None) or []
+        for message in result:
+            if not isinstance(message, AIMessage) or not isinstance(message.content, list):
+                continue
+            cleaned: list = []
+            for block in message.content:
+                if isinstance(block, dict) and block.get("type") in {"text", "output_text"}:
+                    text = str(block.get("text") or "")
+                    stripped = self._TAG_RE.sub("", text)
+                    if not stripped.strip():
+                        continue  # block was only tag fragments — drop it
+                    if stripped != text:
+                        block = {**block, "text": stripped}
+                cleaned.append(block)
+            message.content = cleaned
+        return response
+
+
 class ThinkingOnlyRepairMiddleware(AgentMiddleware):
     """Repair MiniMax turns that contain provider thinking but no action.
 

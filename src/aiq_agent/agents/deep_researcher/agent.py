@@ -75,6 +75,7 @@ from .custom_middleware import SearchBudgetExhaustionRepairMiddleware
 from .custom_middleware import SequentialSearchMiddleware
 from .custom_middleware import SourceRegistryMiddleware
 from .custom_middleware import ResearcherTaskTimeoutMiddleware
+from .custom_middleware import ThinkTagScrubMiddleware
 from .custom_middleware import TaskBatchLimitMiddleware
 from .custom_middleware import TaskSearchBudgetMiddleware
 from .custom_middleware import ThinkingOnlyRepairMiddleware
@@ -607,6 +608,9 @@ class DeepResearcherAgent:
         """Build middleware with role-scoped search budgets and shared source registry."""
         middleware = [
             EmptyContentFixMiddleware(),
+            # MiniMax M3 leaks a bare '</think>' text block after thinking
+            # blocks; scrub it before anything else sees the response.
+            ThinkTagScrubMiddleware(),
             ToolNameSanitizationMiddleware(valid_tool_names=[t.name for t in self.all_tools]),
             ToolArgumentNormalizationMiddleware(),
             PlanFileValidationMiddleware(),

@@ -103,10 +103,12 @@ async def rerank_results(query: str, results: Sequence[dict], timeout: float | N
             except Exception as exc:
                 # Hosted rerank is rate-limited (free tier); degrade to the
                 # local ONNX reranker rather than losing reranking entirely.
-                _warn_once(
-                    "rerank-nvidia-fallback",
+                # Log every occurrence (not warn-once): recurring failures here
+                # mean each search wave pays the NVIDIA timeout before falling
+                # back, which is a real latency signal worth seeing.
+                logger.warning(
                     "NVIDIA rerank failed (%s); falling back to local flashrank.",
-                    exc,
+                    exc or type(exc).__name__,
                 )
                 scores = await asyncio.wait_for(_rerank_flashrank(query, passages), timeout=max(timeout, 120.0))
         elif backend == "flashrank":

@@ -45,6 +45,9 @@ services:
       # NVIDIA hosted llama-nemotron-rerank-1b-v2 when NVIDIA_API_KEY is set
       # (with flashrank ONNX fallback on failure), else flashrank locally.
       - AIQ_RERANK_BACKEND=${AIQ_RERANK_BACKEND:-}
+      # Hosted rerank answers in <1s; cap the wait so a bad day costs each
+      # search wave at most ~6s before the local flashrank fallback kicks in.
+      - AIQ_RERANK_TIMEOUT_SECONDS=${AIQ_RERANK_TIMEOUT_SECONDS:-4}
       - AIQ_RERANK_CACHE_DIR=${AIQ_RERANK_CACHE_DIR:-/app/data/flashrank}
       # Persist HuggingFace downloads (model2vec potion-base-8M) across recreates.
       - HF_HOME=${HF_HOME:-/app/data/hf}

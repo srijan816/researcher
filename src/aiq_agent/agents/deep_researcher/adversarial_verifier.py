@@ -572,10 +572,10 @@ async def run_adversarial_verification(
         logger.warning("Adversarial verifier claim selection failed", exc_info=True)
         return None
     if not claims:
-        logger.debug("Adversarial verifier: no high-risk claims selected")
+        logger.info("Adversarial verifier: no high-risk claims selected — verification skipped")
         return None
     if not any(claim.evidence for claim in claims):
-        logger.debug("Adversarial verifier skipped: no evidence extracts available")
+        logger.info("Adversarial verifier skipped: no evidence extracts available for selected claims")
         return None
 
     # NLI pre-filter cascade: settle clearly-entailed claims locally before
