@@ -36,7 +36,9 @@ import { hasActiveDeepResearchJob } from '@/features/chat/lib/session-activity'
 import { deleteAllConversationSnapshots, deleteConversationSnapshot } from '@/adapters/api'
 import { useLayoutStore } from '../store'
 import { useSessionUrl } from '@/hooks/use-session-url'
-import { Chat, Generate, Menu } from '@/adapters/ui/icons'
+import { Chat, Generate, Menu, Settings, Book, Logout } from '@/adapters/ui/icons'
+import { Avatar } from '@/adapters/ui'
+import { ThemeToggleButton } from './ThemeToggleButton'
 
 const DISPLAYABLE_MESSAGE_TYPES = new Set([
   'user',
@@ -114,6 +116,8 @@ export const MainLayout: FC<MainLayoutProps> = ({
   const isResearchPanelOpen = rightPanel === 'research'
   const prefersReducedMotion = useReducedMotion()
   const [isMobileViewport, setIsMobileViewport] = useState(false)
+  // Mobile overflow "More" sheet (Settings / Account / Docs / user)
+  const [isMobileMoreOpen, setIsMobileMoreOpen] = useState(false)
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(max-width: 767px)')
@@ -305,6 +309,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
             type="button"
             onClick={() => {
               setSessionsPanelOpen(true)
+              setIsMobileMoreOpen(false)
               closeRightPanel()
             }}
             className={`flex flex-1 flex-col items-center justify-center gap-1 transition-colors ${
@@ -320,6 +325,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
             type="button"
             onClick={() => {
               setSessionsPanelOpen(false)
+              setIsMobileMoreOpen(false)
               closeRightPanel()
             }}
             className={`flex flex-1 flex-col items-center justify-center gap-1 transition-colors ${
@@ -337,6 +343,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
             type="button"
             onClick={() => {
               setSessionsPanelOpen(false)
+              setIsMobileMoreOpen(false)
               openRightPanel('research')
             }}
             className={`flex flex-1 flex-col items-center justify-center gap-1 transition-colors ${
@@ -346,6 +353,98 @@ export const MainLayout: FC<MainLayoutProps> = ({
             <Generate className="h-5 w-5" />
             <span className="text-[10px] font-semibold uppercase tracking-wider">Research</span>
           </button>
+
+          {/* Tab 4: More (Settings / Account / Docs / user) */}
+          <button
+            type="button"
+            onClick={() => setIsMobileMoreOpen((open) => !open)}
+            aria-expanded={isMobileMoreOpen}
+            aria-label="More options"
+            data-testid="mobile-more-button"
+            className={`flex flex-1 flex-col items-center justify-center gap-1 transition-colors ${
+              isMobileMoreOpen ? 'text-accent-primary' : 'text-subtle hover:text-primary'
+            }`}
+          >
+            <Settings className="h-5 w-5" />
+            <span className="text-[10px] font-semibold uppercase tracking-wider">More</span>
+          </button>
+        </div>
+      )}
+
+      {/* Mobile "More" sheet */}
+      {isMobileViewport && isAuthenticated && isMobileMoreOpen && (
+        <div
+          className="fixed inset-0 z-50"
+          role="dialog"
+          aria-label="More options"
+          data-testid="mobile-more-sheet"
+        >
+          {/* Backdrop */}
+          <button
+            type="button"
+            aria-label="Close more options"
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setIsMobileMoreOpen(false)}
+          />
+          <div className="border-base bg-surface-raised absolute inset-x-0 bottom-0 max-h-[70dvh] overflow-y-auto rounded-t-2xl border-t p-4 pb-6">
+            {/* Signed-in user */}
+            <div className="border-base mb-3 flex items-center gap-3 border-b pb-3">
+              <Avatar
+                size="medium"
+                src={user?.image}
+                fallback={(user?.name || user?.email || 'U').charAt(0).toUpperCase()}
+              />
+              <div className="min-w-0 flex-1">
+                <Text kind="label/bold/md" className="text-primary block truncate">
+                  {user?.name || 'User'}
+                </Text>
+                {user?.email && (
+                  <Text kind="body/regular/sm" className="text-subtle block truncate">
+                    {user.email}
+                  </Text>
+                )}
+              </div>
+              <ThemeToggleButton compact />
+            </div>
+
+            {(
+              [
+                { label: 'Settings', panel: 'settings' as const, icon: <Settings className="h-5 w-5" /> },
+                { label: 'Account', panel: 'account' as const, icon: <Avatar size="small" fallback={(user?.name || 'U').charAt(0).toUpperCase()} /> },
+                { label: 'Docs', panel: 'docs' as const, icon: <Book className="h-5 w-5" /> },
+              ]
+            ).map((item) => (
+              <button
+                key={item.panel}
+                type="button"
+                onClick={() => {
+                  setIsMobileMoreOpen(false)
+                  setSessionsPanelOpen(false)
+                  openRightPanel(item.panel)
+                }}
+                className="text-primary hover:bg-interaction-base flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium"
+              >
+                <span className="text-subtle flex h-6 w-6 items-center justify-center">{item.icon}</span>
+                {item.label}
+              </button>
+            ))}
+
+            {onSignOut && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMobileMoreOpen(false)
+                  onSignOut()
+                }}
+                className="text-error hover:bg-interaction-base flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium"
+              >
+                <span className="flex h-6 w-6 items-center justify-center">
+                  <Logout className="h-5 w-5" />
+                </span>
+                Sign Out
+              </button>
+            )}
+          </div>
         </div>
       )}
       </Flex>

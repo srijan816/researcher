@@ -13,9 +13,10 @@
 import { type ReactNode, Suspense, useEffect, useState } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { signIn } from 'next-auth/react'
-import { Flex, Text, Button, Card, Stack, Spinner } from '@/adapters/ui'
+import { Flex, Text, Button, Card, Stack, Spinner, Logo } from '@/adapters/ui'
 import { LoadingSpinner } from '@/adapters/ui/icons'
 import { useAppConfig } from '@/shared/context'
+import { resolveCallbackUrl } from '@/adapters/auth/proxy-guard'
 
 const DISCLAIMER_TEXT =
   'Disclaimer: AI models generate responses and outputs based on complex algorithms and machine learning techniques, and these responses or outputs may be inaccurate, harmful, biased, or indecent. By testing this model, you assume the risk of any harm caused by any response or output of the model. We may capture interaction analytics to improve the application experience. We will not retain your content, documents or output for analysis for training, but may retain it to enable session history. For more information visit the Docs page.'
@@ -28,6 +29,7 @@ const SignInContent = (): ReactNode => {
   const { authRequired, authProviderId } = useAppConfig()
   const searchParams = useSearchParams()
   const error = searchParams?.get('error') ?? null
+  const callbackUrl = resolveCallbackUrl(searchParams?.get('callbackUrl'))
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [rememberMe, setRememberMe] = useState(true)
@@ -52,7 +54,7 @@ const SignInContent = (): ReactNode => {
 
   const handleSignIn = async (): Promise<void> => {
     if (authProviderId !== 'local-users') {
-      await signIn(authProviderId, { callbackUrl: '/' })
+      await signIn(authProviderId, { callbackUrl })
       return
     }
 
@@ -63,11 +65,11 @@ const SignInContent = (): ReactNode => {
       password,
       remember_me: rememberMe ? 'true' : 'false',
       redirect: false,
-      callbackUrl: '/',
+      callbackUrl,
     })
     setIsSubmitting(false)
     if (result?.ok) {
-      router.replace('/')
+      router.replace(callbackUrl)
       return
     }
     setLocalError('Invalid username or password.')
@@ -97,12 +99,10 @@ const SignInContent = (): ReactNode => {
 
   return (
     <Stack gap="6" align="center">
-      <span className="flex h-10 w-10 items-center justify-center rounded-md bg-[#20808d] text-lg font-semibold text-white">
-        D
-      </span>
+      <Logo kind="horizontal" size="large" className="h-14 w-auto" />
 
       <Flex direction="col" gap="2" align="center">
-        <Text kind="title/lg">Sign in to Deep Research</Text>
+        <Text kind="title/lg">Sign in to GenAlphAI Research</Text>
         <Text kind="body/regular/md" className="text-secondary text-center">
           Sign in to continue
         </Text>
@@ -177,7 +177,10 @@ const SignInContent = (): ReactNode => {
         </Button>
       )}
 
-      <Text kind="body/regular/sm" className="text-subtle text-center">
+      <Text
+        kind="body/regular/sm"
+        className="text-subtle mx-auto max-w-sm px-2 text-center text-[13px] leading-relaxed"
+      >
         By signing in, you agree to the terms of service and privacy policy.
       </Text>
     </Stack>
@@ -193,7 +196,7 @@ const SignInPage = (): ReactNode => {
       direction="col"
       align="center"
       justify="center"
-      className="bg-surface-sunken relative min-h-screen p-8"
+      className="bg-surface-sunken relative min-h-screen gap-6 p-4 pb-8 sm:p-8"
     >
       {/* Card content */}
       <Card className="relative z-10 w-full max-w-md p-6">
@@ -208,10 +211,11 @@ const SignInPage = (): ReactNode => {
         </Suspense>
       </Card>
 
-      {/* Disclaimer */}
+      {/* Disclaimer — flows below the card on small screens (no overlap),
+          pinned to the bottom only when there is room (tall viewports) */}
       <Text
         kind="body/regular/sm"
-        className="text-subtle absolute bottom-4 left-1/2 z-10 w-full max-w-3xl -translate-x-1/2 px-4 text-center opacity-70"
+        className="text-subtle z-10 w-full max-w-3xl px-4 text-center text-[13px] leading-relaxed opacity-70 lg:absolute lg:bottom-4 lg:left-1/2 lg:-translate-x-1/2"
       >
         {DISCLAIMER_TEXT}
       </Text>

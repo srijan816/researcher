@@ -19,6 +19,7 @@ import { Providers } from './providers'
 import type { AppConfig } from '@/shared/context'
 import { getFileUploadConfigFromEnv } from '@/shared/config/file-upload'
 import { isAuthRequired, AUTH_PROVIDER_ID, TOKEN_REFRESH_BUFFER_SECONDS } from '@/adapters/auth/config'
+import { THEME_BOOTSTRAP_SCRIPT } from '@/features/layout/theme'
 import './globals.css'
 
 const fontSans = Inter({
@@ -73,6 +74,8 @@ const RootLayout = async ({ children }: RootLayoutProps): Promise<ReactNode> => 
       suppressHydrationWarning
     >
       <head>
+        {/* Apply persisted theme (or prefers-color-scheme) before first paint */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} />
         {/* CDN SVG icon loader - inlines <svg data-src="..."> elements */}
         <script
           src="https://unpkg.com/external-svg-loader@1.6.8/svg-loader.min.js"

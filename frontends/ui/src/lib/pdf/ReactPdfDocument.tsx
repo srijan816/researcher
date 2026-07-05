@@ -140,17 +140,21 @@ const styles = StyleSheet.create({
     color: '#0066cc',
     textDecoration: 'underline',
   },
+  /* Images are isolated blocks: wrap={false} keeps image + caption together
+     and breaks the whole block to the next page if it can't fit; generous
+     vertical margins keep surrounding text clear of the figure. */
   imageBlock: {
-    marginTop: 10,
-    marginBottom: 10,
+    marginTop: 14,
+    marginBottom: 14,
     alignItems: 'center',
   },
   image: {
     maxWidth: '100%',
+    maxHeight: 300,
     objectFit: 'contain',
   },
   imageCaption: {
-    marginTop: 4,
+    marginTop: 6,
     fontSize: 8,
     color: '#666666',
     fontFamily: 'Courier',

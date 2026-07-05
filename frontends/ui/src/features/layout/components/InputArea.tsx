@@ -229,6 +229,8 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   const researchEngine = useLayoutStore((s) => s.researchEngine)
   const includeImages = useLayoutStore((s) => s.includeImages)
   const setIncludeImages = useLayoutStore((s) => s.setIncludeImages)
+  const imageCount = useLayoutStore((s) => s.imageCount)
+  const setImageCount = useLayoutStore((s) => s.setImageCount)
   const composerDraft = useLayoutStore((s) => s.composerDraft)
   const setComposerDraft = useLayoutStore((s) => s.setComposerDraft)
 
@@ -556,7 +558,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                     disabled={disabled || isResearchSessionInProgress}
                     className={`h-7 min-w-0 rounded-full px-2.5 text-xs font-medium leading-none transition-colors ${
                       selected
-                        ? 'bg-[rgba(139,92,246,0.16)] text-[#A78BFA]'
+                        ? 'bg-[var(--accent-soft)] text-[var(--accent-primary)]'
                         : 'text-subtle hover:bg-surface-raised hover:text-primary'
                     } disabled:cursor-not-allowed disabled:opacity-60`}
                     aria-label={`Research depth: ${option.label}`}
@@ -576,16 +578,45 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
               disabled={disabled || isResearchSessionInProgress}
               className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium leading-none transition-colors ${
                 includeImages
-                  ? 'border-[#8B5CF6] bg-[rgba(139,92,246,0.16)] text-[#A78BFA]'
+                  ? 'border-[var(--accent-primary)] bg-[var(--accent-soft)] text-[var(--accent-primary)]'
                   : 'border-base text-subtle hover:bg-surface-raised hover:text-primary'
               } disabled:cursor-not-allowed disabled:opacity-60`}
               aria-label="Toggle generated images"
               aria-pressed={includeImages}
-              title="Blend up to 3 generated visuals into the report"
+              title="Blend generated visuals into the report"
             >
               <Image className="h-3.5 w-3.5" aria-hidden="true" />
               Images
             </button>
+
+            {/* Image count selector (1-4) — only when images are on */}
+            {includeImages && (
+              <div
+                className="flex items-center gap-0.5 rounded-full border border-base bg-surface-raised-30 p-0.5"
+                role="group"
+                aria-label="Number of generated images"
+                data-testid="image-count-selector"
+              >
+                {[1, 2, 3, 4].map((count) => (
+                  <button
+                    key={count}
+                    type="button"
+                    onClick={() => setImageCount(count)}
+                    disabled={disabled || isResearchSessionInProgress}
+                    aria-pressed={imageCount === count}
+                    aria-label={`Request ${count} image${count > 1 ? 's' : ''}`}
+                    title={`Request ${count} generated image${count > 1 ? 's' : ''}`}
+                    className={`h-7 w-7 rounded-full text-xs font-medium leading-none transition-colors ${
+                      imageCount === count
+                        ? 'bg-[var(--accent-soft)] text-[var(--accent-primary)]'
+                        : 'text-subtle hover:bg-surface-raised hover:text-primary'
+                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                  >
+                    {count}
+                  </button>
+                ))}
+              </div>
+            )}
 
             <span className="gx-kbd-hint hidden md:inline" aria-hidden="true">
               &#9166; to research

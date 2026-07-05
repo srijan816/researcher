@@ -194,7 +194,7 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
                 src={srcStr}
                 alt={alt ?? ''}
                 loading="lazy"
-                className="mx-auto block h-auto max-w-full rounded-[14px] border border-[#26282E]"
+                className="mx-auto block h-auto max-w-full rounded-[14px] border border-[var(--app-border)]"
               />
               {alt ? (
                 <span className="text-subtle mt-2 block font-mono text-xs">{alt}</span>

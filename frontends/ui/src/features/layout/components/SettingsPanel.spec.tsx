@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   closeRightPanel: vi.fn(),
   openRightPanel: vi.fn(),
   setTheme: vi.fn(),
+  setResearchDepth: vi.fn(),
+  setIncludeImages: vi.fn(),
+  setImageCount: vi.fn(),
   listAPIKeys: vi.fn(),
   createAPIKey: vi.fn(),
   revokeAPIKey: vi.fn(),
@@ -21,8 +24,14 @@ vi.mock('../store', () => ({
       rightPanel: 'settings',
       closeRightPanel: mocks.closeRightPanel,
       openRightPanel: mocks.openRightPanel,
-      theme: 'system',
+      theme: 'dark',
       setTheme: mocks.setTheme,
+      researchDepth: 'deeper',
+      setResearchDepth: mocks.setResearchDepth,
+      includeImages: true,
+      setIncludeImages: mocks.setIncludeImages,
+      imageCount: 3,
+      setImageCount: mocks.setImageCount,
     }
     return selector ? selector(state) : state
   }),
@@ -61,8 +70,14 @@ describe('SettingsPanel', () => {
         rightPanel: 'settings',
         closeRightPanel: mocks.closeRightPanel,
         openRightPanel: mocks.openRightPanel,
-        theme: 'system',
+        theme: 'dark',
         setTheme: mocks.setTheme,
+        researchDepth: 'deeper',
+        setResearchDepth: mocks.setResearchDepth,
+        includeImages: true,
+        setIncludeImages: mocks.setIncludeImages,
+        imageCount: 3,
+        setImageCount: mocks.setImageCount,
       }
       return selector ? selector(state) : state
     })
@@ -74,12 +89,26 @@ describe('SettingsPanel', () => {
     expect(screen.getByText('Settings')).toBeInTheDocument()
   })
 
-  test('renders theme options section with static Dark message', () => {
+  test('renders the theme toggle and switches to light theme', async () => {
+    const user = userEvent.setup()
     render(<SettingsPanel />)
 
     expect(screen.getByText('UI Theme')).toBeInTheDocument()
-    expect(screen.getByText('Dark')).toBeInTheDocument()
-    expect(screen.getByText('Dark is the fixed interface theme for this deployment.')).toBeInTheDocument()
+    expect(screen.getByTestId('theme-toggle')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Use light theme' }))
+    expect(mocks.setTheme).toHaveBeenCalledWith('light')
+  })
+
+  test('renders research defaults and updates image count', async () => {
+    const user = userEvent.setup()
+    render(<SettingsPanel />)
+
+    expect(screen.getByText('Research Defaults')).toBeInTheDocument()
+    expect(screen.getByLabelText('Default depth')).toHaveValue('deeper')
+
+    await user.click(screen.getByRole('button', { name: 'Default 2 images' }))
+    expect(mocks.setImageCount).toHaveBeenCalledWith(2)
   })
 
   test('does not render when panel is closed', () => {
@@ -88,8 +117,14 @@ describe('SettingsPanel', () => {
         rightPanel: null,
         closeRightPanel: mocks.closeRightPanel,
         openRightPanel: mocks.openRightPanel,
-        theme: 'system',
+        theme: 'dark',
         setTheme: mocks.setTheme,
+        researchDepth: 'deeper',
+        setResearchDepth: mocks.setResearchDepth,
+        includeImages: true,
+        setIncludeImages: mocks.setIncludeImages,
+        imageCount: 3,
+        setImageCount: mocks.setImageCount,
       }
       return selector ? selector(state) : state
     })

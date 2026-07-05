@@ -25,6 +25,14 @@ import { useShallow } from 'zustand/react/shallow'
 import { useChatStore, AgentPrompt, AgentResponse, ErrorBanner, FileUploadBanner, DeepResearchBanner, UserMessage, ChatThinking } from '@/features/chat'
 import type { ChatMessage } from '@/features/chat'
 
+/** Example queries offered on the empty home state */
+const SUGGESTION_QUERIES = [
+  'Compare the top 3 open-source LLMs right now',
+  'What changed in AI regulation this quarter?',
+  'Is intermittent fasting supported by recent evidence?',
+  'State of solid-state batteries 2026',
+] as const
+
 interface ChatAreaProps {
   /** Whether the user is authenticated */
   isAuthenticated?: boolean
@@ -424,9 +432,9 @@ const WelcomeState: FC<WelcomeStateProps> = ({
         }`}
       >
         {homeExperience ? (
-          <AnimatedWordmark className="mx-auto mb-2 w-[min(558px,65vw)]" />
+          <AnimatedWordmark className="mx-auto mb-2 w-[min(558px,78vw)] sm:w-[min(558px,65vw)]" />
         ) : (
-          <span className="text-[#F3EFE6]" aria-hidden="true">
+          <span className="text-primary" aria-hidden="true">
             <Logo kind="horizontal" size="small" />
           </span>
         )}
@@ -436,13 +444,9 @@ const WelcomeState: FC<WelcomeStateProps> = ({
         >
           Research anything.
         </Text>
-        <Flex align="center" justify="center" gap="2" className="mt-2 flex-wrap">
-          {[
-            'Compare the top 3 open-source LLMs right now',
-            'What changed in AI regulation this quarter?',
-            'Is intermittent fasting supported by recent evidence?',
-            'State of solid-state batteries 2026',
-          ].map((label) => (
+        {/* Desktop: oval pill chips */}
+        <Flex align="center" justify="center" gap="2" className="mt-2 hidden flex-wrap sm:flex">
+          {SUGGESTION_QUERIES.map((label) => (
             <button
               key={label}
               type="button"
@@ -450,6 +454,37 @@ const WelcomeState: FC<WelcomeStateProps> = ({
               onClick={() => setComposerDraft(label)}
             >
               {label}
+            </button>
+          ))}
+        </Flex>
+
+        {/* Mobile: stacked full-width suggestion cards */}
+        <Flex
+          direction="col"
+          gap="2"
+          className="mt-2 w-full sm:hidden"
+          data-testid="suggestion-cards"
+        >
+          {SUGGESTION_QUERIES.slice(0, 3).map((label) => (
+            <button
+              key={label}
+              type="button"
+              className="gx-suggestion-card"
+              onClick={() => setComposerDraft(label)}
+            >
+              <span className="min-w-0 flex-1">{label}</span>
+              <svg
+                className="gx-suggestion-chevron h-4 w-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M9 18l6-6-6-6" />
+              </svg>
             </button>
           ))}
         </Flex>

@@ -8,14 +8,24 @@
  * locked to the brand canvas aspect ratio (1005x626):
  *
  * 1. A <canvas> particle field constrained to the α glyph. The soft mask
- *    /brand/alpha-shape.png is sampled offscreen (alpha > threshold) to
- *    build allowed positions; particles drift and twinkle inside it,
- *    colored violet→cyan across the glyph with off-white sparkles.
- * 2. /brand/text-overlay.png — the white "Gen … i" lettering — sits on
- *    top, exactly as in the static logo (the α is behind the text).
+ *    /brand/alpha-shape[-light].png is sampled offscreen (alpha > threshold)
+ *    to build allowed positions; particles drift and twinkle inside it.
+ *    Palette: primarily brand red (#F43F5E→#FB7185 across the glyph) with
+ *    ~12% green, ~12% blue and ~8% neutral sprinkles — festive but coherent.
+ * 2. /brand/text-overlay[-light].png — the lettering — sits on top, exactly
+ *    as in the static logo (the α is behind the text).
  *
- * prefers-reduced-motion: no canvas at all; renders the static
- * /brand/logo-dark.png wordmark instead.
+ * Theme-aware: on the light theme the light-variant mask/overlay assets are
+ * used and the particle hues shift to deeper values for contrast.
+ *
+ * Density is size-responsive: ~760 particles at canvas widths >= 480px,
+ * ~440 below; the `maxParticles` prop caps this (e.g. small NavRail usage).
+ *
+ * `active` (default true) controls animation: when false the particle field
+ * is drawn once as a static frame — used as an ambient "research running"
+ * indicator in the NavRail.
+ *
+ * prefers-reduced-motion: no canvas at all; renders the static logo instead.
  *
  * Animation pauses when the tab is hidden (visibilitychange) and when the
  * element is off-screen (IntersectionObserver). Clean unmount cancels the
@@ -26,28 +36,67 @@
 
 import { type FC, useEffect, useRef } from 'react'
 import { useReducedMotion } from '@/hooks/use-reduced-motion'
+import { useLayoutStore } from '@/features/layout/store'
 
 const ASPECT_RATIO = '1005 / 626'
-const MASK_SRC = '/brand/alpha-shape.png'
-const TEXT_OVERLAY_SRC = '/brand/text-overlay.png'
-const STATIC_LOGO_SRC = '/brand/logo-dark.png'
 
-const PARTICLE_COUNT = 520
+const DARK_ASSETS = {
+  mask: '/brand/alpha-shape.png',
+  textOverlay: '/brand/text-overlay.png',
+  staticLogo: '/brand/logo-dark.png',
+} as const
+
+const LIGHT_ASSETS = {
+  mask: '/brand/alpha-shape-light.png',
+  textOverlay: '/brand/text-overlay-light.png',
+  staticLogo: '/brand/logo-light.png',
+} as const
+
+/** Size-responsive particle density */
+const WIDE_CANVAS_MIN_WIDTH = 480
+const PARTICLE_COUNT_WIDE = 760
+const PARTICLE_COUNT_NARROW = 440
+
 const MAX_DPR = 2
 /** Mask alpha threshold (0–1) above which a pixel is an allowed position */
 const MASK_ALPHA_THRESHOLD = 0.35
-/** Fraction of particles rendered as off-white sparkles */
-const OFF_WHITE_RATIO = 0.12
+/** Sprinkle ratios — hue by meaning kept subtle inside the brand mark */
+const GREEN_RATIO = 0.12
+const BLUE_RATIO = 0.12
+const NEUTRAL_RATIO = 0.08
 /** Maximum drift distance (CSS px) around a particle's home point */
 const DRIFT_RADIUS = 3.5
 const MIN_RADIUS = 1.6
 const MAX_RADIUS = 4.4
 const GLOBAL_OPACITY = 0.9
 
-/** Brand gradient endpoints across the glyph (left → right) */
-const VIOLET: readonly [number, number, number] = [139, 92, 246] // #8B5CF6
-const CYAN: readonly [number, number, number] = [34, 211, 238] // #22D3EE
-const OFF_WHITE: readonly [number, number, number] = [243, 239, 230] // #F3EFE6
+type RGB = readonly [number, number, number]
+
+interface WordmarkPalette {
+  redStart: RGB
+  redEnd: RGB
+  green: RGB
+  blue: RGB
+  neutral: RGB
+}
+
+/** Dark surfaces: bright rose reds, mint green, sky blue, warm off-white */
+const DARK_PALETTE: WordmarkPalette = {
+  redStart: [244, 63, 94], // #F43F5E
+  redEnd: [251, 113, 133], // #FB7185
+  green: [52, 211, 153], // #34D399
+  blue: [56, 189, 248], // #38BDF8
+  neutral: [243, 239, 230], // #F3EFE6
+}
+
+/** Light surfaces: deeper values of the same hues for contrast on paper */
+const LIGHT_PALETTE: WordmarkPalette = {
+  redStart: [225, 29, 72], // #E11D48
+  redEnd: [244, 63, 94], // #F43F5E
+  green: [5, 150, 105], // #059669
+  blue: [2, 132, 199], // #0284C7
+  neutral: [58, 63, 71], // #3A3F47
+}
 
 interface MaskPoint {
   x: number
@@ -68,12 +117,27 @@ interface WordmarkParticle {
 const lerpChannel = (a: number, b: number, t: number): number =>
   Math.round(a + (b - a) * t)
 
-/** Interpolate violet→cyan by normalized x position across the glyph. */
-const gradientColor = (t: number): string => {
-  const r = lerpChannel(VIOLET[0], CYAN[0], t)
-  const g = lerpChannel(VIOLET[1], CYAN[1], t)
-  const b = lerpChannel(VIOLET[2], CYAN[2], t)
+/** Interpolate the red gradient by normalized x position across the glyph. */
+const gradientColor = (palette: WordmarkPalette, t: number): string => {
+  const r = lerpChannel(palette.redStart[0], palette.redEnd[0], t)
+  const g = lerpChannel(palette.redStart[1], palette.redEnd[1], t)
+  const b = lerpChannel(palette.redStart[2], palette.redEnd[2], t)
   return `${r}, ${g}, ${b}`
+}
+
+/** Pick a particle color: red gradient with green/blue/neutral sprinkles. */
+const particleColor = (palette: WordmarkPalette, normalizedX: number): string => {
+  const roll = Math.random()
+  if (roll < GREEN_RATIO) return palette.green.join(', ')
+  if (roll < GREEN_RATIO + BLUE_RATIO) return palette.blue.join(', ')
+  if (roll < GREEN_RATIO + BLUE_RATIO + NEUTRAL_RATIO) return palette.neutral.join(', ')
+  return gradientColor(palette, normalizedX)
+}
+
+/** Particle count for a given canvas width, optionally capped. */
+export const particleCountForWidth = (width: number, maxParticles?: number): number => {
+  const base = width >= WIDE_CANVAS_MIN_WIDTH ? PARTICLE_COUNT_WIDE : PARTICLE_COUNT_NARROW
+  return maxParticles ? Math.min(base, maxParticles) : base
 }
 
 /** Sample allowed positions from the alpha channel of the shape mask image. */
@@ -110,7 +174,11 @@ const buildMaskPoints = (
   return points
 }
 
-const createParticles = (mask: MaskPoint[]): WordmarkParticle[] => {
+const createParticles = (
+  mask: MaskPoint[],
+  count: number,
+  palette: WordmarkPalette
+): WordmarkParticle[] => {
   if (mask.length === 0) return []
 
   let minX = Infinity
@@ -122,9 +190,8 @@ const createParticles = (mask: MaskPoint[]): WordmarkParticle[] => {
   const span = Math.max(maxX - minX, 1)
 
   const particles: WordmarkParticle[] = []
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
+  for (let i = 0; i < count; i++) {
     const point = mask[Math.floor(Math.random() * mask.length)]
-    const isOffWhite = Math.random() < OFF_WHITE_RATIO
     particles.push({
       homeX: point.x,
       homeY: point.y,
@@ -133,9 +200,7 @@ const createParticles = (mask: MaskPoint[]): WordmarkParticle[] => {
       phase: Math.random() * Math.PI * 2,
       driftPhase: Math.random() * Math.PI * 2,
       speed: 0.4 + Math.random() * 0.8,
-      color: isOffWhite
-        ? OFF_WHITE.join(', ')
-        : gradientColor((point.x - minX) / span),
+      color: particleColor(palette, (point.x - minX) / span),
     })
   }
   return particles
@@ -143,11 +208,26 @@ const createParticles = (mask: MaskPoint[]): WordmarkParticle[] => {
 
 export interface AnimatedWordmarkProps {
   className?: string
+  /**
+   * Whether the particle field animates. When false a single static frame is
+   * drawn (ambient/idle state). Defaults to true.
+   */
+  active?: boolean
+  /** Optional cap on the particle count (small renders, e.g. NavRail). */
+  maxParticles?: number
 }
 
-export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({ className }) => {
+export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({
+  className,
+  active = true,
+  maxParticles,
+}) => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const prefersReducedMotion = useReducedMotion()
+  const theme = useLayoutStore((s) => s.theme)
+  const isLight = theme === 'light'
+  const assets = isLight ? LIGHT_ASSETS : DARK_ASSETS
+  const palette = isLight ? LIGHT_PALETTE : DARK_PALETTE
 
   useEffect(() => {
     if (prefersReducedMotion) return
@@ -173,8 +253,7 @@ export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({ className }) => {
     let isDisposed = false
     const startTime = performance.now()
 
-    const animate = (now: number): void => {
-      const t = (now - startTime) / 1000
+    const drawFrame = (t: number): void => {
       ctx.clearRect(0, 0, width, height)
       for (const p of particles) {
         const drift = t * p.speed
@@ -196,18 +275,26 @@ export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({ className }) => {
         ctx.fill()
       }
       ctx.globalAlpha = 1
+    }
+
+    const animate = (now: number): void => {
+      drawFrame((now - startTime) / 1000)
       frameId = requestAnimationFrame(animate)
     }
 
     const syncRunningState = (): void => {
       const shouldRun =
-        !isDisposed && isTabVisible && isInView && particles.length > 0
+        !isDisposed && active && isTabVisible && isInView && particles.length > 0
       if (shouldRun && !isRunning) {
         isRunning = true
         frameId = requestAnimationFrame(animate)
       } else if (!shouldRun && isRunning) {
         isRunning = false
         cancelAnimationFrame(frameId)
+      }
+      // Idle: particles frozen mid-twinkle as a single static frame
+      if (!isDisposed && !active && !isRunning && particles.length > 0) {
+        drawFrame(0)
       }
     }
 
@@ -229,13 +316,17 @@ export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({ className }) => {
     maskImage.decoding = 'async'
     maskImage.onload = () => {
       if (isDisposed) return
-      particles = createParticles(buildMaskPoints(maskImage, width, height))
+      particles = createParticles(
+        buildMaskPoints(maskImage, width, height),
+        particleCountForWidth(width, maxParticles),
+        palette
+      )
       syncRunningState()
     }
     maskImage.onerror = () => {
       // Mask unavailable — the text overlay still renders; skip particles.
     }
-    maskImage.src = MASK_SRC
+    maskImage.src = assets.mask
 
     return () => {
       isDisposed = true
@@ -243,7 +334,7 @@ export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({ className }) => {
       document.removeEventListener('visibilitychange', handleVisibility)
       observer.disconnect()
     }
-  }, [prefersReducedMotion])
+  }, [prefersReducedMotion, active, maxParticles, assets.mask, palette])
 
   if (prefersReducedMotion) {
     return (
@@ -254,7 +345,7 @@ export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({ className }) => {
       >
         {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset */}
         <img
-          src={STATIC_LOGO_SRC}
+          src={assets.staticLogo}
           alt="GenAlphAI"
           className="absolute inset-0 h-full w-full object-contain"
           draggable={false}
@@ -278,7 +369,7 @@ export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({ className }) => {
       />
       {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset */}
       <img
-        src={TEXT_OVERLAY_SRC}
+        src={assets.textOverlay}
         alt=""
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 h-full w-full"

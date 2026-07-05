@@ -17,127 +17,349 @@
 /* =============================================================================
    GenAlphAI Research theme (unlayered — highest cascade priority)
 
-   The KUI theme variables are defined inside @layer base in kui-generated.css.
-   These unlayered declarations map every interactive token to the GenAlphAI
-   accent violet and the editorial dark-neutral surface set.
+   Theme system: <html data-theme="dark|light">. Dark is the default and its
+   values live on :root; the html[data-theme='light'] block overrides every
+   token, so all gx-*, ar-* and deep-* rules (which only consume var()) flip
+   automatically.
 
-   Surfaces: base #0F1112 / raised #17191C / sunken #0A0B0C / hover #1D2024
-   Borders:  #26282E primary, #33363E hover
-   Text:     #F3EFE6 strong / #C9CCD1 body / #8B8F98 muted / #5C616B faint
-   Accent:   #8B5CF6 primary, #A78BFA hover-light, #6D28D9 pressed
+   Dark surfaces: base #0F1112 / raised #17191C / sunken #0A0B0C / hover #1D2024
+   Dark borders:  #26282E primary, #33363E hover
+   Dark text:     #F3EFE6 strong / #C9CCD1 body / #8B8F98 muted / #5C616B faint
+   Accent:        rose red #F43F5E (brand + interactive + destructive)
+   Semantic:      green #34D399 = success/complete, blue #38BDF8 = info/running
    ============================================================================= */
 
 :root {
-  --color-brand: #8B5CF6;
-  --color-brand-secondary: #A78BFA;
-  --color-green-025: #fbfaff;
-  --color-green-050: #f5f3ff;
-  --color-green-100: #ede9fe;
-  --color-green-200: #A78BFA;
-  --color-green-300: #8B5CF6;
-  --color-green-400: #7C3AED;
-  --color-green-500: #6D28D9;
-  --color-green-600: #5B21B6;
-  --color-green-700: #4C1D95;
-  --color-green-800: #2E1065;
-  --color-green-900: #1F0A4D;
-  --color-green-950: #12062E;
-  --gx-glow: rgba(139, 92, 246, 0.18);
+  --app-color-scheme: dark;
+  --app-bg: #0F1112;
+  --app-raised: #17191C;
+  --app-sunken: #0A0B0C;
+  --app-hover: #1D2024;
+  --app-border: #26282E;
+  --app-border-hover: #33363E;
+  --app-text-strong: #F3EFE6;
+  --app-text-body: #C9CCD1;
+  --app-text-muted: #8B8F98;
+  --app-text-faint: #5C616B;
+
+  /* Brand / interactive accent — rose red */
+  --accent-primary: #F43F5E;
+  --accent-primary-hover: #FB7185;
+  --accent-primary-pressed: #BE123C;
+  --accent-destructive-hover: #E11D48;
+  --gx-glow: rgba(244, 63, 94, 0.16);
+  --accent-selection: rgba(244, 63, 94, 0.25);
+  --accent-soft: rgba(244, 63, 94, 0.12);
+
+  /* Semantic accents (assigned by meaning, used sparingly) */
+  --accent-success: #34D399;
+  --accent-success-soft: rgba(52, 211, 153, 0.14);
+  --accent-info: #38BDF8;
+  --accent-info-soft: rgba(56, 189, 248, 0.14);
+  --accent-info-pulse: rgba(56, 189, 248, 0.4);
+
+  --color-brand: var(--accent-primary);
+  --color-brand-secondary: var(--accent-primary-hover);
   --gx-warm: #E8E3D8;
-  /* Rose is reserved for error/destructive elements only */
   --color-danger: #F43F5E;
+
+  /* Emerald scale so KUI feedback-success tokens read as true green */
+  --color-green-025: #f2fdf8;
+  --color-green-050: #ecfdf5;
+  --color-green-100: #d1fae5;
+  --color-green-200: #6ee7b7;
+  --color-green-300: #34d399;
+  --color-green-400: #34d399;
+  --color-green-500: #10b981;
+  --color-green-600: #059669;
+  --color-green-700: #047857;
+  --color-green-800: #065f46;
+  --color-green-900: #064e3b;
+  --color-green-950: #022c22;
 }
 
-/* Light theme brand tokens — per KUI spec */
-:where(:root, .nv-light) {
-  --background-color-interaction-primary-base: #8B5CF6;
-  --background-color-interaction-primary-hover: #A78BFA;
-  --background-color-interaction-primary-selected: #6D28D9;
-  --border-color-interaction-primary-base: #8B5CF6;
-  --text-color-brand: var(--color-brand);
-  --border-color-brand: var(--color-brand);
-  /* KUI brand buttons label with --text-color-accent-black; on the violet fill
+/* KUI interaction tokens — red primary in both themes */
+:where(:root, .nv-light),
+.nv-dark {
+  --background-color-interaction-primary-base: var(--accent-primary);
+  --background-color-interaction-primary-hover: var(--accent-primary-hover);
+  --background-color-interaction-primary-selected: var(--accent-primary-pressed);
+  --border-color-interaction-primary-base: var(--accent-primary);
+  --text-color-brand: var(--accent-primary);
+  --border-color-brand: var(--accent-primary);
+  /* KUI brand buttons label with --text-color-accent-black; on the red fill
      the label reads as warm white. Token is only consumed by brand-filled
      controls, so the override is safe globally. */
-  --text-color-accent-black: #F7F5FF;
+  --text-color-accent-black: #FFF5F6;
 }
 
-/* Dark theme brand tokens — per KUI spec (same primary stops as light) */
-.nv-dark {
-  --background-color-interaction-primary-base: #8B5CF6;
-  --background-color-interaction-primary-hover: #A78BFA;
-  --background-color-interaction-primary-selected: #6D28D9;
-  --border-color-interaction-primary-base: #8B5CF6;
-  --text-color-brand: var(--color-brand);
+/* =============================================================================
+   Light theme — engineered warm paper. Overrides every app token and the full
+   KUI variable set (block mirrors kui-generated.css :where(:root,.nv-light);
+   unlayered, so it beats the @layer .nv-dark block applied by providers).
+   ============================================================================= */
+html[data-theme='light'] {
+  --app-color-scheme: light;
+  --app-bg: #FAFAF8;
+  --app-raised: #FFFFFF;
+  --app-sunken: #F1F1EE;
+  --app-hover: #ECECEA;
+  --app-border: #E2E2DE;
+  --app-border-hover: #D2D2CC;
+  --app-text-strong: #17191C;
+  --app-text-body: #3A3F47;
+  --app-text-muted: #767C86;
+  --app-text-faint: #A2A7AF;
+
+  --accent-primary: #E11D48;
+  --accent-primary-hover: #F43F5E;
+  --accent-primary-pressed: #BE123C;
+  --gx-glow: rgba(225, 29, 72, 0.14);
+  --accent-selection: rgba(225, 29, 72, 0.22);
+  --accent-soft: rgba(225, 29, 72, 0.10);
+
+  --accent-success: #059669;
+  --accent-success-soft: rgba(5, 150, 105, 0.12);
+  --accent-info: #0284C7;
+  --accent-info-soft: rgba(2, 132, 199, 0.12);
+  --accent-info-pulse: rgba(2, 132, 199, 0.35);
+
+  --gx-warm: #6B6455;
+  --color-green-300: #059669;
+  --color-green-400: #059669;
+
+  --background-color-accent-blue: var(--color-blue-050);
+  --background-color-accent-blue-hover: var(--color-blue-050);
+  --background-color-accent-blue-selected: var(--color-blue-200);
+  --background-color-accent-blue-strong: var(--color-blue-700);
+  --background-color-accent-blue-subtle: var(--color-blue-050);
+  --background-color-accent-blue-subtle-hover: var(--color-blue-200);
+  --background-color-accent-blue-subtle-selected: var(--color-blue-600);
+  --background-color-accent-gray: var(--color-gray-200);
+  --background-color-accent-gray-hover: var(--color-gray-300);
+  --background-color-accent-gray-selected: var(--color-gray-700);
+  --background-color-accent-gray-strong: var(--color-gray-700);
+  --background-color-accent-gray-subtle: var(--color-gray-100);
+  --background-color-accent-gray-subtle-hover: var(--color-gray-300);
+  --background-color-accent-gray-subtle-selected: var(--color-gray-700);
+  --background-color-accent-green: var(--color-green-025);
+  --background-color-accent-green-hover: var(--color-green-025);
+  --background-color-accent-green-selected: var(--color-green-050);
+  --background-color-accent-green-strong: var(--color-green-800);
+  --background-color-accent-green-subtle: var(--color-green-100);
+  --background-color-accent-green-subtle-hover: var(--color-green-200);
+  --background-color-accent-green-subtle-selected: var(--color-green-600);
+  --background-color-accent-purple: var(--color-purple-200);
+  --background-color-accent-purple-hover: var(--color-purple-050);
+  --background-color-accent-purple-selected: var(--color-purple-100);
+  --background-color-accent-purple-strong: var(--color-purple-700);
+  --background-color-accent-purple-subtle: var(--color-purple-050);
+  --background-color-accent-purple-subtle-hover: var(--color-purple-100);
+  --background-color-accent-purple-subtle-selected: var(--color-purple-600);
+  --background-color-accent-red: var(--color-red-100);
+  --background-color-accent-red-hover: var(--color-red-050);
+  --background-color-accent-red-selected: var(--color-red-100);
+  --background-color-accent-red-strong: var(--color-red-700);
+  --background-color-accent-red-subtle: var(--color-red-100);
+  --background-color-accent-red-subtle-hover: var(--color-red-200);
+  --background-color-accent-red-subtle-selected: var(--color-red-600);
+  --background-color-accent-teal: var(--color-teal-100);
+  --background-color-accent-teal-hover: var(--color-teal-050);
+  --background-color-accent-teal-selected: var(--color-teal-100);
+  --background-color-accent-teal-strong: var(--color-teal-800);
+  --background-color-accent-teal-subtle: var(--color-teal-100);
+  --background-color-accent-teal-subtle-hover: var(--color-teal-200);
+  --background-color-accent-teal-subtle-selected: var(--color-teal-600);
+  --background-color-accent-yellow: var(--color-yellow-100);
+  --background-color-accent-yellow-hover: var(--color-yellow-050);
+  --background-color-accent-yellow-selected: var(--color-yellow-100);
+  --background-color-accent-yellow-strong: var(--color-yellow-700);
+  --background-color-accent-yellow-subtle: var(--color-yellow-100);
+  --background-color-accent-yellow-subtle-hover: var(--color-yellow-100);
+  --background-color-accent-yellow-subtle-selected: var(--color-yellow-600);
+  --background-color-component-skeleton: var(--color-gray-100);
+  --background-color-component-skeleton-subtle: var(--color-gray-200);
+  --background-color-component-tooltip: var(--color-gray-800);
+  --background-color-component-track: var(--color-translucent-black-100);
+  --background-color-component-track-inverse: var(
+  --color-translucent-black-100
+  );
+  --background-color-feedback-danger: var(--color-red-300);
+  --background-color-feedback-danger-hover: var(--color-red-600);
+  --background-color-feedback-danger-pressed: var(--color-red-700);
+  --background-color-feedback-danger-strong: var(--color-red-500);
+  --background-color-feedback-danger-subtle-hover: var(--color-red-100);
+  --background-color-feedback-danger-subtle-pressed: var(--color-red-200);
+  --background-color-feedback-info: var(--color-blue-050);
+  --background-color-feedback-success: var(--color-green-025);
+  --background-color-feedback-warning: var(--color-yellow-100);
+  --background-color-interaction-base: var(--color-gray-000);
+  --background-color-interaction-disabled: var(--color-translucent-black-050);
+  --background-color-interaction-disabled-checked: var(
+  --color-translucent-black-400
+  );
+  --background-color-interaction-hover: var(--color-translucent-black-050);
+  --background-color-interaction-inverse: var(--color-gray-900);
+  --background-color-interaction-inverse-hover: var(--color-gray-950);
+  --background-color-interaction-inverse-pressed: var(--color-gray-975);
+  --background-color-interaction-pressed: var(--color-translucent-black-100);
+  --background-color-interaction-primary-base: var(--color-green-300);
+  --background-color-interaction-primary-hover: var(--color-green-400);
+  --background-color-interaction-primary-selected: var(--color-green-500);
+  --background-color-interaction-selected: var(--color-gray-000);
+  --background-color-surface-base: var(--color-gray-000);
+  --background-color-surface-blanket: var(--color-translucent-black-700);
+  --background-color-surface-glass: var(--color-translucent-white-800);
+  --background-color-surface-navigation: var(--color-gray-000);
+  --background-color-surface-overlay: var(--color-gray-000);
+  --background-color-surface-raised: var(--color-gray-000);
+  --background-color-surface-sunken: var(--color-gray-050);
+  --border-color-accent-black: var(--color-gray-1000);
+  --border-color-accent-blue: var(--color-blue-600);
+  --border-color-accent-gray: var(--color-gray-700);
+  --border-color-accent-green: var(--color-green-700);
+  --border-color-accent-purple: var(--color-purple-600);
+  --border-color-accent-red: var(--color-red-600);
+  --border-color-accent-teal: var(--color-teal-600);
+  --border-color-accent-white: var(--color-gray-000);
+  --border-color-accent-yellow: var(--color-yellow-600);
+  --border-color-base: var(--color-translucent-black-200);
   --border-color-brand: var(--color-brand);
-  --text-color-accent-black: #F7F5FF;
+  --border-color-component-tooltip: var(--color-gray-600);
+  --border-color-disabled: var(--color-translucent-black-400);
+  --border-color-feedback-danger: var(--color-red-500);
+  --border-color-feedback-danger-hover: var(--color-red-600);
+  --border-color-feedback-danger-strong: var(--color-red-700);
+  --border-color-feedback-danger-subtle: var(--color-red-500);
+  --border-color-feedback-info: var(--color-blue-400);
+  --border-color-feedback-success: var(--color-green-400);
+  --border-color-feedback-warning: var(--color-yellow-400);
+  --border-color-interaction-base: var(--color-translucent-black-300);
+  --border-color-interaction-disabled: var(--color-translucent-black-100);
+  --border-color-interaction-hover: var(--color-translucent-black-900);
+  --border-color-interaction-inverse: var(--color-gray-900);
+  --border-color-interaction-inverse-hover: var(--color-gray-950);
+  --border-color-interaction-inverse-pressed: var(--color-gray-975);
+  --border-color-interaction-pressed: var(--color-translucent-black-900);
+  --border-color-interaction-primary-base: var(--color-green-300);
+  --border-color-interaction-primary-hover: var(--color-green-400);
+  --border-color-interaction-primary-selected: var(--color-green-500);
+  --border-color-interaction-selected: var(--text-color-brand);
+  --border-color-interaction-strong: var(--color-gray-1000);
+  --nv-current-theme: light;
+  --text-color-accent-black: var(--color-gray-1000);
+  --text-color-accent-blue: var(--color-blue-700);
+  --text-color-accent-blue-strong: var(--color-blue-700);
+  --text-color-accent-blue-subtle: var(--color-blue-200);
+  --text-color-accent-gray: var(--color-gray-700);
+  --text-color-accent-green: var(--color-green-700);
+  --text-color-accent-green-strong: var(--color-green-700);
+  --text-color-accent-green-subtle: var(--color-green-200);
+  --text-color-accent-purple: var(--color-purple-700);
+  --text-color-accent-purple-strong: var(--color-purple-700);
+  --text-color-accent-purple-subtle: var(--color-purple-200);
+  --text-color-accent-red: var(--color-red-700);
+  --text-color-accent-red-strong: var(--color-red-700);
+  --text-color-accent-red-subtle: var(--color-red-200);
+  --text-color-accent-teal: var(--color-teal-700);
+  --text-color-accent-teal-strong: var(--color-teal-700);
+  --text-color-accent-teal-subtle: var(--color-teal-200);
+  --text-color-accent-white: var(--color-gray-000);
+  --text-color-accent-yellow: var(--color-yellow-700);
+  --text-color-accent-yellow-strong: var(--color-yellow-700);
+  --text-color-accent-yellow-subtle: var(--color-yellow-200);
+  --text-color-base: var(--color-gray-600);
+  --text-color-brand: var(--color-brand);
+  --text-color-component-nvidia-logo: var(--color-gray-1000);
+  --text-color-disabled: var(--color-gray-400);
+  --text-color-feedback-danger: var(--color-red-500);
+  --text-color-feedback-danger-inverse: var(--color-gray-900);
+  --text-color-feedback-danger-strong: var(--color-red-700);
+  --text-color-feedback-danger-subtle: var(--color-red-600);
+  --text-color-feedback-info: var(--color-blue-500);
+  --text-color-feedback-info-inverse: var(--color-gray-900);
+  --text-color-feedback-success: var(--color-green-400);
+  --text-color-feedback-success-inverse: var(--color-gray-900);
+  --text-color-feedback-warning: var(--color-yellow-500);
+  --text-color-feedback-warning-inverse: var(--color-gray-900);
+  --text-color-interaction-disabled-checked: var(
+  --color-translucent-black-300
+  );
+  --text-color-interaction-selected: var(--color-gray-000);
+  --text-color-inverse: var(--color-gray-000);
+  --text-color-inverse-brand: var(--color-gray-950);
+  --text-color-placeholder: var(--color-gray-500);
+  --text-color-primary: var(--color-gray-900);
+  --text-color-secondary: var(--color-gray-800);
+  --text-color-strong: var(--color-gray-900);
+  --text-color-subtle: var(--color-gray-400);
 }
 
 /* Brand selection color */
 ::selection {
-  background: rgba(139, 92, 246, 0.28);
+  background: var(--accent-selection);
 }
 
 /* =============================================================================
-   App shell surfaces — answer-engine dark neutrals
+   App shell surfaces — theme-driven neutrals
    ============================================================================= */
 .deep-app-shell {
-  color-scheme: dark;
-  background: #0F1112;
-  --background-color-surface-base: #0F1112;
-  --background-color-surface-raised: #17191C;
-  --background-color-surface-sunken: #0A0B0C;
-  --background-color-surface-overlay: #17191C;
-  --background-color-interaction-base: #1D2024;
-  --background-color-accent-gray: rgba(201, 204, 209, 0.22);
-  --background-color-accent-gray-hover: rgba(201, 204, 209, 0.32);
-  --text-color-primary: #F3EFE6;
-  --text-color-base: #C9CCD1;
-  --text-color-secondary: #C9CCD1;
-  --text-color-subtle: #8B8F98;
-  --border-color-base: #26282E;
-  --border-color-brand: #8B5CF6;
-  --text-color-brand: #8B5CF6;
+  color-scheme: var(--app-color-scheme);
+  background: var(--app-bg);
+  --background-color-surface-base: var(--app-bg);
+  --background-color-surface-raised: var(--app-raised);
+  --background-color-surface-sunken: var(--app-sunken);
+  --background-color-surface-overlay: var(--app-raised);
+  --background-color-interaction-base: var(--app-hover);
+  --background-color-accent-gray: color-mix(in srgb, var(--app-text-body) 22%, transparent);
+  --background-color-accent-gray-hover: color-mix(in srgb, var(--app-text-body) 32%, transparent);
+  --text-color-primary: var(--app-text-strong);
+  --text-color-base: var(--app-text-body);
+  --text-color-secondary: var(--app-text-body);
+  --text-color-subtle: var(--app-text-muted);
+  --border-color-base: var(--app-border);
+  --border-color-brand: var(--accent-primary);
+  --text-color-brand: var(--accent-primary);
 }
 
 /* Contextual strip shown above an active session */
 .deep-app-shell .deep-context-strip {
-  background: rgba(15, 17, 18, 0.85);
-  border-color: #26282E;
+  background: color-mix(in srgb, var(--app-bg) 85%, transparent);
+  border-color: var(--app-border);
   backdrop-filter: blur(14px);
 }
 
 /* Left navigation rail */
 .gx-nav-rail {
-  background: #0A0B0C;
-  border-right: 1px solid #26282E;
+  background: var(--app-sunken);
+  border-right: 1px solid var(--app-border);
 }
 
 .gx-rail-button {
-  color: #8B8F98;
+  color: var(--app-text-muted);
   border-radius: 12px;
 }
 
 .gx-rail-button:hover,
 .gx-rail-button:focus-visible {
-  color: #F3EFE6;
-  background: #1D2024;
-  box-shadow: 0 0 0 1px #33363E, 0 0 18px var(--gx-glow);
+  color: var(--app-text-strong);
+  background: var(--app-hover);
+  box-shadow: 0 0 0 1px var(--app-border-hover), 0 0 18px var(--gx-glow);
 }
 
 .gx-rail-button[aria-pressed='true'],
 .gx-rail-button.gx-rail-button--active {
-  color: #8B5CF6;
-  background: rgba(139, 92, 246, 0.1);
+  color: var(--accent-primary);
+  background: var(--accent-soft);
 }
 
 .gx-rail-logo {
-  color: #F3EFE6;
+  color: var(--app-text-strong);
 }
 
 .gx-rail-logo:hover,
 .gx-rail-logo:focus-visible {
-  color: #8B5CF6;
+  color: var(--accent-primary);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -150,7 +372,12 @@
 /* Home (empty session) hero stage */
 .deep-home-stage {
   position: relative;
-  background: linear-gradient(180deg, rgba(10, 11, 12, 0.35) 0%, rgba(15, 17, 18, 0.85) 45%, #0F1112 100%);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--app-sunken) 35%, transparent) 0%,
+    color-mix(in srgb, var(--app-bg) 85%, transparent) 45%,
+    var(--app-bg) 100%
+  );
 }
 
 .deep-home-heading {
@@ -176,16 +403,28 @@
 .deep-home-search,
 .gx-composer {
   border-radius: 20px;
-  border-color: #26282E;
-  background: #17191C;
+  border-color: var(--app-border);
+  background: var(--app-raised);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+html[data-theme='light'] .deep-home-search,
+html[data-theme='light'] .gx-composer {
+  box-shadow: 0 8px 28px rgba(23, 25, 28, 0.08);
 }
 
 .deep-home-search:focus-within,
 .gx-composer:focus-within {
-  border-color: rgba(139, 92, 246, 0.65);
+  border-color: color-mix(in srgb, var(--accent-primary) 65%, transparent);
   box-shadow:
     0 8px 32px rgba(0, 0, 0, 0.35),
+    0 0 0 3px var(--gx-glow);
+}
+
+html[data-theme='light'] .deep-home-search:focus-within,
+html[data-theme='light'] .gx-composer:focus-within {
+  box-shadow:
+    0 8px 28px rgba(23, 25, 28, 0.08),
     0 0 0 3px var(--gx-glow);
 }
 
@@ -198,31 +437,65 @@
 
 .deep-home-textarea {
   min-height: 4.5rem;
-  color: #F3EFE6;
+  color: var(--app-text-strong);
 }
 
 .deep-home-textarea::placeholder {
-  color: rgba(139, 143, 152, 0.9);
+  color: color-mix(in srgb, var(--app-text-muted) 90%, transparent);
 }
 
-/* Suggestion / example-query chips */
+/* Suggestion / example-query chips (desktop pills) */
 .gx-chip {
-  border: 1px solid #26282E;
+  border: 1px solid var(--app-border);
   border-radius: 999px;
   background: transparent;
-  color: #8B8F98;
+  color: var(--app-text-muted);
   padding: 0.375rem 0.875rem;
   font-size: 0.8125rem;
 }
 
 .gx-chip:hover,
 .gx-chip:focus-visible {
-  border-color: #8B5CF6;
-  color: #C9CCD1;
+  border-color: var(--accent-primary);
+  color: var(--app-text-body);
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .gx-chip {
+    transition: border-color 0.2s ease, color 0.2s ease;
+  }
+}
+
+/* Suggestion cards (mobile: stacked full-width rows) */
+.gx-suggestion-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  border: 1px solid var(--app-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--app-raised) 60%, transparent);
+  color: var(--app-text-body);
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  text-align: left;
+  line-height: 1.4;
+}
+
+.gx-suggestion-card:hover,
+.gx-suggestion-card:focus-visible {
+  border-color: var(--accent-primary);
+  color: var(--app-text-strong);
+}
+
+.gx-suggestion-card .gx-suggestion-chevron {
+  flex-shrink: 0;
+  color: var(--app-text-faint);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .gx-suggestion-card {
     transition: border-color 0.2s ease, color 0.2s ease;
   }
 }
@@ -233,7 +506,7 @@
   font-size: 1.5rem;
   font-weight: 500;
   line-height: 1.3;
-  color: #F3EFE6;
+  color: var(--app-text-strong);
 }
 
 /* Research panel chrome */
@@ -243,31 +516,44 @@
   font-weight: 500;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: #8B8F98;
+  color: var(--app-text-muted);
 }
 
 .gx-status-pill {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  border: 1px solid #26282E;
+  border: 1px solid var(--app-border);
   border-radius: 999px;
   padding: 0.125rem 0.625rem;
   font-size: 0.75rem;
-  color: #8B8F98;
+  color: var(--app-text-muted);
   white-space: nowrap;
 }
 
+/* Running = informational blue */
 .gx-status-pill--live {
-  border-color: rgba(139, 92, 246, 0.5);
-  color: #A78BFA;
+  border-color: color-mix(in srgb, var(--accent-info) 50%, transparent);
+  color: var(--accent-info);
+}
+
+/* Complete = success green */
+.gx-status-pill--complete {
+  border-color: color-mix(in srgb, var(--accent-success) 50%, transparent);
+  color: var(--accent-success);
+}
+
+/* Failed = danger red */
+.gx-status-pill--failed {
+  border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
+  color: var(--accent-primary);
 }
 
 .gx-status-dot {
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: #8B5CF6;
+  background: var(--accent-info);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -277,8 +563,8 @@
 }
 
 @keyframes gx-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.4); }
-  50% { opacity: 0.55; box-shadow: 0 0 0 4px rgba(139, 92, 246, 0); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--accent-info-pulse); }
+  50% { opacity: 0.55; box-shadow: 0 0 0 4px transparent; }
 }
 
 /* Activity timeline (research panel) */
@@ -293,7 +579,7 @@
   top: 8px;
   bottom: 8px;
   width: 1px;
-  background: #26282E;
+  background: var(--app-border);
 }
 
 .gx-timeline-dot {
@@ -302,20 +588,22 @@
   width: 11px;
   height: 11px;
   border-radius: 999px;
-  border: 2px solid #26282E;
-  background: #0F1112;
+  border: 2px solid var(--app-border);
+  background: var(--app-bg);
   flex-shrink: 0;
   margin-top: 4px;
 }
 
+/* Done = success green */
 .gx-timeline-dot--done {
-  background: #8B5CF6;
-  border-color: #8B5CF6;
+  background: var(--accent-success);
+  border-color: var(--accent-success);
 }
 
+/* Active / in progress = informational blue */
 .gx-timeline-dot--active {
-  border-color: #8B5CF6;
-  background: #0F1112;
+  border-color: var(--accent-info);
+  background: var(--app-bg);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -329,7 +617,7 @@
   font-family: var(--font-mono), monospace;
   font-size: 0.6875rem;
   letter-spacing: 0.04em;
-  color: #5C616B;
+  color: var(--app-text-faint);
 }
 
 @media (min-width: 640px) {
@@ -548,17 +836,17 @@ body {
 
 /* Force the app accent on inlined SVG icons whose paths use fill="currentColor" */
 .nv-icon-green {
-  color: #8B5CF6 !important;
+  color: var(--accent-primary) !important;
 }
 
 /* =============================================================================
    GenAlphAI Research polish utilities
-   Restrained violet accents; all motion gated behind prefers-reduced-motion.
+   Restrained red accents; all motion gated behind prefers-reduced-motion.
    ============================================================================= */
 
-/* Link underline bloom — violet, grows from left on hover/focus */
+/* Link underline bloom — red, grows from left on hover/focus */
 .ar-underline {
-  background-image: linear-gradient(90deg, #8B5CF6, #8B5CF6);
+  background-image: linear-gradient(90deg, var(--accent-primary), var(--accent-primary));
   background-repeat: no-repeat;
   background-position: 0 100%;
   background-size: 0% 1.5px;
@@ -570,10 +858,10 @@ body {
   background-size: 100% 1.5px;
 }
 
-/* Card lift hover with soft violet glow */
+/* Card lift hover with soft red glow */
 .ar-card-lift:hover {
   transform: translateY(-3px);
-  box-shadow: 0 24px 60px -30px rgba(139, 92, 246, 0.2);
+  box-shadow: 0 24px 60px -30px var(--accent-selection);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -592,9 +880,9 @@ body {
   }
 }
 
-/* Signature warm→violet gradient text */
+/* Signature warm→red gradient text */
 .ar-gradient-text {
-  background: linear-gradient(90deg, #E8E3D8, #8B5CF6);
+  background: linear-gradient(90deg, var(--gx-warm), var(--accent-primary));
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -604,7 +892,7 @@ body {
 .ar-gradient-bar {
   height: 2px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #8B5CF6, #6D28D9);
+  background: linear-gradient(90deg, var(--accent-primary), var(--accent-primary-pressed));
 }
 
 /* Constrain spinner SVG inside the research panel toggle tab */
@@ -633,8 +921,7 @@ body {
 
 
 /* =============================================================================
-   Minimal progress indicators — violet dot-pulse / three-dot bounce.
-   Replaces spinner/triangle indicators during research progress.
+   Minimal progress indicators — red dot-pulse / three-dot bounce.
    ============================================================================= */
 .gx-dots {
   display: inline-flex;
@@ -646,7 +933,7 @@ body {
   width: 5px;
   height: 5px;
   border-radius: 999px;
-  background: #8B5CF6;
+  background: var(--accent-primary);
   opacity: 0.55;
 }
 
@@ -663,12 +950,23 @@ body {
   40% { transform: translateY(-3px); opacity: 1; }
 }
 
+/* =============================================================================
+   Infinity loader — ∞ path with a solid α-like left loop, dotted right loop,
+   and bright dots flowing along the full path. See InfinityLoader component.
+   ============================================================================= */
+@media (prefers-reduced-motion: reduce) {
+  /* Hide the SMIL flowing dots; the static ∞ strokes remain visible */
+  .gx-infinity-motion {
+    display: none;
+  }
+}
+
 /* Keyboard hint inside the composer */
 .gx-kbd-hint {
   font-family: var(--font-mono), monospace;
   font-size: 0.6875rem;
   letter-spacing: 0.04em;
-  color: #5C616B;
+  color: var(--app-text-faint);
   white-space: nowrap;
 }
 
@@ -708,7 +1006,7 @@ body {
     --text-color-base: #111111;
     --text-color-secondary: #333333;
     --text-color-subtle: #444444;
-    --text-color-brand: #6D28D9;
+    --text-color-brand: #BE123C;
     --background-color-surface-raised: #f4f4f4;
     --background-color-surface-sunken: #ffffff;
     --border-color-base: #cccccc;
@@ -716,7 +1014,7 @@ body {
   }
 
   body.report-printing .report-print-area a {
-    color: #6D28D9;
+    color: #BE123C;
     text-decoration: underline;
   }
 
@@ -725,6 +1023,6 @@ body {
     border: none;
     background: transparent;
     padding: 0;
-    color: #6D28D9;
+    color: #BE123C;
   }
 }

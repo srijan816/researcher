@@ -60,6 +60,21 @@ describe('ChatArea', () => {
     expect(screen.getByText('Research anything.')).toBeInTheDocument()
   })
 
+  test('renders desktop pill chips and mobile stacked suggestion cards', () => {
+    const { container } = render(<ChatArea isAuthenticated={true} />)
+
+    // Desktop pills (hidden on mobile via sm:flex)
+    const pills = container.querySelectorAll('.gx-chip')
+    expect(pills.length).toBe(4)
+
+    // Mobile: at most 3 full-width suggestion cards with a chevron
+    const cardsWrap = screen.getByTestId('suggestion-cards')
+    expect(cardsWrap).toHaveClass('sm:hidden')
+    const cards = cardsWrap.querySelectorAll('.gx-suggestion-card')
+    expect(cards.length).toBe(3)
+    expect(cards[0].querySelector('.gx-suggestion-chevron')).not.toBeNull()
+  })
+
   test('calls onSignIn when sign in button clicked', async () => {
     const user = userEvent.setup()
     const onSignIn = vi.fn()

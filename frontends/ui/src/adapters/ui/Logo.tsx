@@ -4,17 +4,19 @@
 /**
  * Logo Component
  *
- * Renders the official GenAlphAI logo artwork (public/brand/):
- * - 'horizontal': logo-dark.png — the real "Gen α i" logo (white text,
- *   violet α with circuit detail and glow) on a transparent background,
- *   produced from the brand upload with the α recolored to the violet accent.
- * - 'logo-only': alpha-mark.png — just the violet α glyph, square-cropped.
+ * Renders the official GenAlphAI logo artwork (public/brand/), theme-aware:
+ * - 'horizontal': logo-dark.png / logo-light.png — the real "Gen α i" logo
+ *   (red α with circuit detail) on a transparent background.
+ * - 'logo-only': alpha-mark.png / alpha-mark-light.png — just the α glyph.
  *
  * These are raster brand assets and intentionally do not theme with
- * currentColor; they are made for dark surfaces.
+ * currentColor; the variant is picked from the active theme instead.
  */
 
+'use client'
+
 import { type FC } from 'react'
+import { useLayoutStore } from '@/features/layout/store'
 
 interface LogoProps {
   /** 'horizontal' renders the wordmark; 'logo-only' renders just the α glyph */
@@ -37,10 +39,17 @@ const markSizeMap = {
   large: { width: 56, height: 56 },
 } as const
 
+const LOGO_SRC = {
+  dark: { horizontal: '/brand/logo-dark.png', mark: '/brand/alpha-mark.png' },
+  light: { horizontal: '/brand/logo-light.png', mark: '/brand/alpha-mark-light.png' },
+} as const
+
 export const Logo: FC<LogoProps> = ({ kind = 'horizontal', size = 'medium', className }) => {
+  const theme = useLayoutStore((s) => s.theme)
+  const variant = theme === 'light' ? LOGO_SRC.light : LOGO_SRC.dark
   const isMarkOnly = kind === 'logo-only'
   const dims = isMarkOnly ? markSizeMap[size] : fullSizeMap[size]
-  const src = isMarkOnly ? '/brand/alpha-mark.png' : '/brand/logo-dark.png'
+  const src = isMarkOnly ? variant.mark : variant.horizontal
 
   return (
     // eslint-disable-next-line @next/next/no-img-element -- static brand asset, no optimization needed

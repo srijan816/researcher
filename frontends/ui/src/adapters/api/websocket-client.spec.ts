@@ -188,6 +188,44 @@ describe('NATWebSocketClient auth observability', () => {
       agent_type: 'deep_researcher',
       force_deep_research: true,
       include_images: true,
+      image_count: 3,
     })
+  })
+
+  test('sends the requested image_count when images are enabled', async () => {
+    const client = new NATWebSocketClient({
+      conversationId: 'conv-1',
+      websocketUrl: 'ws://localhost/websocket',
+      callbacks: {},
+    })
+
+    await client.connect()
+    const ws = MockWebSocket.instances[0]
+    ws.onopen?.(new Event('open'))
+
+    client.sendMessage('Visual research', ['web_search'], 'deeper', true, 2)
+
+    const envelope = JSON.parse(ws.send.mock.calls[0][0])
+    const payload = JSON.parse(envelope.content.messages[0].content[0].text)
+    expect(payload).toMatchObject({ include_images: true, image_count: 2 })
+  })
+
+  test('omits image_count when images are disabled', async () => {
+    const client = new NATWebSocketClient({
+      conversationId: 'conv-1',
+      websocketUrl: 'ws://localhost/websocket',
+      callbacks: {},
+    })
+
+    await client.connect()
+    const ws = MockWebSocket.instances[0]
+    ws.onopen?.(new Event('open'))
+
+    client.sendMessage('No visuals', ['web_search'], 'deeper', false, 2)
+
+    const envelope = JSON.parse(ws.send.mock.calls[0][0])
+    const payload = JSON.parse(envelope.content.messages[0].content[0].text)
+    expect(payload.include_images).toBe(false)
+    expect('image_count' in payload).toBe(false)
   })
 })

@@ -14,8 +14,10 @@ describe('useLayoutStore', () => {
       dataSourcesPanelTab: 'connections',
       researchDepth: 'deeper',
       researchEngine: 'aiq',
-      theme: 'system',
+      theme: 'dark',
+      imageCount: 3,
     })
+    window.localStorage.clear()
   })
 
   describe('initial state', () => {
@@ -159,24 +161,49 @@ describe('useLayoutStore', () => {
   })
 
   describe('setTheme', () => {
-    test('keeps the current dark-only theme when light is requested', () => {
+    test('sets light theme, applies it to <html> and persists it', () => {
       useLayoutStore.getState().setTheme('light')
 
-      expect(useLayoutStore.getState().theme).toBe('dark')
+      expect(useLayoutStore.getState().theme).toBe('light')
+      expect(document.documentElement.getAttribute('data-theme')).toBe('light')
+      expect(window.localStorage.getItem('gx-theme')).toBe('light')
     })
 
     test('sets dark theme', () => {
       useLayoutStore.getState().setTheme('dark')
 
       expect(useLayoutStore.getState().theme).toBe('dark')
+      expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
     })
 
-    test('keeps the current dark-only theme when system is requested', () => {
-      useLayoutStore.setState({ theme: 'dark' })
-
+    test('resolves system to a concrete theme', () => {
       useLayoutStore.getState().setTheme('system')
 
-      expect(useLayoutStore.getState().theme).toBe('dark')
+      expect(['dark', 'light']).toContain(useLayoutStore.getState().theme)
+    })
+  })
+
+  describe('setImageCount', () => {
+    test('sets a valid image count', () => {
+      useLayoutStore.getState().setImageCount(2)
+
+      expect(useLayoutStore.getState().imageCount).toBe(2)
+    })
+
+    test('clamps the image count to the 1-4 range', () => {
+      useLayoutStore.getState().setImageCount(9)
+      expect(useLayoutStore.getState().imageCount).toBe(4)
+
+      useLayoutStore.getState().setImageCount(0)
+      expect(useLayoutStore.getState().imageCount).toBe(1)
+    })
+
+    test('persists research defaults to localStorage', () => {
+      useLayoutStore.getState().setImageCount(2)
+
+      const raw = window.localStorage.getItem('gx-research-defaults')
+      expect(raw).not.toBeNull()
+      expect(JSON.parse(raw as string)).toMatchObject({ imageCount: 2 })
     })
   })
 

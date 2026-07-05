@@ -16,6 +16,7 @@
 import { type FC, useCallback } from 'react'
 import { Banner, Button, Flex, Text } from '@/adapters/ui'
 import { StopCircle } from '@/adapters/ui/icons'
+import { InfinityLoader } from '@/shared/components/InfinityLoader'
 import { formatTime } from '@/shared/utils/format-time'
 import { useLayoutStore } from '@/features/layout/store'
 import { useChatStore } from '../store'
@@ -169,6 +170,7 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
   // Render action buttons.
   const renderActions = () => (
     <Flex align="center" gap="2" className="flex-wrap justify-end">
+      {bannerType === 'starting' && <InfinityLoader size={28} label="Research running" />}
       {bannerType === 'starting' && (
         <Button
           kind="tertiary"

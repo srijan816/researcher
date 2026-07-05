@@ -286,7 +286,7 @@ describe('useWebSocketChat', () => {
     })
 
     // sendMessage is called with content and enabled data sources
-    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', expect.any(Array), 'deeper', false)
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', expect.any(Array), 'deeper', false, 3)
     expect(mockSetLoading).toHaveBeenCalledWith(false)
   })
 
@@ -314,7 +314,7 @@ describe('useWebSocketChat', () => {
     })
 
     // knowledge_layer should NOT be added since no files exist
-    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'docs'], 'deeper', false)
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'docs'], 'deeper', false, 3)
   })
 
   test('sendMessage adds knowledge_layer when files are uploaded', async () => {
@@ -343,7 +343,7 @@ describe('useWebSocketChat', () => {
     })
 
     // knowledge_layer should be ADDED since files exist for this session
-    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'docs', 'knowledge_layer'], 'deeper', false)
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'docs', 'knowledge_layer'], 'deeper', false, 3)
   })
 
   test('sendMessage adds knowledge_layer when files are ingesting', async () => {
@@ -372,7 +372,7 @@ describe('useWebSocketChat', () => {
     })
 
     // knowledge_layer should be ADDED since files are being ingested
-    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'knowledge_layer'], 'deep', false)
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'knowledge_layer'], 'deep', false, 3)
   })
 
   test('sendMessage does not add knowledge_layer when knowledgeLayerAvailable is false', async () => {
@@ -401,7 +401,7 @@ describe('useWebSocketChat', () => {
     })
 
     // knowledge_layer should NOT be added even with files if knowledgeLayerAvailable is false
-    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'docs'], 'deeper', false)
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', ['web', 'docs'], 'deeper', false, 3)
   })
 
   test('sendMessage sets error when WebSocket not connected and no conversation', () => {

@@ -20,9 +20,71 @@ import type {
   ResearchDepth,
 } from './types'
 import { createDataSourcesClient, type DataSourceFromAPI } from '@/adapters/api'
+import { applyTheme, getInitialTheme, resolveTheme } from './theme'
 
 const isEnabledByDefault = (source: DataSourceFromAPI): boolean =>
   !source.requires_auth && (source.default_enabled ?? source.id === 'web_search')
+
+/** localStorage key for persisted research defaults (depth, images) */
+export const RESEARCH_DEFAULTS_STORAGE_KEY = 'gx-research-defaults'
+
+const IMAGE_COUNT_MIN = 1
+const IMAGE_COUNT_MAX = 4
+const IMAGE_COUNT_DEFAULT = 3
+const RESEARCH_DEPTH_VALUES: readonly string[] = ['shallow', 'medium', 'deeper', 'deep']
+
+const clampImageCount = (count: number): number => {
+  const rounded = Math.round(count)
+  if (!Number.isFinite(rounded)) return IMAGE_COUNT_DEFAULT
+  return Math.min(IMAGE_COUNT_MAX, Math.max(IMAGE_COUNT_MIN, rounded))
+}
+
+interface ResearchDefaults {
+  researchDepth?: ResearchDepth
+  includeImages?: boolean
+  imageCount?: number
+}
+
+const loadResearchDefaults = (): ResearchDefaults => {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(RESEARCH_DEFAULTS_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as ResearchDefaults
+    return {
+      researchDepth: RESEARCH_DEPTH_VALUES.includes(parsed.researchDepth as string)
+        ? parsed.researchDepth
+        : undefined,
+      includeImages: typeof parsed.includeImages === 'boolean' ? parsed.includeImages : undefined,
+      imageCount:
+        typeof parsed.imageCount === 'number' ? clampImageCount(parsed.imageCount) : undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
+const saveResearchDefaults = (state: {
+  researchDepth: ResearchDepth
+  includeImages: boolean
+  imageCount: number
+}): void => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(
+      RESEARCH_DEFAULTS_STORAGE_KEY,
+      JSON.stringify({
+        researchDepth: state.researchDepth,
+        includeImages: state.includeImages,
+        imageCount: state.imageCount,
+      })
+    )
+  } catch {
+    // Storage unavailable — defaults apply for this session only
+  }
+}
+
+const persistedDefaults = loadResearchDefaults()
 
 const initialState: LayoutState = {
   isSessionsPanelOpen: false,
@@ -30,11 +92,12 @@ const initialState: LayoutState = {
   researchPanelTab: 'plan',
   dataSourcesPanelTab: 'connections',
   enabledDataSourceIds: [], // Start empty, populated when data sources are fetched
-  researchDepth: 'deeper',
+  researchDepth: persistedDefaults.researchDepth ?? 'deeper',
   researchEngine: 'aiq',
-  includeImages: false,
+  includeImages: persistedDefaults.includeImages ?? false,
+  imageCount: persistedDefaults.imageCount ?? IMAGE_COUNT_DEFAULT,
   composerDraft: null,
-  theme: 'dark',
+  theme: getInitialTheme(),
   availableDataSources: null,
   knowledgeLayerAvailable: false, // Default to false until API confirms availability
   dataSourcesLoading: false,
@@ -88,15 +151,56 @@ export const useLayoutStore = create<LayoutStore>()(
         set({ enabledDataSourceIds: ids }, false, 'setEnabledDataSources'),
 
       setResearchDepth: (depth: ResearchDepth) =>
-        set({ researchDepth: depth }, false, 'setResearchDepth'),
+        set(
+          (state) => {
+            saveResearchDefaults({
+              researchDepth: depth,
+              includeImages: state.includeImages,
+              imageCount: state.imageCount,
+            })
+            return { researchDepth: depth }
+          },
+          false,
+          'setResearchDepth'
+        ),
 
       setIncludeImages: (include: boolean) =>
-        set({ includeImages: include }, false, 'setIncludeImages'),
+        set(
+          (state) => {
+            saveResearchDefaults({
+              researchDepth: state.researchDepth,
+              includeImages: include,
+              imageCount: state.imageCount,
+            })
+            return { includeImages: include }
+          },
+          false,
+          'setIncludeImages'
+        ),
+
+      setImageCount: (count: number) =>
+        set(
+          (state) => {
+            const imageCount = clampImageCount(count)
+            saveResearchDefaults({
+              researchDepth: state.researchDepth,
+              includeImages: state.includeImages,
+              imageCount,
+            })
+            return { imageCount }
+          },
+          false,
+          'setImageCount'
+        ),
 
       setComposerDraft: (draft: string | null) =>
         set({ composerDraft: draft }, false, 'setComposerDraft'),
 
-      setTheme: (_theme: ThemeMode) => set({ theme: 'dark' }, false, 'setTheme'),
+      setTheme: (theme: ThemeMode) => {
+        const resolved = resolveTheme(theme)
+        applyTheme(resolved)
+        set({ theme: resolved }, false, 'setTheme')
+      },
 
       fetchDataSources: async (authToken?: string) => {
         set({ dataSourcesLoading: true, dataSourcesError: null }, false, 'fetchDataSources/start')

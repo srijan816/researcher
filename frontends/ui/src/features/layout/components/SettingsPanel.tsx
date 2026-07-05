@@ -16,6 +16,17 @@ import { Copy, Lock, Plus, Settings, Trash } from '@/adapters/ui/icons'
 import { changePassword, createAPIKey, listAPIKeys, revokeAPIKey, type APIKeyMetadata } from '@/adapters/api'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '../store'
+import { ThemeToggleButton } from './ThemeToggleButton'
+import type { ResearchDepth } from '../types'
+
+const DEPTH_OPTIONS: Array<{ value: ResearchDepth; label: string }> = [
+  { value: 'shallow', label: 'Quick' },
+  { value: 'medium', label: 'Standard' },
+  { value: 'deeper', label: 'Deeper' },
+  { value: 'deep', label: 'Deep' },
+]
+
+const IMAGE_COUNT_OPTIONS = [1, 2, 3, 4] as const
 
 /**
  * Settings panel for application preferences.
@@ -25,6 +36,12 @@ export const SettingsPanel: FC = memo(function SettingsPanel() {
   const isOpen = useLayoutStore((s) => s.rightPanel === 'settings')
   const closeRightPanel = useLayoutStore((s) => s.closeRightPanel)
   const openRightPanel = useLayoutStore((s) => s.openRightPanel)
+  const researchDepth = useLayoutStore((s) => s.researchDepth)
+  const setResearchDepth = useLayoutStore((s) => s.setResearchDepth)
+  const includeImages = useLayoutStore((s) => s.includeImages)
+  const setIncludeImages = useLayoutStore((s) => s.setIncludeImages)
+  const imageCount = useLayoutStore((s) => s.imageCount)
+  const setImageCount = useLayoutStore((s) => s.setImageCount)
   const [apiKeys, setApiKeys] = useState<APIKeyMetadata[]>([])
   const [apiKeyName, setApiKeyName] = useState('External App')
   const [newApiKey, setNewApiKey] = useState<string | null>(null)
@@ -154,14 +171,87 @@ export const SettingsPanel: FC = memo(function SettingsPanel() {
             UI Theme
           </Text>
 
-          <Flex direction="col" gap="1" className="rounded-md border border-base bg-surface-raised-30 px-3 py-2">
-            <Text kind="label/semibold/sm" className="text-primary">
-              Dark
-            </Text>
+          <Flex direction="col" gap="2">
+            <ThemeToggleButton />
             <Text kind="body/regular/xs" className="text-subtle">
-              Dark is the fixed interface theme for this deployment.
+              Saved on this device. First visit follows your system preference.
             </Text>
           </Flex>
+        </Flex>
+
+        <DividerLine />
+
+        {/* Research defaults */}
+        <Flex direction="col" gap="3">
+          <Text kind="label/semibold/xs" className="text-subtle uppercase">
+            Research Defaults
+          </Text>
+
+          <label className="flex flex-col gap-1" htmlFor="default-research-depth">
+            <Text kind="label/regular/sm" className="text-subtle">Default depth</Text>
+            <select
+              id="default-research-depth"
+              value={researchDepth}
+              onChange={(event) => setResearchDepth(event.target.value as ResearchDepth)}
+              className="border-base bg-surface-raised text-primary h-9 rounded-md border px-3 text-sm outline-none focus:border-accent"
+            >
+              {DEPTH_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <Flex align="center" justify="between" gap="3">
+            <Text kind="label/regular/sm" className="text-subtle">
+              Include generated images by default
+            </Text>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={includeImages}
+              aria-label="Include generated images by default"
+              onClick={() => setIncludeImages(!includeImages)}
+              className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+                includeImages ? 'bg-[var(--accent-primary)]' : 'bg-interaction-base'
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${
+                  includeImages ? 'left-[18px]' : 'left-0.5'
+                }`}
+              />
+            </button>
+          </Flex>
+
+          {includeImages && (
+            <Flex align="center" justify="between" gap="3">
+              <Text kind="label/regular/sm" className="text-subtle">Default image count</Text>
+              <div
+                className="flex items-center gap-0.5 rounded-full border border-base bg-surface-raised-30 p-0.5"
+                role="group"
+                aria-label="Default image count"
+              >
+                {IMAGE_COUNT_OPTIONS.map((count) => (
+                  <button
+                    key={count}
+                    type="button"
+                    onClick={() => setImageCount(count)}
+                    aria-pressed={imageCount === count}
+                    aria-label={`Default ${count} image${count > 1 ? 's' : ''}`}
+                    className={`h-7 w-7 rounded-full text-xs font-medium leading-none transition-colors ${
+                      imageCount === count
+                        ? 'bg-[var(--accent-soft)] text-[var(--accent-primary)]'
+                        : 'text-subtle hover:bg-surface-raised hover:text-primary'
+                    }`}
+                  >
+                    {count}
+                  </button>
+                ))}
+              </div>
+            </Flex>
+          )}
         </Flex>
 
         <DividerLine />

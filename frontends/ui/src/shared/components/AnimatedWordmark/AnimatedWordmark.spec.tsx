@@ -5,6 +5,7 @@ import { render, screen } from '@/test-utils'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { AnimatedWordmark } from './AnimatedWordmark'
 import { useReducedMotion } from '@/hooks/use-reduced-motion'
+import { useLayoutStore } from '@/features/layout/store'
 
 vi.mock('@/hooks/use-reduced-motion', () => ({
   useReducedMotion: vi.fn(() => false),
@@ -16,6 +17,8 @@ describe('AnimatedWordmark', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockUseReducedMotion.mockReturnValue(false)
+    // Assets are theme-dependent; pin the default dark theme for these tests
+    useLayoutStore.setState({ theme: 'dark' })
   })
 
   describe('animated rendering', () => {
@@ -37,6 +40,16 @@ describe('AnimatedWordmark', () => {
     test('applies the provided className to the container', () => {
       render(<AnimatedWordmark className="custom-class" />)
       expect(screen.getByTestId('animated-wordmark')).toHaveClass('custom-class')
+    })
+  })
+
+  describe('theme awareness', () => {
+    test('uses the light overlay assets on the light theme', () => {
+      useLayoutStore.setState({ theme: 'light' })
+      const { container } = render(<AnimatedWordmark />)
+
+      const overlay = container.querySelector('img')
+      expect(overlay).toHaveAttribute('src', '/brand/text-overlay-light.png')
     })
   })
 

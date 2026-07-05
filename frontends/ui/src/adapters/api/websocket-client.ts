@@ -135,12 +135,14 @@ export class NATWebSocketClient {
    * @param enabledDataSources - Optional array of enabled data source IDs to include in the query
    * @param researchDepth - Optional source/depth tier for deep research
    * @param includeImages - Whether to blend generated visuals into the report
+   * @param imageCount - How many generated visuals to request (1-4, default 3)
    */
   sendMessage = (
     content: string,
     enabledDataSources?: string[],
     researchDepth: ResearchDepth = 'deeper',
-    includeImages: boolean = false
+    includeImages: boolean = false,
+    imageCount: number = 3
   ): void => {
     const forceDeepResearch =
       apiConfig.forceDeepResearch || researchDepth === 'medium' || researchDepth === 'deeper' || researchDepth === 'deep'
@@ -155,6 +157,8 @@ export class NATWebSocketClient {
       agent_type: 'deep_researcher',
       force_deep_research: forceDeepResearch,
       include_images: includeImages,
+      // Optional int 1..4 alongside include_images (backend contract)
+      image_count: includeImages ? Math.min(4, Math.max(1, Math.round(imageCount))) : undefined,
     })
 
     const messageId = this.generateMessageId()

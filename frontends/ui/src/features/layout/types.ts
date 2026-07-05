@@ -48,6 +48,8 @@ export interface LayoutState {
   researchEngine: ResearchEngine
   /** Whether generated visuals should be blended into the report */
   includeImages: boolean
+  /** How many generated visuals to request (1-4) when includeImages is on */
+  imageCount: number
   /**
    * One-shot draft text pushed into the composer (e.g. from suggestion chips).
    * The composer consumes it and resets it to null.
@@ -95,6 +97,8 @@ export interface LayoutActions {
   setResearchDepth: (depth: ResearchDepth) => void
   /** Set whether generated visuals are requested with research */
   setIncludeImages: (include: boolean) => void
+  /** Set how many generated visuals to request (clamped to 1-4) */
+  setImageCount: (count: number) => void
   /** Push draft text into the composer (chips); null clears the request */
   setComposerDraft: (draft: string | null) => void
   /** Set the theme mode */

@@ -13,10 +13,11 @@
 'use client'
 
 import { type FC, type ReactNode, memo, useCallback, useEffect, useMemo, useState } from 'react'
-import { Flex, Button, SegmentedControl, Spinner, Text } from '@/adapters/ui'
+import { Flex, Button, SegmentedControl, Text } from '@/adapters/ui'
 import { Close, Generate, StopCircle } from '@/adapters/ui/icons'
 import { useCancelDeepResearchJob, useChatStore, useLoadJobData } from '@/features/chat'
 import { useReducedMotion } from '@/hooks/use-reduced-motion'
+import { InfinityLoader } from '@/shared/components/InfinityLoader'
 import { sanitizeEngineText } from '@/shared/utils/display-text'
 import { useLayoutStore } from '../store'
 import { PlanTab } from './PlanTab'
@@ -185,7 +186,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
         } ${
           !showToggle && !isOpen ? 'hidden' : ''
         } ${
-          isAuthenticated ? 'cursor-pointer hover:border-[#8B5CF6]' : 'cursor-not-allowed opacity-50'
+          isAuthenticated ? 'cursor-pointer hover:border-[var(--accent-primary)]' : 'cursor-not-allowed opacity-50'
         }`}
         style={{ height: 'calc(var(--spacing) * 38)' }}
         aria-label={isOpen ? 'Close research panel' : 'Open research panel'}
@@ -198,9 +199,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
           style={{ top: 'calc(var(--spacing) * 3)', width: 'calc(var(--spacing) * 6)', height: 'calc(var(--spacing) * 6)' }}
         >
           {isDeepResearchStreaming ? (
-            <span className="gx-dots" role="status" aria-label="Researching">
-              <span /><span /><span />
-            </span>
+            <InfinityLoader size={20} label="Researching" />
           ) : (
             <Generate className="h-[calc(var(--spacing)*6)] w-[calc(var(--spacing)*6)]" />
           )}
@@ -245,9 +244,9 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
                 Researching&hellip;
               </span>
             ) : deepResearchStatus === 'success' ? (
-              <span className="gx-status-pill">Complete</span>
+              <span className="gx-status-pill gx-status-pill--complete">Complete</span>
             ) : deepResearchStatus === 'failure' ? (
-              <span className="gx-status-pill">Failed</span>
+              <span className="gx-status-pill gx-status-pill--failed">Failed</span>
             ) : null}
           </Flex>
           <Flex align="center" gap="density-xl" className="pb-3">
@@ -301,9 +300,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
             <Flex align="center" justify="between" gap="3" className="min-w-0">
               <Flex align="center" gap="3" className="min-w-0 flex-1">
                 {isDeepResearchStreaming ? (
-                  <span className="gx-dots shrink-0" role="status" aria-label="Research activity">
-                    <span /><span /><span />
-                  </span>
+                  <InfinityLoader size={22} className="shrink-0" label="Research activity" />
                 ) : (
                   <Generate className="h-4 w-4 shrink-0 text-subtle" aria-hidden="true" />
                 )}
@@ -349,7 +346,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
         <Flex direction="col" className="flex-1 overflow-hidden px-3 py-4 sm:py-5 sm:pl-6 sm:pr-8">
           {isStreamLoading ? (
             <Flex direction="col" align="center" justify="center" className="h-full gap-4">
-              <Spinner size="medium" aria-label="Loading research data" />
+              <InfinityLoader size={32} label="Loading research data" />
               <Text kind="body/regular/md" className="text-tertiary">
                 {TABS_REQUIRING_STREAM.includes(researchPanelTab)
                   ? 'Loading research data...'
