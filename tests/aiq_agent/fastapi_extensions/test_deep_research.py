@@ -115,6 +115,30 @@ class TestJobSubmitRequest:
         with pytest.raises(ValueError):
             JobSubmitRequest(agent_type="deep_researcher", input="")
 
+    def test_image_count_defaults_to_none(self):
+        """image_count is optional and absent by default (backend defaults to 3 when images are on)."""
+        req = JobSubmitRequest(agent_type="deep_researcher", input="query", include_images=True)
+
+        assert req.image_count is None
+
+    def test_image_count_accepts_valid_range(self):
+        """image_count accepts 1 through 4."""
+        for count in (1, 2, 3, 4):
+            req = JobSubmitRequest(
+                agent_type="deep_researcher", input="query", include_images=True, image_count=count
+            )
+            assert req.image_count == count
+
+    def test_image_count_zero_rejected(self):
+        """image_count=0 fails validation (422 at the API boundary)."""
+        with pytest.raises(ValueError):
+            JobSubmitRequest(agent_type="deep_researcher", input="query", include_images=True, image_count=0)
+
+    def test_image_count_five_rejected(self):
+        """image_count=5 fails validation (422 at the API boundary)."""
+        with pytest.raises(ValueError):
+            JobSubmitRequest(agent_type="deep_researcher", input="query", include_images=True, image_count=5)
+
     def test_expiry_too_low_rejected(self):
         """Test that expiry below 600 is rejected."""
         with pytest.raises(ValueError):

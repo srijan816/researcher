@@ -894,8 +894,8 @@ class TestSubmitDeepResearchJob:
         mock_job_store.submit_job.assert_called_once()
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
         # Tail args are available_documents, data_sources, auth_token, research_depth,
-        # resume_files, webhook_config, include_images.
-        assert job_args[-6] == ["web_search"]
+        # resume_files, webhook_config, include_images, image_count.
+        assert job_args[-7] == ["web_search"]
 
     @pytest.mark.asyncio
     async def test_submit_agent_job_passes_research_depth(self):
@@ -926,7 +926,7 @@ class TestSubmitDeepResearchJob:
         assert result == "test-job-id"
         mock_job_store.submit_job.assert_called_once()
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
-        assert job_args[-4] == "deep"
+        assert job_args[-5] == "deep"
 
     @pytest.mark.asyncio
     async def test_submit_agent_job_passes_webhook_config(self):
@@ -958,7 +958,7 @@ class TestSubmitDeepResearchJob:
 
         assert result == "test-job-id"
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
-        assert job_args[-2] == {
+        assert job_args[-3] == {
             "url": "https://example.com/hook",
             "headers": {"X-Client": "abc"},
             "secret": "secret-value",  # pragma: allowlist secret
@@ -992,7 +992,66 @@ class TestSubmitDeepResearchJob:
 
         assert result == "test-job-id"
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
-        assert job_args[-1] is True
+        assert job_args[-2] is True
+
+    @pytest.mark.asyncio
+    async def test_submit_agent_job_passes_image_count(self):
+        """Test submit_agent_job forwards image_count as the last worker arg."""
+        from aiq_api.jobs.submit import submit_agent_job
+
+        mock_job_store = MagicMock()
+        mock_job_store.ensure_job_id.return_value = "test-job-id"
+        mock_job_store.submit_job = AsyncMock(return_value=None)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
+                "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+            },
+        ):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.submit.get_current_principal", return_value=self.principal):
+                    with patch("aiq_api.jobs.submit.create_job_access"):
+                        await submit_agent_job(
+                            agent_type="deep_researcher",
+                            input_text="test query",
+                            owner="test@example.com",
+                            include_images=True,
+                            image_count=4,
+                        )
+
+        job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
+        assert job_args[-1] == 4
+        assert job_args[-2] is True
+
+    @pytest.mark.asyncio
+    async def test_submit_agent_job_defaults_image_count_none(self):
+        """Test image_count defaults to None in worker args when not provided."""
+        from aiq_api.jobs.submit import submit_agent_job
+
+        mock_job_store = MagicMock()
+        mock_job_store.ensure_job_id.return_value = "test-job-id"
+        mock_job_store.submit_job = AsyncMock(return_value=None)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
+                "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+            },
+        ):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.submit.get_current_principal", return_value=self.principal):
+                    with patch("aiq_api.jobs.submit.create_job_access"):
+                        await submit_agent_job(
+                            agent_type="deep_researcher",
+                            input_text="test query",
+                            owner="test@example.com",
+                        )
+
+        job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
+        assert job_args[-1] is None
 
     @pytest.mark.asyncio
     async def test_submit_agent_job_defaults_include_images_false(self):
@@ -1020,7 +1079,7 @@ class TestSubmitDeepResearchJob:
                         )
 
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
-        assert job_args[-1] is False
+        assert job_args[-2] is False
 
     @pytest.mark.asyncio
     async def test_submit_with_custom_job_id(self):

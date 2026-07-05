@@ -131,6 +131,7 @@ async def submit_agent_job(
     webhook_headers: dict[str, str] | None = None,
     webhook_secret: str | None = None,
     include_images: bool = False,
+    image_count: int | None = None,
 ) -> str:
     """
     Submit an agent job to the Dask cluster.
@@ -153,8 +154,10 @@ async def submit_agent_job(
         webhook_url: Optional terminal-status webhook endpoint.
         webhook_headers: Optional static headers sent with webhook delivery.
         webhook_secret: Optional HMAC signing secret for webhook delivery.
-        include_images: Opt-in flag to embed up to three generated images in
-            the final research report.
+        include_images: Opt-in flag to embed generated images in the final
+            research report.
+        image_count: Optional preferred number of generated images (1-4,
+            default 3 when include_images is set).
 
     Returns:
         The job ID.
@@ -266,6 +269,7 @@ async def submit_agent_job(
         None,  # resume_files
         webhook_config,
         include_images,
+        image_count,
     ]
 
     try:
@@ -300,6 +304,7 @@ async def submit_agent_job(
                         "data_sources": data_sources,
                         "research_depth": research_depth,
                         "include_images": include_images,
+                        "image_count": image_count,
                         "webhook_url": webhook_url,
                     },
                 }
@@ -346,6 +351,7 @@ async def resume_agent_job(
     auth_token: str | None = None,
     resume_files: dict[str, Any] | None = None,
     include_images: bool = False,
+    image_count: int | None = None,
 ) -> str:
     """Requeue an existing failed/interrupted job ID with recovered virtual files.
 
@@ -389,6 +395,7 @@ async def resume_agent_job(
                 "data_sources": data_sources,
                 "research_depth": research_depth,
                 "include_images": include_images,
+                "image_count": image_count,
                 "resume_files": sorted((resume_files or {}).keys()),
             },
         }
@@ -412,6 +419,7 @@ async def resume_agent_job(
         resume_files,
         None,  # webhook_config — resume path doesn't carry a fresh webhook
         include_images,
+        image_count,
     ]
 
     if in_process:

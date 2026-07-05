@@ -8,9 +8,12 @@ import json
 
 import pytest
 
+from aiq_agent.common.report_images import DEFAULT_REPORT_IMAGES
 from aiq_agent.common.report_images import MAX_REPORT_IMAGES
 from aiq_agent.common.report_images import ReportImageSpec
 from aiq_agent.common.report_images import build_image_planning_outline
+from aiq_agent.common.report_images import build_planning_prompt
+from aiq_agent.common.report_images import clamp_image_count
 from aiq_agent.common.report_images import generate_and_save_report_images
 from aiq_agent.common.report_images import insert_report_images
 from aiq_agent.common.report_images import parse_image_specs
@@ -66,6 +69,12 @@ def test_parse_image_specs_skips_invalid_entries_and_caps_at_max():
     assert specs[0].after_heading == "H0"
 
 
+def test_parse_image_specs_respects_requested_max_images():
+    entries = [{"after_heading": f"H{i}", "prompt": "p", "caption": "c"} for i in range(5)]
+    assert len(parse_image_specs(json.dumps(entries), max_images=2)) == 2
+    assert len(parse_image_specs(json.dumps(entries), max_images=4)) == 4
+
+
 def test_parse_image_specs_returns_empty_for_garbage_or_empty_input():
     assert parse_image_specs("") == []
     assert parse_image_specs("no json here") == []
@@ -112,6 +121,43 @@ def test_insert_report_images_sanitizes_brackets_in_caption():
 
 def test_insert_report_images_noop_for_empty_list():
     assert insert_report_images(_REPORT, []) == (_REPORT, 0)
+
+
+# ---------------------------------------------------------- planning prompt / counts
+
+
+def test_clamp_image_count_defaults_to_three_and_caps_at_four():
+    assert clamp_image_count(None) == DEFAULT_REPORT_IMAGES == 3
+    assert clamp_image_count(1) == 1
+    assert clamp_image_count(4) == 4
+    assert clamp_image_count(0) == 1
+    assert clamp_image_count(99) == MAX_REPORT_IMAGES == 4
+
+
+def test_build_planning_prompt_demands_photorealism():
+    prompt = build_planning_prompt("## Outline")
+    assert "hyper-realistic photograph" in prompt
+    assert "NOT an illustration" in prompt
+    assert "NOT a sketch" in prompt
+    assert "NOT a cartoon" in prompt
+    assert "NOT a diagram" in prompt
+    assert "Do NOT propose charts" in prompt
+    assert "## Outline" in prompt
+
+
+def test_build_planning_prompt_is_count_aware():
+    assert "select the 3 best" in build_planning_prompt("o")
+    assert "select the 1 best" in build_planning_prompt("o", image_count=1)
+    assert "select the 4 best" in build_planning_prompt("o", image_count=4)
+
+
+def test_grok_style_suffix_leans_on_photographic_detail():
+    from aiq_agent.common.report_images import _GROK_STYLE_SUFFIX
+
+    assert "hyper-realistic" in _GROK_STYLE_SUFFIX
+    assert "natural expressive lighting" in _GROK_STYLE_SUFFIX
+    assert "photographic detail" in _GROK_STYLE_SUFFIX
+    assert "no illustration or sketch style" in _GROK_STYLE_SUFFIX
 
 
 # ------------------------------------------------------- outline / env / dir helpers

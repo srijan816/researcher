@@ -50,7 +50,8 @@ class DeepResearchAgentState(BaseModel):
         messages: Conversation history with LangGraph message reducer.
         data_sources: List of data sources selected by the user.
         research_depth: User-selected source/depth tier for deep research.
-        include_images: Opt-in flag to embed up to three generated images in the final report.
+        include_images: Opt-in flag to embed generated images in the final report.
+        image_count: Optional preferred number of generated images (1-4, default 3).
         user_info: Optional user information.
         tools_info: Information about available tools.
         todos: Todo list managed by TodoListMiddleware.
@@ -65,6 +66,7 @@ class DeepResearchAgentState(BaseModel):
     data_sources: list[str] | None = None
     research_depth: ResearchDepthTier = DEFAULT_RESEARCH_DEPTH
     include_images: bool = False
+    image_count: int | None = None
     user_info: dict[str, Any] | None = None
     tools_info: list[dict[str, Any]] | None = None
     todos: list[dict[str, Any]] = Field(default_factory=list)

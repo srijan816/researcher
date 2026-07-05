@@ -262,6 +262,7 @@ async def run_agent_job(
     resume_files: dict[str, Any] | None = None,
     webhook_config: dict[str, Any] | None = None,
     include_images: bool = False,
+    image_count: int | None = None,
 ):
     """
     Dask task to run any registered agent with cancellation support and telemetry.
@@ -310,8 +311,10 @@ async def run_agent_job(
             previous failed attempt for the same job.
         webhook_config: Optional terminal-status webhook config passed from
             the API submit request.
-        include_images: Opt-in flag to embed up to three generated images in
-            the final research report.
+        include_images: Opt-in flag to embed generated images in the final
+            research report.
+        image_count: Optional preferred number of generated images (1-4,
+            default 3 when include_images is set).
     """
 
     # Propagate auth token into the current async task's context so tools
@@ -595,6 +598,7 @@ async def run_agent_job(
                         data_sources=data_sources,
                         research_depth=research_depth,
                         include_images=include_images,
+                        image_count=image_count,
                         resume_files=resume_files,
                         event_store=event_store,
                     )
@@ -936,6 +940,7 @@ async def _run_agent(
     data_sources: list[str] | None = None,
     research_depth: ResearchDepthTier = DEFAULT_RESEARCH_DEPTH,
     include_images: bool = False,
+    image_count: int | None = None,
     resume_files: dict[str, Any] | None = None,
     event_store: EventStore | None = None,
 ) -> Any:
@@ -973,6 +978,7 @@ async def _run_agent(
                 state_kwargs["data_sources"] = data_sources
             state_kwargs["research_depth"] = research_depth
             state_kwargs["include_images"] = include_images
+            state_kwargs["image_count"] = image_count
             if resume_files:
                 state_kwargs["files"] = resume_files
             if available_documents:
@@ -996,6 +1002,7 @@ async def _run_agent(
                 state["data_sources"] = data_sources
             state["research_depth"] = research_depth
             state["include_images"] = include_images
+            state["image_count"] = image_count
             if resume_files:
                 state["files"] = resume_files
             if available_documents:

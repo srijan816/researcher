@@ -31,13 +31,13 @@ def _job_store():
     return store
 
 
-def _run(job, store, *, report=None, backfill=None):
+def _run(job, store, *, report=None, backfill=None, image_count=None):
     """Run _backfill_job_images with the report accessor and backfill helper patched."""
     with (
         patch("aiq_api.routes.jobs._get_final_report_for_job", return_value=report),
         patch("aiq_agent.common.report_images.backfill_report_images", backfill or AsyncMock()),
     ):
-        return asyncio.run(_backfill_job_images(store, _DB_URL, "j1", job))
+        return asyncio.run(_backfill_job_images(store, _DB_URL, "j1", job, image_count=image_count))
 
 
 def test_returns_409_when_job_not_terminal():
@@ -84,6 +84,24 @@ def test_success_persists_illustrated_report_via_job_store():
     assert persisted_output["report"] == _ILLUSTRATED
     # Pre-existing output fields (e.g. quality metadata) are preserved.
     assert persisted_output["quality_status"] == "pass"
+
+
+def test_backfill_forwards_requested_image_count():
+    store = _job_store()
+    backfill = AsyncMock(return_value=(_ILLUSTRATED, 1))
+
+    _run(_job(), store, report=_REPORT, backfill=backfill, image_count=4)
+
+    assert backfill.call_args.kwargs["image_count"] == 4
+
+
+def test_backfill_defaults_image_count_to_none():
+    store = _job_store()
+    backfill = AsyncMock(return_value=(_ILLUSTRATED, 1))
+
+    _run(_job(), store, report=_REPORT, backfill=backfill)
+
+    assert backfill.call_args.kwargs["image_count"] is None
 
 
 def test_no_persistence_when_zero_images_inserted():

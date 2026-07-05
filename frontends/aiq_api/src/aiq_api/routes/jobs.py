@@ -94,8 +94,17 @@ class JobSubmitRequest(BaseModel):
     include_images: bool = Field(
         False,
         description=(
-            "Opt-in: embed up to three generated illustrative images in the final report. "
+            "Opt-in: embed generated photorealistic images in the final report. "
             "Images are generated after report finalization and served from the job's image endpoint."
+        ),
+    )
+    image_count: int | None = Field(
+        None,
+        ge=1,
+        le=4,
+        description=(
+            "Optional preferred number of generated images (1-4). Only meaningful with "
+            "include_images=true; defaults to 3 when include_images is set and this field is omitted."
         ),
     )
     job_id: str | None = Field(
@@ -130,6 +139,17 @@ class JobSubmitRequest(BaseModel):
             "Optional HMAC secret. When set, webhook requests include "
             "X-AIQ-Webhook-Timestamp and X-AIQ-Webhook-Signature headers."
         ),
+    )
+
+
+class JobImagesGenerateRequest(BaseModel):
+    """Optional body for the image-backfill endpoint."""
+
+    image_count: int | None = Field(
+        None,
+        ge=1,
+        le=4,
+        description="Optional preferred number of generated images (1-4, default 3).",
     )
 
 
@@ -450,6 +470,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 data_sources=req.data_sources,
                 research_depth=req.research_depth,
                 include_images=req.include_images,
+                image_count=req.image_count,
                 webhook_url=str(req.webhook_url) if req.webhook_url else None,
                 webhook_headers=req.webhook_headers,
                 webhook_secret=req.webhook_secret.get_secret_value() if req.webhook_secret else None,
@@ -674,6 +695,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             data_sources=submit_data.get("data_sources"),
             research_depth=submit_data.get("research_depth") or DEFAULT_RESEARCH_DEPTH,
             include_images=bool(submit_data.get("include_images")),
+            image_count=_image_count_or_none(submit_data.get("image_count")),
             auth_token=get_auth_token(),
             resume_files=resume_files,
         )
@@ -741,9 +763,10 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         tags=["async jobs"],
         summary="Backfill generated images into an existing report",
         description=(
-            "Generate up to three illustrative images for a completed job's final report and "
-            "persist the illustrated report. Idempotent: if the report already embeds generated "
-            "images, no new images are added. Same auth/ownership checks as job status."
+            "Generate photorealistic images (1-4, default 3; optional JSON body {\"image_count\": N}) "
+            "for a completed job's final report and persist the illustrated report. Idempotent: if the "
+            "report already embeds generated images, no new images are added. Same auth/ownership "
+            "checks as job status."
         ),
         responses={
             404: {"description": "Job not found"},
@@ -751,11 +774,12 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             500: {"description": "Image planning/generation failed or timed out"},
         },
     )
-    async def generate_job_images(job_id: str) -> dict:
+    async def generate_job_images(job_id: str, req: JobImagesGenerateRequest | None = None) -> dict:
         """Backfill generated illustrations into an existing completed report."""
         principal = require_verified_principal()
         job = await authorize_job_access(job_store, db_url, job_id, principal)
-        return await _backfill_job_images(job_store, db_url, job_id, job)
+        image_count = req.image_count if req else None
+        return await _backfill_job_images(job_store, db_url, job_id, job, image_count=image_count)
 
     @app.get(
         "/v1/jobs/async/job/{job_id}/report",
@@ -1149,7 +1173,15 @@ def _job_has_final_report(job, db_url: str, job_id: str) -> bool:
     return bool(_get_final_report_for_job(job, db_url, job_id))
 
 
-async def _backfill_job_images(job_store, db_url: str, job_id: str, job) -> dict:
+def _image_count_or_none(value: object) -> int | None:
+    """Coerce a persisted image_count event value back to int (None when absent/invalid)."""
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def _backfill_job_images(job_store, db_url: str, job_id: str, job, *, image_count: int | None = None) -> dict:
     """Core of POST .../images/generate: validate, generate, persist. Raises HTTPException.
 
     Persists the illustrated report through the same storage path the original
@@ -1176,6 +1208,7 @@ async def _backfill_job_images(job_store, db_url: str, job_id: str, job) -> dict
             report=report,
             job_id=job_id,
             image_url_prefix=f"/api/jobs/async/job/{job_id}/images",
+            image_count=image_count,
         )
     except ReportImagesTimeoutError as exc:
         raise HTTPException(500, f"Image backfill timed out: {exc}")
@@ -1533,6 +1566,7 @@ async def _resume_orphaned_startup_jobs(job_store, db_url: str, default_expiry_s
                     data_sources=submit_data.get("data_sources"),
                     research_depth=submit_data.get("research_depth") or DEFAULT_RESEARCH_DEPTH,
                     include_images=bool(submit_data.get("include_images")),
+                    image_count=_image_count_or_none(submit_data.get("image_count")),
                     resume_files=resume_files,
                 )
                 logger.info("Successfully submitted auto-resume for job %s on startup", jid)

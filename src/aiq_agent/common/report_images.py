@@ -3,9 +3,10 @@
 """Opt-in generated illustrations for finalized deep-research reports.
 
 When a job is submitted with ``include_images=true`` the agent runs one fast
-LLM call over the finished report's outline to pick up to three genuinely
-visual opportunities (concepts, comparisons, scenes — never charts of specific
-data), generates each via the MiniMax image-generation API, saves the bytes
+LLM call over the finished report's outline to pick 1-4 (default 3, via the
+optional ``image_count`` request field) genuinely visual opportunities
+(concepts, comparisons, scenes — never charts of specific data), generates
+each as a hyper-realistic photograph via the provider chain, saves the bytes
 under a per-job artifact directory, and inserts standard markdown image tags
 right after the chosen section headings.
 
@@ -31,7 +32,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-MAX_REPORT_IMAGES = 3
+MAX_REPORT_IMAGES = 4
+DEFAULT_REPORT_IMAGES = 3
 def _stage_budget_default() -> float:
     """Grok CLI generations take 1-3 min each; API providers are fast."""
     return 480.0 if grok_cli_available() and os.environ.get("AIQ_IMAGE_PROVIDER", "").lower() != "minimax" else 60.0
@@ -62,22 +64,48 @@ _DEFAULT_IMAGES_DIR = (
     if Path("/app/data").is_dir()
     else Path(".deep-research-runtime/report_images")
 )
+# Appended to every per-image prompt sent to the Grok CLI so Grok Imagine's
+# natural expressiveness is steered toward photography, not illustration.
+_GROK_STYLE_SUFFIX = (
+    ". Style: hyper-realistic, natural expressive lighting, photographic detail, "
+    "realistic materials and textures, shallow depth of field where appropriate, "
+    "no illustration or sketch style, no vector art, no cartoon, no diagram."
+)
+
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 _SAFE_JOB_ID_RE = re.compile(r"[^a-zA-Z0-9_-]+")
 _FALSEY = {"0", "false", "no", "off"}
 
-_PLANNING_PROMPT = """You are choosing illustration opportunities for a finished research report.
+_PLANNING_PROMPT = """You are choosing photographic illustration opportunities for a finished research report.
 
 Below is the report outline: its title, section headings, and the first ~200 characters of each section.
 
-The reader explicitly asked for this report to include visuals, so you MUST select the 2 best illustration opportunities (3 only when a third is clearly strong). Almost every research topic has visualizable moments: a process or mechanism in action, a place or scene, a comparison of physical things, a system overview rendered as a clean editorial illustration. Do NOT propose charts, graphs, plots, or any image containing specific numbers, data, logos, or text — image generators cannot render those accurately; recast such ideas as conceptual scenes instead. Return an empty list ONLY if the report is so abstract that any illustration would be decoration with zero explanatory value (this should be rare).
+The reader explicitly asked for this report to include visuals, so you MUST select the {preferred_count} best illustration opportunities (never more than {max_count}). Almost every research topic has visualizable moments: a process or mechanism in action, a place or scene, a comparison of physical things, people or equipment at work. Do NOT propose charts, graphs, plots, diagrams, or any image containing specific numbers, data, logos, or text — image generators cannot render those accurately; recast such ideas as real photographable scenes instead. Return an empty list ONLY if the report is so abstract that any photograph would be decoration with zero explanatory value (this should be rare).
+
+STYLE — every "prompt" you write MUST describe a hyper-realistic photograph, never an illustration. Each prompt must:
+- Explicitly say "hyper-realistic photograph" and describe a real, physical scene.
+- Specify cinematic photography language: natural light, realistic materials and textures, believable environment, and shallow depth of field where it suits the subject.
+- Explicitly end with: "photorealistic, NOT an illustration, NOT a vector, NOT a sketch, NOT a cartoon, NOT a diagram".
 
 Respond with ONLY a JSON array (no prose, no code fences) of objects:
-[{{"after_heading": "<exact heading text from the outline>", "prompt": "<detailed English image-generation prompt, photorealistic or clean editorial illustration style>", "caption": "<short figure caption>"}}]
+[{{"after_heading": "<exact heading text from the outline>", "prompt": "<detailed English image-generation prompt for a hyper-realistic photograph as specified above>", "caption": "<short figure caption>"}}]
 
 REPORT OUTLINE:
 {outline}
 """
+
+
+def clamp_image_count(image_count: int | None) -> int:
+    """Resolve an optional requested image count to the effective 1..MAX range (default 3)."""
+    if image_count is None:
+        return DEFAULT_REPORT_IMAGES
+    return max(1, min(int(image_count), MAX_REPORT_IMAGES))
+
+
+def build_planning_prompt(outline: str, *, image_count: int | None = None) -> str:
+    """Render the planning prompt for the requested (clamped) image count."""
+    count = clamp_image_count(image_count)
+    return _PLANNING_PROMPT.format(outline=outline, preferred_count=count, max_count=count)
 
 
 class ReportImagesError(RuntimeError):
@@ -192,6 +220,7 @@ async def generate_and_save_report_images(
     api_key: str | None = None,
     image_url_prefix: str,
     budget_seconds: float | None = None,
+    image_count: int | None = None,
 ) -> tuple[str, int]:
     """Full image stage: plan → generate → save → insert. Fully fail-open.
 
@@ -208,6 +237,7 @@ async def generate_and_save_report_images(
                 llm=llm,
                 api_key=api_key or os.environ.get("MINIMAX_API_KEY"),
                 image_url_prefix=image_url_prefix,
+                image_count=image_count,
             ),
             timeout=budget_seconds,
         )
@@ -223,6 +253,7 @@ async def _run_image_stage(
     llm: Any,
     api_key: str | None,
     image_url_prefix: str,
+    image_count: int | None = None,
 ) -> tuple[str, int]:
     if llm is None or not (api_key or os.environ.get("XAI_API_KEY")):
         logger.warning("Report image stage skipped: missing %s", "LLM" if llm is None else "image API key")
@@ -231,8 +262,8 @@ async def _run_image_stage(
     from langchain_core.messages import HumanMessage
 
     outline = build_image_planning_outline(report)
-    response = await llm.ainvoke([HumanMessage(content=_PLANNING_PROMPT.format(outline=outline))])
-    specs = parse_image_specs(_coerce_llm_text(response))
+    response = await llm.ainvoke([HumanMessage(content=build_planning_prompt(outline, image_count=image_count))])
+    specs = parse_image_specs(_coerce_llm_text(response), max_images=clamp_image_count(image_count))
     if not specs:
         logger.info("Report image stage: planner chose no image opportunities")
         return report, 0
@@ -399,6 +430,7 @@ async def plan_image_specs_via_minimax(
     api_key: str,
     model: str | None = None,
     timeout_seconds: float = _PLANNING_TIMEOUT_SECONDS,
+    image_count: int | None = None,
 ) -> list[ReportImageSpec]:
     """Run the image-planning prompt via a plain httpx call to MiniMax's Anthropic-compatible endpoint.
 
@@ -409,7 +441,12 @@ async def plan_image_specs_via_minimax(
     payload = {
         "model": os.environ.get("AIQ_IMAGE_PLANNING_MODEL", model or _PLANNING_MODEL),
         "max_tokens": _PLANNING_MAX_TOKENS,
-        "messages": [{"role": "user", "content": _PLANNING_PROMPT.format(outline=build_image_planning_outline(report))}],
+        "messages": [
+            {
+                "role": "user",
+                "content": build_planning_prompt(build_image_planning_outline(report), image_count=image_count),
+            }
+        ],
     }
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -428,7 +465,7 @@ async def plan_image_specs_via_minimax(
     text = "".join(
         str(part.get("text") or "") for part in parts if isinstance(part, dict) and part.get("type") == "text"
     )
-    return parse_image_specs(text)
+    return parse_image_specs(text, max_images=clamp_image_count(image_count))
 
 
 async def backfill_report_images(
@@ -437,6 +474,7 @@ async def backfill_report_images(
     job_id: str,
     image_url_prefix: str,
     budget_seconds: float | None = None,
+    image_count: int | None = None,
 ) -> tuple[str, int]:
     """Add generated images to an existing report. NOT fail-open: raises ReportImagesError.
 
@@ -450,7 +488,13 @@ async def backfill_report_images(
         budget_seconds = 480.0 if resolve_image_provider() == "grok" else BACKFILL_BUDGET_SECONDS
     try:
         return await asyncio.wait_for(
-            _run_backfill(report=report, job_id=job_id, image_url_prefix=image_url_prefix, minimax_key=minimax_key),
+            _run_backfill(
+                report=report,
+                job_id=job_id,
+                image_url_prefix=image_url_prefix,
+                minimax_key=minimax_key,
+                image_count=image_count,
+            ),
             timeout=budget_seconds,
         )
     except asyncio.TimeoutError as exc:
@@ -460,9 +504,9 @@ async def backfill_report_images(
 
 
 async def _run_backfill(
-    *, report: str, job_id: str, image_url_prefix: str, minimax_key: str
+    *, report: str, job_id: str, image_url_prefix: str, minimax_key: str, image_count: int | None = None
 ) -> tuple[str, int]:
-    specs = await plan_image_specs_via_minimax(report, api_key=minimax_key)
+    specs = await plan_image_specs_via_minimax(report, api_key=minimax_key, image_count=image_count)
     if not specs:
         return report, 0
     images = await _generate_and_save_images(
@@ -499,7 +543,9 @@ async def _generate_grok_image(prompt: str, *, timeout_seconds: float | None = N
         instruction = (
             "Call your image generation tool with this exact prompt and aspect_ratio '16:9', "
             f"then save/copy the resulting image file to {out_path} and stop. "
-            "Use the image tool only - no code, no matplotlib, no SVG. Prompt: " + prompt
+            "Use the image tool only - no code, no matplotlib, no SVG. Prompt: "
+            + prompt
+            + _GROK_STYLE_SUFFIX
         )
         env = {**os.environ, "HOME": grok_home}
         proc = await asyncio.create_subprocess_exec(

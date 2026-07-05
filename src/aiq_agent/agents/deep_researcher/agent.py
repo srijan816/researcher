@@ -306,6 +306,7 @@ class DeepResearcherAgent:
         self._active_research_depth = "deeper"
         self._active_budget_profile: dict[str, Any] = {}
         self._include_images = False
+        self._image_count: int | None = None
         self._dossier_compile_count = 0
 
         if self.verbose:
@@ -3450,6 +3451,7 @@ class DeepResearcherAgent:
         self._active_request_text = scope_request
         self._active_research_depth = str(state.research_depth or "deeper")
         self._include_images = bool(getattr(state, "include_images", False))
+        self._image_count = getattr(state, "image_count", None)
         self._dossier_compile_count = 0
         try:
             self._active_budget_profile = self._budget_profile_for_state(state)
@@ -3796,6 +3798,7 @@ class DeepResearcherAgent:
                     job_id=self.job_id,
                     llm=self._resolve_verifier_llm(),
                     image_url_prefix=f"/api/jobs/async/job/{self.job_id}/images",
+                    image_count=self._image_count,
                 )
             if result:
                 residual_audit = evaluate_report_fact_audit(
