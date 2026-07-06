@@ -47,7 +47,9 @@ _XAI_IMAGE_URL = "https://api.x.ai/v1/images/generations"
 _XAI_IMAGE_MODEL = "grok-2-image"
 _MINIMAX_ANTHROPIC_MESSAGES_URL = "https://api.minimax.io/anthropic/v1/messages"
 _PLANNING_MODEL = "MiniMax-M2.7-highspeed"
-_PLANNING_MAX_TOKENS = 1024
+# MiniMax M2.x emits a thinking block that counts against max_tokens; 1024
+# intermittently left no room for the JSON answer (silent zero-image runs).
+_PLANNING_MAX_TOKENS = 3072
 _PLANNING_TIMEOUT_SECONDS = 45.0
 BACKFILL_BUDGET_SECONDS = 90.0
 _IMAGE_REQUEST_TIMEOUT_SECONDS = 45.0
@@ -465,7 +467,14 @@ async def plan_image_specs_via_minimax(
     text = "".join(
         str(part.get("text") or "") for part in parts if isinstance(part, dict) and part.get("type") == "text"
     )
-    return parse_image_specs(text, max_images=clamp_image_count(image_count))
+    specs = parse_image_specs(text, max_images=clamp_image_count(image_count))
+    logger.info(
+        "Image planning (minimax): %d chars of text -> %d spec(s)%s",
+        len(text),
+        len(specs),
+        "" if specs else f"; raw head: {text[:160]!r}",
+    )
+    return specs
 
 
 async def backfill_report_images(
@@ -507,6 +516,11 @@ async def _run_backfill(
     *, report: str, job_id: str, image_url_prefix: str, minimax_key: str, image_count: int | None = None
 ) -> tuple[str, int]:
     specs = await plan_image_specs_via_minimax(report, api_key=minimax_key, image_count=image_count)
+    if not specs:
+        # One retry: empty parses are usually thinking-budget truncation, not
+        # a genuine "nothing visual here" verdict.
+        logger.warning("Image planning returned no specs; retrying once")
+        specs = await plan_image_specs_via_minimax(report, api_key=minimax_key, image_count=image_count)
     if not specs:
         return report, 0
     images = await _generate_and_save_images(

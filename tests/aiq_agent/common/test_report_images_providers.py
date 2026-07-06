@@ -201,7 +201,9 @@ def test_planning_call_parses_anthropic_style_response(monkeypatch):
     url, kwargs = fake.calls[0]
     assert url == "https://api.minimax.io/anthropic/v1/messages"
     assert kwargs["json"]["model"] == "MiniMax-M2.7-highspeed"
-    assert kwargs["json"]["max_tokens"] <= 2048
+    # Thinking counts against max_tokens on MiniMax M2.x; the budget must
+    # leave room for reasoning AND the JSON (1024 caused silent zero-image runs).
+    assert kwargs["json"]["max_tokens"] >= 2048
     assert kwargs["headers"]["Authorization"] == "Bearer mk"
 
 
