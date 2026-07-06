@@ -34,9 +34,14 @@ logger = logging.getLogger(__name__)
 
 MAX_REPORT_IMAGES = 4
 DEFAULT_REPORT_IMAGES = 3
-def _stage_budget_default() -> float:
-    """Grok CLI generations take 1-3 min each; API providers are fast."""
-    return 480.0 if grok_cli_available() and os.environ.get("AIQ_IMAGE_PROVIDER", "").lower() != "minimax" else 60.0
+def _stage_budget_default(image_count: int | None = None) -> float:
+    """Grok CLI generations take 1-3 min each (2 run in parallel); API providers are fast."""
+    if grok_cli_available() and os.environ.get("AIQ_IMAGE_PROVIDER", "").lower() != "minimax":
+        import math
+
+        rounds = math.ceil(clamp_image_count(image_count) / 2)
+        return 120.0 + 250.0 * rounds
+    return 60.0
 
 
 IMAGE_STAGE_BUDGET_SECONDS = 60.0
@@ -230,7 +235,7 @@ async def generate_and_save_report_images(
     original report is returned unchanged with a single warning log.
     """
     if budget_seconds is None:
-        budget_seconds = _stage_budget_default()
+        budget_seconds = _stage_budget_default(image_count)
     try:
         return await asyncio.wait_for(
             _run_image_stage(
@@ -294,15 +299,25 @@ async def _generate_and_save_images(
     target_dir = report_images_dir(job_id)
     target_dir.mkdir(parents=True, exist_ok=True)
     images: list[tuple[ReportImageSpec, str]] = []
-    async with httpx.AsyncClient(timeout=_IMAGE_REQUEST_TIMEOUT_SECONDS, follow_redirects=True) as client:
-        for index, spec in enumerate(specs, start=1):
+    # Two at a time: generations are network/subprocess bound (grok runs take
+    # minutes each); serial execution blew the wall-clock budget for 3 images.
+    semaphore = asyncio.Semaphore(2)
+
+    async def _one(client: httpx.AsyncClient, index: int, spec: ReportImageSpec) -> tuple[int, ReportImageSpec, bytes] | None:
+        async with semaphore:
             try:
                 image_bytes = await _generate_image(client, spec.prompt, minimax_api_key=minimax_api_key)
             except Exception:  # noqa: BLE001 - skip this image, keep the rest
                 logger.warning("Report image %d generation failed; skipping", index, exc_info=True)
-                continue
-            if not image_bytes:
-                continue
+                return None
+        if not image_bytes:
+            return None
+        return index, spec, image_bytes
+
+    async with httpx.AsyncClient(timeout=_IMAGE_REQUEST_TIMEOUT_SECONDS, follow_redirects=True) as client:
+        results = await asyncio.gather(*(_one(client, i, spec) for i, spec in enumerate(specs, start=1)))
+        for result in sorted(filter(None, results), key=lambda r: r[0]):
+            index, spec, image_bytes = result
             filename = f"image-{index}.{_image_extension(image_bytes)}"
             (target_dir / filename).write_bytes(image_bytes)
             images.append((spec, f"{image_url_prefix.rstrip('/')}/{filename}"))
@@ -494,7 +509,9 @@ async def backfill_report_images(
     if not minimax_key:
         raise ReportImagesError("MINIMAX_API_KEY is not configured on the server")
     if budget_seconds is None:
-        budget_seconds = 480.0 if resolve_image_provider() == "grok" else BACKFILL_BUDGET_SECONDS
+        budget_seconds = (
+            _stage_budget_default(image_count) if resolve_image_provider() == "grok" else BACKFILL_BUDGET_SECONDS
+        )
     try:
         return await asyncio.wait_for(
             _run_backfill(
@@ -555,9 +572,10 @@ async def _generate_grok_image(prompt: str, *, timeout_seconds: float | None = N
     with tempfile.TemporaryDirectory(prefix="grok-img-") as tmp:
         out_path = os.path.join(tmp, "image.jpg")
         instruction = (
-            "Call your image generation tool with this exact prompt and aspect_ratio '16:9', "
+            "IMMEDIATELY call your image generation tool with this exact prompt and aspect_ratio '16:9', "
             f"then save/copy the resulting image file to {out_path} and stop. "
-            "Use the image tool only - no code, no matplotlib, no SVG. Prompt: "
+            "Do NOT search the web, do NOT read files or documentation, do NOT run any other tool first - "
+            "one image_gen call, save the file, done. No code, no matplotlib, no SVG. Prompt: "
             + prompt
             + _GROK_STYLE_SUFFIX
         )
