@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from typing import Any
 
@@ -62,6 +63,37 @@ _external_hostnames: set[str] | None = None
 WS_POLICY_VIOLATION = 1008
 SESSION_COOKIE_NAME = "nat-session"
 HITL_RESPONSE_TIMEOUT_SECONDS = 300
+"""Default HITL wait before auto-proceeding (override via AIQ_PLAN_APPROVAL_TIMEOUT_SECONDS)."""
+
+
+def get_hitl_response_timeout_seconds() -> float:
+    """
+    Return the HITL response timeout in seconds.
+
+    Reads AIQ_PLAN_APPROVAL_TIMEOUT_SECONDS at call time so operators can tune
+    the plan-approval auto-approve window without a code change. Falls back to
+    HITL_RESPONSE_TIMEOUT_SECONDS (300s) on missing or invalid values.
+    """
+    raw = os.getenv("AIQ_PLAN_APPROVAL_TIMEOUT_SECONDS")
+    if not raw:
+        return HITL_RESPONSE_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid AIQ_PLAN_APPROVAL_TIMEOUT_SECONDS=%r; using default %ds",
+            raw,
+            HITL_RESPONSE_TIMEOUT_SECONDS,
+        )
+        return HITL_RESPONSE_TIMEOUT_SECONDS
+    if value < 0:
+        logger.warning(
+            "Negative AIQ_PLAN_APPROVAL_TIMEOUT_SECONDS=%r; using default %ds",
+            raw,
+            HITL_RESPONSE_TIMEOUT_SECONDS,
+        )
+        return HITL_RESPONSE_TIMEOUT_SECONDS
+    return value
 
 
 def configure_websocket_auth(
@@ -104,6 +136,7 @@ class WebSocketSessionRegistry:
     def __init__(self) -> None:
         self._sockets: dict[str, WebSocket] = {}
         self._pending_interactions: dict[str, asyncio.Future[TextContent]] = {}
+        self._pending_prompts: dict[str, BaseModel] = {}
         self._workflow_tasks: dict[str, asyncio.Task] = {}
         self._lock = asyncio.Lock()
 
@@ -171,6 +204,24 @@ class WebSocketSessionRegistry:
             return
         async with self._lock:
             self._pending_interactions.pop(conversation_id, None)
+            self._pending_prompts.pop(conversation_id, None)
+
+    async def set_pending_prompt(self, conversation_id: str | None, message: BaseModel) -> None:
+        """Persist the outgoing HITL prompt so it can be re-delivered on reconnect."""
+        if not conversation_id:
+            return
+        async with self._lock:
+            self._pending_prompts[conversation_id] = message
+
+    async def get_pending_prompt(self, conversation_id: str | None) -> BaseModel | None:
+        """Return the pending HITL prompt message for a conversation, if any."""
+        if not conversation_id:
+            return None
+        async with self._lock:
+            future = self._pending_interactions.get(conversation_id)
+            if future is None or future.done():
+                return None
+            return self._pending_prompts.get(conversation_id)
 
     async def set_workflow_task(self, conversation_id: str | None, task: asyncio.Task) -> None:
         """Register the running workflow task, cancelling any stale one first."""
@@ -260,6 +311,35 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
             except ValidationError as exc:
                 logger.warning("Invalid websocket message payload: %s", str(exc))
 
+    async def _restore_execution_state(self) -> None:
+        """
+        Re-attach a reconnecting client to its in-flight conversation.
+
+        Called from NAT's ``__aenter__`` on every new websocket connection. The
+        UI passes ``?conversation_id=<id>`` so we can:
+        1. Register the fresh socket in the registry (in-flight workflow output
+           resumes flowing to the client instead of being dropped), and
+        2. Re-deliver any pending HITL prompt (e.g. plan approval) so the user
+           can act on it after reopening the app.
+        """
+        query_params = getattr(self._socket, "query_params", None)
+        conversation_id = query_params.get("conversation_id") if query_params else None
+        if not conversation_id:
+            return
+
+        await _registry.set_socket(conversation_id, self._socket)
+        if self._conversation_id is None:
+            self._conversation_id = conversation_id
+
+        pending_prompt = await _registry.get_pending_prompt(conversation_id)
+        if pending_prompt is not None:
+            sent = await _registry.send(conversation_id, pending_prompt)
+            logger.info(
+                "Re-delivered pending HITL prompt for conversation %s on reconnect (sent=%s)",
+                conversation_id,
+                sent,
+            )
+
     def _cancel_running_workflow(self) -> None:
         """Cancel the background workflow task spawned by NAT's create_task."""
         task = self._running_workflow_task
@@ -339,6 +419,9 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
                     content=content,
                     status=status,
                 )
+                # Persist the prompt so a reconnecting client can be shown the
+                # pending approval/clarification again (survives disconnects).
+                await _registry.set_pending_prompt(self._conversation_id, message)
 
             elif issubclass(message_schema, WebSocketObservabilityTraceMessage):
                 message = await self._message_validator.create_observability_trace_message(
@@ -400,15 +483,20 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
             if isinstance(prompt.content, HumanPromptNotification):
                 return HumanResponseNotification()
 
+            timeout_seconds = get_hitl_response_timeout_seconds()
             try:
                 text_content: TextContent = await asyncio.wait_for(
                     human_response_future,
-                    timeout=HITL_RESPONSE_TIMEOUT_SECONDS,
+                    timeout=timeout_seconds,
                 )
             except TimeoutError:
+                # Server-side timer: fires even with no client connected. "skip"
+                # is an approval keyword for plan-approval prompts and a skip
+                # command for clarification questions, so the run proceeds
+                # exactly as if the user approved/skipped.
                 logger.info(
-                    "HITL response timed out after %ds for conversation %s; proceeding with skip",
-                    HITL_RESPONSE_TIMEOUT_SECONDS,
+                    "HITL response timed out after %ss for conversation %s; auto-proceeding (skip/approve)",
+                    timeout_seconds,
                     self._conversation_id,
                 )
                 text_content = TextContent(text="skip")

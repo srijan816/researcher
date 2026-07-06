@@ -1496,12 +1496,16 @@ describe('useChatStore', () => {
       updatedAt: new Date(),
     })
 
-    test('adds error card when last meaningful message is user with thinking steps', () => {
+    // Older than PRE_RESEARCH_REATTACH_WINDOW_MS (10 min)
+    const OLD_TIMESTAMP = new Date(Date.now() - 11 * 60 * 1000)
+
+    test('adds error card when last meaningful message is an OLD user message with thinking steps', () => {
       const conv = createConversation([
         {
           role: 'user',
           messageType: 'user',
           content: 'Tell me about AI',
+          timestamp: OLD_TIMESTAMP,
           thinkingSteps: [
             { id: 's1', userMessageId: 'msg-0', category: 'tasks', functionName: 'fn', displayName: 'Searching', content: '', isComplete: true, timestamp: new Date() },
           ],
@@ -1576,12 +1580,68 @@ describe('useChatStore', () => {
       expect(messages.every((m) => m.errorData?.errorCode !== 'agent.response_interrupted')).toBe(true)
     })
 
+    test('does NOT add error card when user message is recent (pre-research may re-attach)', () => {
+      const conv = createConversation([
+        {
+          role: 'user',
+          messageType: 'user',
+          content: 'Tell me about hermes agent workflows',
+          timestamp: new Date(), // recent — within the re-attach window
+          thinkingSteps: [{ id: 's1', userMessageId: 'msg-0', category: 'tasks', functionName: 'fn', displayName: 'Planning', content: '', isComplete: false, timestamp: new Date() }],
+        },
+      ])
+
+      useChatStore.setState({ currentConversation: conv, conversations: [conv] })
+      useChatStore.getState().restoreSessionState(conv)
+
+      // No interrupted card: server-side pre-research survives disconnects and
+      // the reconnecting socket re-attaches to it.
+      const messages = useChatStore.getState().currentConversation?.messages ?? []
+      expect(messages.every((m) => m.errorData?.errorCode !== 'agent.response_interrupted')).toBe(true)
+    })
+
+    test('restores pendingInteraction from unresponded approval prompt on session load', () => {
+      const conv = createConversation([
+        {
+          role: 'user',
+          messageType: 'user',
+          content: 'Research AI',
+          timestamp: OLD_TIMESTAMP,
+          thinkingSteps: [{ id: 's1', userMessageId: 'msg-0', category: 'tasks', functionName: 'fn', displayName: 'Planning', content: '', isComplete: true, timestamp: new Date() }],
+        },
+        {
+          role: 'assistant',
+          messageType: 'prompt',
+          content: '**Research Plan Preview**\n\nApprove?',
+          promptId: 'prompt-77',
+          promptParentId: 'parent-9',
+          promptInputType: 'binary_choice',
+          isPromptResponded: false,
+        },
+      ])
+
+      useChatStore.setState({ currentConversation: conv, conversations: [conv] })
+      useChatStore.getState().restoreSessionState(conv)
+
+      const pending = useChatStore.getState().pendingInteraction
+      expect(pending).not.toBeNull()
+      expect(pending?.id).toBe('prompt-77')
+      expect(pending?.parentId).toBe('parent-9')
+      expect(pending?.inputType).toBe('binary_choice')
+      expect(pending?.text).toContain('Research Plan Preview')
+
+      // And no interrupted card even though the user message is old
+      const messages = useChatStore.getState().currentConversation?.messages ?? []
+      expect(messages.every((m) => m.errorData?.errorCode !== 'agent.response_interrupted')).toBe(true)
+    })
+
     test('does NOT double-add error card on repeated restore calls', () => {
       const conv = createConversation([
         {
           role: 'user',
           messageType: 'user',
           content: 'Tell me about AI',
+          timestamp: OLD_TIMESTAMP,
           thinkingSteps: [{ id: 's1', userMessageId: 'msg-0', category: 'tasks', functionName: 'fn', displayName: 'Searching', content: '', isComplete: true, timestamp: new Date() }],
         },
       ])

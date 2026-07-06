@@ -1379,6 +1379,24 @@ class ClarifierAgent:
             f"Reply **approve** to proceed, **reject** to cancel, or provide feedback to revise the plan."
         )
 
+    @staticmethod
+    def _format_plan_unavailable_for_user() -> str:
+        """
+        Honest approval message when no real plan preview could be generated.
+
+        Shown instead of a fake/generic template plan so users are never asked
+        to approve sections that were not actually derived from their request.
+        """
+        return (
+            "**Research Plan Preview**\n\n"
+            "Plan preview unavailable — the planner could not generate a reliable plan "
+            "for this request. Research will proceed directly from your original query, "
+            "and the research orchestrator will build its own plan.\n\n"
+            "---\n"
+            "Reply **approve** to proceed, **reject** to cancel, or provide feedback "
+            "to retry plan generation."
+        )
+
     def _parse_response(self, text: Any) -> ClarificationResponse | None:
         """
         Parse JSON response from LLM into ClarificationResponse.
@@ -1829,14 +1847,36 @@ class ClarifierAgent:
 
                 title, sections = self._sanitize_plan_for_query(title, sections, original_query)
 
+                # Honest preview: if the only thing left is the generic safety-net
+                # fallback (planner failed AND the query yielded no richer
+                # contract), never present it as a real plan. Tell the user the
+                # preview is unavailable and do not bind fake sections to the run.
+                is_fallback_plan = (
+                    contract_source == "fallback" and title == contract_title and sections == list(contract_sections)
+                )
+
                 # Present plan to user
-                plan_display = self._format_plan_for_user(title, sections)
+                if is_fallback_plan:
+                    logger.warning("Clarifier: No real plan available; presenting honest 'preview unavailable'")
+                    plan_display = self._format_plan_unavailable_for_user()
+                else:
+                    plan_display = self._format_plan_for_user(title, sections)
                 user_response = await self.user_prompt_callback(plan_display)
 
                 approved, rejected, feedback = self._parse_approval(user_response)
 
                 if approved:
                     logger.info("Clarifier: Plan approved by user")
+                    if is_fallback_plan:
+                        # Proceed without attaching a fabricated plan; the deep
+                        # researcher plans from the original query instead.
+                        return {
+                            "plan_title": None,
+                            "plan_sections": [],
+                            "plan_approved": True,
+                            "plan_rejected": False,
+                            "plan_feedback_history": feedback_history,
+                        }
                     return {
                         "plan_title": title,
                         "plan_sections": sections,
@@ -1848,8 +1888,8 @@ class ClarifierAgent:
                 if rejected:
                     logger.info("Clarifier: Plan rejected by user")
                     return {
-                        "plan_title": title,
-                        "plan_sections": sections,
+                        "plan_title": None if is_fallback_plan else title,
+                        "plan_sections": [] if is_fallback_plan else sections,
                         "plan_approved": False,
                         "plan_rejected": True,
                         "plan_feedback_history": feedback_history,
@@ -1893,6 +1933,15 @@ class ClarifierAgent:
 
             # Max iterations reached, auto-approve
             logger.warning("Clarifier: Max plan iterations reached, auto-approving")
+            if contract_source == "fallback" and title == contract_title and sections == list(contract_sections):
+                # Never bind the generic safety-net fallback as an approved plan.
+                return {
+                    "plan_title": None,
+                    "plan_sections": [],
+                    "plan_approved": True,
+                    "plan_rejected": False,
+                    "plan_feedback_history": feedback_history,
+                }
             return {
                 "plan_title": title,
                 "plan_sections": sections,

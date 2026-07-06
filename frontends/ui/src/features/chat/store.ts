@@ -251,6 +251,15 @@ const initialState: ChatState = {
 
 const DEFAULT_BATCH_APPROVAL_DELAY_MS = 90_000
 
+/**
+ * How long after the last user message a session reload still treats
+ * pre-research (clarifier / plan preview) as potentially in-flight server-side.
+ * Matches the backend HITL auto-approve window (AIQ_PLAN_APPROVAL_TIMEOUT_SECONDS,
+ * default 300s) plus generation slack. Within this window we re-attach silently
+ * instead of showing an "interrupted" error card.
+ */
+export const PRE_RESEARCH_REATTACH_WINDOW_MS = 10 * 60 * 1000
+
 const createBatchTitle = (query: string): string => {
   const trimmed = query.trim()
   if (trimmed.length <= 64) return trimmed || 'Queued research'
@@ -3123,6 +3132,11 @@ export const useChatStore = create<ChatStore>()(
           // message with thinking steps but no following response, the response was
           // interrupted by a page refresh or browser close mid-stream.
           // Skip if there's a pending HITL interaction (user is expected to respond).
+          // Also skip if the user message is recent: pre-research (clarifier /
+          // plan preview) keeps running server-side across disconnects, and the
+          // reconnecting WebSocket re-attaches to it (pending approval prompts
+          // are re-delivered). Only declare an interruption once the server-side
+          // HITL/auto-approve window has certainly elapsed.
           if (!restoredPendingInteraction) {
             const meaningfulTypes = new Set(['user', 'assistant', 'agent_response', 'error', 'prompt'])
             const lastMeaningful = [...conversation.messages]
@@ -3130,10 +3144,13 @@ export const useChatStore = create<ChatStore>()(
               .find((m) => meaningfulTypes.has(m.messageType ?? ''))
 
             if (lastMeaningful?.messageType === 'user' && lastMeaningful.thinkingSteps?.length) {
-              get().addErrorCard(
-                'agent.response_interrupted',
-                'Your previous request was not completed. Please resend your message.'
-              )
+              const messageAgeMs = Date.now() - new Date(lastMeaningful.timestamp).getTime()
+              if (!Number.isFinite(messageAgeMs) || messageAgeMs > PRE_RESEARCH_REATTACH_WINDOW_MS) {
+                get().addErrorCard(
+                  'agent.response_interrupted',
+                  'Your previous request was not completed. Please resend your message.'
+                )
+              }
             }
           }
         },

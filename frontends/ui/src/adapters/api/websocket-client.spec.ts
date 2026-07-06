@@ -229,3 +229,49 @@ describe('NATWebSocketClient auth observability', () => {
     expect('image_count' in payload).toBe(false)
   })
 })
+
+describe('NATWebSocketClient reconnect re-attach', () => {
+  beforeEach(() => {
+    MockWebSocket.instances = []
+    vi.stubGlobal('WebSocket', MockWebSocket)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  test('connect appends conversation_id query param for server-side re-attach', async () => {
+    const client = new NATWebSocketClient({
+      conversationId: 'conv-42',
+      websocketUrl: 'ws://localhost/websocket',
+      callbacks: {},
+    })
+
+    await client.connect()
+
+    expect(MockWebSocket.instances[0].url).toBe('ws://localhost/websocket?conversation_id=conv-42')
+  })
+
+  test('connect uses & separator when URL already has query params', async () => {
+    const client = new NATWebSocketClient({
+      conversationId: 'conv 42',
+      websocketUrl: 'ws://localhost/websocket?session=abc',
+      callbacks: {},
+    })
+
+    await client.connect()
+
+    expect(MockWebSocket.instances[0].url).toBe('ws://localhost/websocket?session=abc&conversation_id=conv%2042')
+  })
+
+  test('buildUrlWithConversationId returns base URL when conversationId is empty', () => {
+    const client = new NATWebSocketClient({
+      conversationId: '',
+      websocketUrl: 'ws://localhost/websocket',
+      callbacks: {},
+    })
+
+    expect(client.buildUrlWithConversationId('ws://localhost/websocket')).toBe('ws://localhost/websocket')
+  })
+})

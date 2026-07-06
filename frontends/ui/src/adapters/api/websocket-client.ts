@@ -105,13 +105,27 @@ export class NATWebSocketClient {
     this.options.callbacks.onConnectionChange?.('connecting')
 
     try {
-      const wsUrl = this.options.websocketUrl || (await getWebSocketUrl())
+      const baseUrl = this.options.websocketUrl || (await getWebSocketUrl())
+      // Pass the conversation ID so the backend can re-attach this socket to an
+      // in-flight workflow and re-deliver any pending HITL (plan approval) prompt.
+      const wsUrl = this.buildUrlWithConversationId(baseUrl)
       this.ws = new WebSocket(wsUrl)
       this.setupEventHandlers()
     } catch {
       this.options.callbacks.onConnectionChange?.('error', { intentional: false })
       this.handleReconnect()
     }
+  }
+
+  /**
+   * Append the conversation_id query parameter used for server-side re-attach.
+   * Exposed for testing.
+   */
+  buildUrlWithConversationId = (baseUrl: string): string => {
+    const conversationId = this.options.conversationId
+    if (!conversationId) return baseUrl
+    const separator = baseUrl.includes('?') ? '&' : '?'
+    return `${baseUrl}${separator}conversation_id=${encodeURIComponent(conversationId)}`
   }
 
   /**

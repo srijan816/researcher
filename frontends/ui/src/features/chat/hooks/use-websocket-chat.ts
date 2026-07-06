@@ -478,6 +478,20 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         }
         setPendingInteraction(interaction)
 
+        // Re-delivered prompt after a reconnect: the backend re-sends the
+        // pending HITL prompt when the client re-attaches. If this prompt is
+        // already in the conversation (unresponded), only restore the pending
+        // interaction state -- do not duplicate the chat/plan messages.
+        const existingMessages = useChatStore.getState().currentConversation?.messages ?? []
+        const alreadyDisplayed = existingMessages.some(
+          (m) => m.messageType === 'prompt' && m.promptId === promptId && !m.isPromptResponded
+        )
+        if (alreadyDisplayed) {
+          setStreaming(false)
+          setLoading(false)
+          return
+        }
+
         // Add to PlanTab FIRST so it's captured when saving prompt message
         addPlanMessage({
           text: prompt.text,
@@ -565,7 +579,10 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           interactionResponseInFlightRef.current = null
           setStreaming(false)
           setLoading(false)
-          clearPendingInteraction()
+          // Do NOT clear pendingInteraction here: the approval wait is durable
+          // server-side (survives disconnects and auto-approves on timeout).
+          // Keeping it lets the user act on the prompt after reconnecting
+          // instead of the session appearing interrupted.
         }
       },
     }

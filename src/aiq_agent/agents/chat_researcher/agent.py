@@ -207,7 +207,12 @@ class ChatResearcherAgent:
                         "original_query": original_query,
                     },
                 )
-            return Command(goto="deep_research", update={"original_query": original_query})
+            # Clarifier skipped: explicitly clear any checkpointed clarifier_result
+            # so an older query's approved plan can never leak into this run.
+            return Command(
+                goto="deep_research",
+                update={"original_query": original_query, "clarifier_result": None},
+            )
 
         async def shallow_research_node(state: ChatResearcherState) -> dict[str, Any]:
             trimmed_messages: list[BaseMessage] = trim_message_history(state.messages, self.max_history)
@@ -441,7 +446,11 @@ class ChatResearcherAgent:
         logger.info("ChatResearcherAgent: Starting workflow")
 
         if isinstance(state, dict):
-            input_state = state
+            input_state = dict(state)
+            # Reset per-turn state so stale checkpoint values (e.g. a previous
+            # query's approved research plan) never carry into this turn.
+            input_state.setdefault("shallow_result", None)
+            input_state.setdefault("clarifier_result", None)
             messages = state.get("messages", [])
         else:
             input_state = {
@@ -453,6 +462,11 @@ class ChatResearcherAgent:
                 "available_documents": state.available_documents,
                 "force_deep_research": state.force_deep_research,
                 "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state
+                # Reset at turn boundary: the approved-plan context is bound to the
+                # query it was generated for. Without this, a checkpointed
+                # clarifier_result from an older query leaks into new deep
+                # research jobs (wrong "Approved Research Plan" attached).
+                "clarifier_result": None,
                 "skip_clarifier": state.skip_clarifier,
             }
             messages = state.messages

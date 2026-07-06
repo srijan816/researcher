@@ -1376,15 +1376,14 @@ class TestClarifierAgentPlanApproval:
 
         assert result is not None
         assert result.plan_approved is True
-        # Should use a topic-specific fallback plan, not copy-the-example headings.
-        assert result.plan_title == "Research AI"
-        assert result.plan_sections == [
-            "AI Core Question",
-            "Evidence and Competing Views",
-            "Practical Strategy Options",
-            "Trade-offs and Failure Modes",
-            "Decision Framework",
-        ]
+        # Honest behavior: when only the generic safety-net fallback is left,
+        # no fabricated plan is presented or bound to the run.
+        assert result.plan_title is None
+        assert result.plan_sections == []
+        assert result.get_approved_plan_context() is None
+        # The user saw an honest "preview unavailable" message, not a fake plan.
+        displayed = mock_user_callback.call_args[0][0]
+        assert "Plan preview unavailable" in displayed
 
     @pytest.mark.asyncio
     async def test_run_with_plan_approval_zero_iterations(self, mock_llm_provider, mock_llm, mock_planner_llm):
@@ -1404,16 +1403,11 @@ class TestClarifierAgentPlanApproval:
         result = await agent.run(state)
 
         assert result is not None
-        # Should auto-approve with topic-specific fallback values.
+        # Auto-approves, but never binds the generic safety-net fallback as a plan.
         assert result.plan_approved is True
-        assert result.plan_title == "Research AI"
-        assert result.plan_sections == [
-            "AI Core Question",
-            "Evidence and Competing Views",
-            "Practical Strategy Options",
-            "Trade-offs and Failure Modes",
-            "Decision Framework",
-        ]
+        assert result.plan_title is None
+        assert result.plan_sections == []
+        assert result.get_approved_plan_context() is None
 
 
 class TestClarifierAgentPlanApprovalInit:
