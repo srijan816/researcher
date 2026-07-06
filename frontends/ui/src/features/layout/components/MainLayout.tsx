@@ -31,7 +31,7 @@ import { SettingsPanel } from './SettingsPanel'
 import { DocsPanel } from './DocsPanel'
 import { BatchQueuePanel } from './BatchQueuePanel'
 import { AccountPanel } from './AccountPanel'
-import { useChatStore, useDeepResearch, useBatchResearchQueue, NoSourcesBanner } from '@/features/chat'
+import { useChatStore, useDeepResearch, useBatchResearchQueue } from '@/features/chat'
 import { hasActiveDeepResearchJob } from '@/features/chat/lib/session-activity'
 import { deleteAllConversationSnapshots, deleteConversationSnapshot } from '@/adapters/api'
 import { useLayoutStore } from '../store'
@@ -256,9 +256,6 @@ export const MainLayout: FC<MainLayoutProps> = ({
             onSignIn={onSignIn}
             homeExperience={showHomeExperience}
           />
-
-          {/* No sources warning - shown when no data sources or files available */}
-          {!showHomeExperience && <NoSourcesBanner isAuthenticated={isAuthenticated} />}
 
           {/* Input Area - Fixed at bottom of chat */}
           {/* Using WebSocket mode for full HITL (human-in-the-loop) support */}

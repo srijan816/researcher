@@ -14,15 +14,12 @@
 'use client'
 
 import { type FC, type ReactNode, memo, useCallback, useState } from 'react'
-import { Flex, Text, Button, Avatar, Popover, Divider } from '@/adapters/ui'
+import { Flex, Text, Button, Avatar, Popover, Divider, Logo } from '@/adapters/ui'
 import { Menu, Globe, Settings, Book, Lock, Logout, Plus, Info, Clock } from '@/adapters/ui/icons'
-import { AnimatedWordmark } from '@/shared/components/AnimatedWordmark'
-import { useChatStore } from '@/features/chat'
 import { useLayoutStore } from '../store'
 import { ThemeToggleButton } from './ThemeToggleButton'
 
 /** Particle cap for the small rail-sized wordmark (keep it cheap) */
-const RAIL_WORDMARK_MAX_PARTICLES = 180
 
 interface NavRailProps {
   /** Whether the user is authenticated */
@@ -95,7 +92,6 @@ export const NavRail: FC<NavRailProps> = memo(function NavRail({
   const rightPanel = useLayoutStore((s) => s.rightPanel)
   // Ambient status: the rail wordmark's α particles only animate while
   // deep research is running (same signal as the research status pill).
-  const isDeepResearchStreaming = useChatStore((s) => s.isDeepResearchStreaming)
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
 
   const handleLibraryClick = useCallback(() => {
@@ -169,11 +165,7 @@ export const NavRail: FC<NavRailProps> = memo(function NavRail({
           title="GenAlphAI Research"
           className="gx-rail-logo flex h-12 w-14 items-center justify-center outline-none disabled:cursor-not-allowed disabled:opacity-40"
         >
-          <AnimatedWordmark
-            className="w-[50px]"
-            active={isDeepResearchStreaming}
-            maxParticles={RAIL_WORDMARK_MAX_PARTICLES}
-          />
+          <Logo kind="horizontal" size="small" className="h-[31px] w-[50px]" />
         </button>
 
         <Flex direction="col" align="center" gap="1" className="w-full">
