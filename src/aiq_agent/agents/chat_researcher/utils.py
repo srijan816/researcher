@@ -136,6 +136,19 @@ def _parse_force_deep(value: Any) -> bool:
     return False
 
 
+def _parse_image_count(value: Any) -> int | None:
+    """Parse an optional image count constrained to the supported 1-4 range."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return None
+    if 1 <= count <= 4:
+        return count
+    return None
+
+
 def _parse_agent_type(value: Any) -> str:
     """Parse the requested async research agent from JSON payloads."""
     if not isinstance(value, str):
@@ -148,38 +161,48 @@ def _parse_agent_type(value: Any) -> str:
 
 def _extract_query_sources_force_depth_from_text(
     text: str,
-) -> tuple[str, list[str] | None, bool, ResearchDepthTier, str]:
+) -> tuple[str, list[str] | None, bool, ResearchDepthTier, str, bool, int | None]:
     if not text:
-        return ("", None, False, DEFAULT_RESEARCH_DEPTH, "deep_researcher")
+        return ("", None, False, DEFAULT_RESEARCH_DEPTH, "deep_researcher", False, None)
     trimmed = text.strip()
     if trimmed.startswith("{") and trimmed.endswith("}"):
         try:
             payload = json.loads(trimmed)
         except json.JSONDecodeError:
-            return (text, None, False, DEFAULT_RESEARCH_DEPTH, "deep_researcher")
+            return (text, None, False, DEFAULT_RESEARCH_DEPTH, "deep_researcher", False, None)
         if isinstance(payload, dict):
             data_sources = parse_data_sources(payload.get("data_sources"))
             query_text = payload.get("query") or payload.get("text")
             force_deep = _parse_force_deep(payload.get("force_deep_research"))
             research_depth = normalize_research_depth(payload.get("research_depth"))
             agent_type = _parse_agent_type(payload.get("agent_type"))
+            include_images = _parse_force_deep(payload.get("include_images"))
+            image_count = _parse_image_count(payload.get("image_count"))
             if isinstance(query_text, str) and query_text.strip():
-                return (query_text.strip(), data_sources, force_deep, research_depth, agent_type)
-    return (text, None, False, DEFAULT_RESEARCH_DEPTH, "deep_researcher")
+                return (
+                    query_text.strip(),
+                    data_sources,
+                    force_deep,
+                    research_depth,
+                    agent_type,
+                    include_images,
+                    image_count,
+                )
+    return (text, None, False, DEFAULT_RESEARCH_DEPTH, "deep_researcher", False, None)
 
 
 def _extract_query_sources_force_from_text(text: str) -> tuple[str, list[str] | None, bool]:
     """Backward-compatible helper returning query, sources, and force-deep."""
-    query_text, data_sources, force_deep, _research_depth, _agent_type = _extract_query_sources_force_depth_from_text(
-        text
+    query_text, data_sources, force_deep, _research_depth, _agent_type, _include_images, _image_count = (
+        _extract_query_sources_force_depth_from_text(text)
     )
     return (query_text, data_sources, force_deep)
 
 
 def _extract_query_sources_force_depth(
     payload: Any,
-) -> tuple[str, list[str] | None, bool, ResearchDepthTier, str]:
-    """Extract query, sources, force-deep flag, depth tier, and async agent type."""
+) -> tuple[str, list[str] | None, bool, ResearchDepthTier, str, bool, int | None]:
+    """Extract query, sources, force-deep flag, depth tier, async agent type, and image settings."""
     if isinstance(payload, dict):
         content = payload.get("content", {}) if isinstance(payload.get("content"), dict) else {}
         data_sources = parse_data_sources(payload.get("data_sources")) or parse_data_sources(
@@ -190,6 +213,10 @@ def _extract_query_sources_force_depth(
         )
         research_depth = normalize_research_depth(payload.get("research_depth") or content.get("research_depth"))
         agent_type = _parse_agent_type(payload.get("agent_type") or content.get("agent_type"))
+        include_images = _parse_force_deep(payload.get("include_images")) or _parse_force_deep(
+            content.get("include_images")
+        )
+        image_count = _parse_image_count(payload.get("image_count")) or _parse_image_count(content.get("image_count"))
         messages = content.get("messages", [])
         query_text = None
         if isinstance(messages, list) and messages:
@@ -205,15 +232,23 @@ def _extract_query_sources_force_depth(
                 payload.get("text")
             )
         if query_text:
-            inline_query, inline_sources, inline_force_deep, inline_depth, inline_agent_type = (
-                _extract_query_sources_force_depth_from_text(query_text)
-            )
+            (
+                inline_query,
+                inline_sources,
+                inline_force_deep,
+                inline_depth,
+                inline_agent_type,
+                inline_include_images,
+                inline_image_count,
+            ) = _extract_query_sources_force_depth_from_text(query_text)
             query_text = inline_query
             data_sources = data_sources or inline_sources
             force_deep = force_deep or inline_force_deep
             research_depth = inline_depth if inline_depth != DEFAULT_RESEARCH_DEPTH else research_depth
             agent_type = inline_agent_type if inline_agent_type != "deep_researcher" else agent_type
-        return (query_text or "", data_sources, force_deep, research_depth, agent_type)
+            include_images = include_images or inline_include_images
+            image_count = image_count or inline_image_count
+        return (query_text or "", data_sources, force_deep, research_depth, agent_type, include_images, image_count)
 
     messages = getattr(payload, "messages", None)
     if isinstance(messages, list):
@@ -221,6 +256,8 @@ def _extract_query_sources_force_depth(
         force_deep = _parse_force_deep(getattr(payload, "force_deep_research", None))
         research_depth = normalize_research_depth(getattr(payload, "research_depth", None))
         agent_type = _parse_agent_type(getattr(payload, "agent_type", None))
+        include_images = _parse_force_deep(getattr(payload, "include_images", None))
+        image_count = _parse_image_count(getattr(payload, "image_count", None))
         query_text = None
         for msg in reversed(messages):
             if _is_user_role(getattr(msg, "role", None)):
@@ -230,15 +267,23 @@ def _extract_query_sources_force_depth(
         if not query_text and messages:
             query_text = _extract_text_from_message(messages[-1])
         if query_text:
-            inline_query, inline_sources, inline_force_deep, inline_depth, inline_agent_type = (
-                _extract_query_sources_force_depth_from_text(query_text)
-            )
+            (
+                inline_query,
+                inline_sources,
+                inline_force_deep,
+                inline_depth,
+                inline_agent_type,
+                inline_include_images,
+                inline_image_count,
+            ) = _extract_query_sources_force_depth_from_text(query_text)
             query_text = inline_query
             data_sources = data_sources or inline_sources
             force_deep = force_deep or inline_force_deep
             research_depth = inline_depth if inline_depth != DEFAULT_RESEARCH_DEPTH else research_depth
             agent_type = inline_agent_type if inline_agent_type != "deep_researcher" else agent_type
-        return (query_text or "", data_sources, force_deep, research_depth, agent_type)
+            include_images = include_images or inline_include_images
+            image_count = image_count or inline_image_count
+        return (query_text or "", data_sources, force_deep, research_depth, agent_type, include_images, image_count)
 
     query_text = str(payload)
     return _extract_query_sources_force_depth_from_text(query_text)
@@ -252,7 +297,9 @@ def _extract_query_sources_and_force_deep(payload: Any) -> tuple[str, list[str] 
         - data_sources is None if not specified, meaning use all configured tools
         - data_sources is a list if explicitly specified (use only those)
     """
-    query_text, data_sources, force_deep, _research_depth, _agent_type = _extract_query_sources_force_depth(payload)
+    query_text, data_sources, force_deep, _research_depth, _agent_type, _include_images, _image_count = (
+        _extract_query_sources_force_depth(payload)
+    )
     return (query_text, data_sources, force_deep)
 
 

@@ -41,6 +41,8 @@ class ChatResearcherState(BaseModel):
         user_info: Optional user information for personalization.
         data_sources: Optional list of user-selected data source IDs.
         research_depth: User-selected source/depth tier for deep research.
+        include_images: Opt-in flag to embed generated images in the final report.
+        image_count: Optional preferred number of generated images (1-4, default 3).
         user_intent: Result of intent classification.
         depth_decision: Result of depth routing.
         final_report: The final research report.
@@ -60,6 +62,8 @@ class ChatResearcherState(BaseModel):
     user_info: dict[str, Any] | None = None
     data_sources: list[str] | None = None
     research_depth: ResearchDepthTier = DEFAULT_RESEARCH_DEPTH
+    include_images: bool = False
+    image_count: int | None = None
     user_intent: IntentResult | None = None
     depth_decision: DepthDecision | None = None
     final_report: str | None = None

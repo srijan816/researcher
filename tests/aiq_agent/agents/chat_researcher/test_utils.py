@@ -231,13 +231,17 @@ class TestExtractQueryAndSources:
             }
         }
 
-        query, sources, force_deep, research_depth, agent_type = _extract_query_sources_force_depth(payload)
+        query, sources, force_deep, research_depth, agent_type, include_images, image_count = (
+            _extract_query_sources_force_depth(payload)
+        )
 
         assert query == "AI model pricing"
         assert sources is None
         assert force_deep is False
         assert research_depth == "deep"
         assert agent_type == "deep_researcher"
+        assert include_images is False
+        assert image_count is None
 
     def test_extract_claude_research_agent_type_from_json_text(self):
         """Test extracting the Claude research agent type from the UI payload."""
@@ -255,10 +259,42 @@ class TestExtractQueryAndSources:
             }
         }
 
-        query, sources, force_deep, research_depth, agent_type = _extract_query_sources_force_depth(payload)
+        query, sources, force_deep, research_depth, agent_type, include_images, image_count = (
+            _extract_query_sources_force_depth(payload)
+        )
 
         assert query == "Audit workflow"
         assert sources is None
         assert force_deep is True
         assert research_depth == "deeper"
         assert agent_type == "claude_researcher"
+        assert include_images is False
+        assert image_count is None
+
+    def test_extract_image_settings_from_top_level_payload(self):
+        """Test extracting image settings from the websocket payload envelope."""
+        payload = {
+            "include_images": True,
+            "image_count": 2,
+            "research_depth": "deeper",
+            "content": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Compare the latest AI image APIs",
+                    }
+                ],
+            },
+        }
+
+        query, sources, force_deep, research_depth, agent_type, include_images, image_count = (
+            _extract_query_sources_force_depth(payload)
+        )
+
+        assert query == "Compare the latest AI image APIs"
+        assert sources is None
+        assert force_deep is False
+        assert research_depth == "deeper"
+        assert agent_type == "deep_researcher"
+        assert include_images is True
+        assert image_count == 2

@@ -286,6 +286,8 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                     available_documents=available_docs,
                     data_sources=state.data_sources,
                     research_depth=state.research_depth,
+                    include_images=state.include_images,
+                    image_count=state.image_count,
                 )
 
             deep_research_job_submitter = _submit_deep_job
@@ -370,14 +372,22 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 pass
         logger.info("skip_clarifier=%s", skip_clarifier)
 
-        query_text, data_sources, force_deep_research, research_depth, agent_type = _extract_query_sources_force_depth(
-            query
-        )
+        (
+            query_text,
+            data_sources,
+            force_deep_research,
+            research_depth,
+            agent_type,
+            include_images,
+            image_count,
+        ) = _extract_query_sources_force_depth(query)
         logger.info("ChatDeepResearcherAgent: %s", query_text)
         logger.info("ChatDeepResearcherAgent: Data sources: %s", data_sources)
         logger.info("ChatDeepResearcherAgent: Force deep research: %s", force_deep_research)
         logger.info("ChatDeepResearcherAgent: Research depth: %s", research_depth)
         logger.info("ChatDeepResearcherAgent: Agent type: %s", agent_type)
+        logger.info("ChatDeepResearcherAgent: Include images: %s", include_images)
+        logger.info("ChatDeepResearcherAgent: Image count: %s", image_count)
 
         # Fetch available documents with summaries from SQLite registry
         # The registry is populated by backends during ingestion (backend-agnostic)
@@ -415,6 +425,8 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 user_info=user_info_dict,
                 data_sources=data_sources,
                 research_depth=research_depth,
+                include_images=include_images,
+                image_count=image_count,
                 agent_type=agent_type,
                 available_documents=available_documents,
                 force_deep_research=force_deep_research,
