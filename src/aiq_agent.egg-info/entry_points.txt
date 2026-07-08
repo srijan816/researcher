@@ -2,6 +2,7 @@
 aiq_anthropic_llm = aiq_agent.common.anthropic_llm
 aiq_chat_researcher = aiq_agent.agents.chat_researcher.register
 aiq_clarifier = aiq_agent.agents.clarifier.register
+aiq_claude_researcher = aiq_agent.agents.claude_researcher.register
 aiq_data_source_registry = aiq_agent.common.data_source_registry
 aiq_deep_researcher = aiq_agent.agents.deep_researcher.register
 aiq_fastapi_extensions = aiq_agent.fastapi_extensions.register

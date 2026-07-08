@@ -9,8 +9,8 @@
 
 import type { DataSourceFromAPI } from '@/adapters/api'
 
-/** Theme mode options */
-export type ThemeMode = 'light' | 'dark' | 'system'
+/** Theme mode options. Light mode has been removed; legacy/system requests resolve to dark. */
+export type ThemeMode = 'dark' | 'system'
 
 /** Research source/depth tiers */
 export type ResearchDepth = 'shallow' | 'medium' | 'deeper' | 'deep'

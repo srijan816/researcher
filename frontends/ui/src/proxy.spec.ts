@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 const mockGetToken = vi.fn()
 const mockCookiesSet = vi.fn()
 const mockCookiesDelete = vi.fn()
+const mockRedirect = vi.fn()
 
 vi.mock('next-auth/jwt', () => ({
   getToken: (...args: unknown[]) => mockGetToken(...args),
@@ -19,6 +20,15 @@ vi.mock('next/server', () => ({
         delete: mockCookiesDelete,
       },
     }),
+    redirect: (...args: unknown[]) => {
+      mockRedirect(...args)
+      return {
+        cookies: {
+          set: mockCookiesSet,
+          delete: mockCookiesDelete,
+        },
+      }
+    },
   },
 }))
 
@@ -139,6 +149,44 @@ describe('proxy auth cookie management', () => {
 
     expect(mockCookiesDelete).toHaveBeenCalledWith('idToken')
     expect(mockCookiesSet).not.toHaveBeenCalled()
+  })
+
+  test('redirects unauthenticated page requests to sign-in', async () => {
+    mockGetToken.mockResolvedValue(null)
+
+    await proxy({
+      nextUrl: { pathname: '/', search: '' },
+      url: 'https://app2.sniperip.com/',
+    } as never)
+
+    expect(mockRedirect).toHaveBeenCalled()
+    expect(mockCookiesDelete).toHaveBeenCalledWith('idToken')
+    expect(mockCookiesSet).not.toHaveBeenCalled()
+  })
+
+  test('does not redirect API routes without a session', async () => {
+    mockGetToken.mockResolvedValue(null)
+
+    await proxy({
+      nextUrl: { pathname: '/api/jobs/async/jobs', search: '?limit=1' },
+      url: 'https://app2.sniperip.com/api/jobs/async/jobs?limit=1',
+    } as never)
+
+    expect(mockRedirect).not.toHaveBeenCalled()
+    expect(mockCookiesDelete).toHaveBeenCalledWith('idToken')
+  })
+
+  test('leaves public API routes alone', async () => {
+    mockGetToken.mockResolvedValue(null)
+
+    await proxy({
+      nextUrl: { pathname: '/api/public/srijan/research', search: '' },
+      url: 'https://app2.sniperip.com/api/public/srijan/research',
+    } as never)
+
+    expect(mockGetToken).not.toHaveBeenCalled()
+    expect(mockRedirect).not.toHaveBeenCalled()
+    expect(mockCookiesDelete).not.toHaveBeenCalledWith('idToken')
   })
 
   test('clamps maxAge to SESSION_MAX_AGE_SECONDS', async () => {

@@ -22,6 +22,7 @@ Provides functions to submit agent jobs to the Dask cluster.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -114,6 +115,153 @@ def _get_parent_trace_context() -> tuple[
         parent_conversation_id,
         get_current_trace_tags(),
     )
+
+
+def _canonical_submission_signature(
+    *,
+    agent_type: str,
+    input_text: str,
+    data_sources: list[str] | None,
+    research_depth: Any,
+    include_images: bool,
+    image_count: int | None,
+) -> tuple[Any, ...]:
+    return (
+        agent_type,
+        input_text.strip(),
+        tuple(data_sources or []),
+        str(research_depth),
+        bool(include_images),
+        image_count if include_images else None,
+    )
+
+
+def _job_submitted_signature(event_data: str | None) -> tuple[Any, ...] | None:
+    if not event_data:
+        return None
+    try:
+        event = json.loads(event_data)
+    except (TypeError, json.JSONDecodeError):
+        return None
+
+    data = event.get("data") if isinstance(event, dict) else None
+    if not isinstance(data, dict):
+        return None
+
+    agent_type = data.get("agent_type")
+    input_text = data.get("input")
+    if not isinstance(agent_type, str) or not isinstance(input_text, str):
+        return None
+
+    raw_sources = data.get("data_sources")
+    data_sources = [str(source) for source in raw_sources] if isinstance(raw_sources, list) else None
+    research_depth = data.get("research_depth") or DEFAULT_RESEARCH_DEPTH
+    include_images = bool(data.get("include_images"))
+    raw_image_count = data.get("image_count")
+    image_count = raw_image_count if isinstance(raw_image_count, int) else None
+
+    return _canonical_submission_signature(
+        agent_type=agent_type,
+        input_text=input_text,
+        data_sources=data_sources,
+        research_depth=research_depth,
+        include_images=include_images,
+        image_count=image_count,
+    )
+
+
+def _find_active_equivalent_job(
+    *,
+    db_url: str,
+    principal: Principal,
+    agent_type: str,
+    input_text: str,
+    data_sources: list[str] | None,
+    research_depth: ResearchDepthTier,
+    include_images: bool,
+    image_count: int | None,
+) -> str | None:
+    """Return an existing active job for the same owner and submission payload."""
+    from sqlalchemy import inspect
+    from sqlalchemy import text
+
+    from .access import _ensure_job_access_schema
+
+    target_signature = _canonical_submission_signature(
+        agent_type=agent_type,
+        input_text=input_text,
+        data_sources=data_sources,
+        research_depth=research_depth,
+        include_images=include_images,
+        image_count=image_count,
+    )
+
+    EventStore._ensure_table_exists(db_url)
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    inspector = inspect(engine)
+    if not (
+        inspector.has_table("job_info")
+        and inspector.has_table("job_events")
+        and inspector.has_table("job_access")
+    ):
+        return None
+
+    sql = text(
+        "SELECT ji.job_id, je.event_data "
+        "FROM job_info ji "
+        "INNER JOIN job_access ja ON ja.job_id = ji.job_id "
+        "INNER JOIN job_events je ON je.id = ("
+        "  SELECT MIN(id) FROM job_events "
+        "  WHERE job_id = ji.job_id AND event_type = 'job.submitted'"
+        ") "
+        "WHERE ji.status IN ('submitted', 'running') "
+        "AND (ji.is_expired IS NOT TRUE OR ji.is_expired IS NULL) "
+        "AND ja.owner_auth_type = :owner_auth_type "
+        "AND ja.owner_subject = :owner_subject "
+        "ORDER BY ji.created_at DESC"
+    )
+
+    with engine.connect() as conn:
+        _ensure_job_access_schema(conn, db_url)
+        rows = conn.execute(
+            sql,
+            {
+                "owner_auth_type": principal.type,
+                "owner_subject": principal.sub,
+            },
+        ).mappings().all()
+
+    for row in rows:
+        if _job_submitted_signature(row.get("event_data")) == target_signature:
+            return str(row.get("job_id"))
+    return None
+
+
+async def _is_existing_execution_active(job_id: str, scheduler_address: str | None, in_process: bool) -> bool:
+    """Best-effort check for an already-running execution for a job ID."""
+    if in_process:
+        from .asyncio_executor import InProcessJobExecutor
+
+        return InProcessJobExecutor.instance().is_running(job_id)
+
+    if not scheduler_address:
+        return False
+
+    try:
+        from distributed import Client
+        from distributed import Future
+        from distributed import Variable
+
+        async with Client(scheduler_address, asynchronous=True) as client:
+            var = Variable(name=job_id, client=client)
+            future = await var.get(timeout=2)
+            if isinstance(future, Future):
+                return not future.done()
+    except (TimeoutError, asyncio.CancelledError):
+        return False
+    except Exception as exc:
+        logger.warning("Could not verify active execution for job %s: %s", job_id, exc)
+    return False
 
 
 async def submit_agent_job(
@@ -242,9 +390,35 @@ async def submit_agent_job(
     if principal is None:
         raise RuntimeError("Verified current principal required for async job submission")
 
+    loop = asyncio.get_running_loop()
+
+    if job_id is None:
+        existing_job_id = await loop.run_in_executor(
+            None,
+            lambda: _find_active_equivalent_job(
+                db_url=db_url,
+                principal=principal,
+                agent_type=agent_type,
+                input_text=input_text,
+                data_sources=data_sources,
+                research_depth=research_depth,
+                include_images=include_images,
+                image_count=image_count,
+            ),
+        )
+        if existing_job_id:
+            logger.info(
+                "Reusing active %s job %s for owner %s (%s:%s)",
+                agent_type,
+                existing_job_id,
+                owner,
+                principal.type,
+                principal.sub,
+            )
+            return existing_job_id
+
     job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
     resolved_job_id = job_store.ensure_job_id(job_id)
-    loop = asyncio.get_running_loop()
     webhook_config = build_job_webhook_config(
         url=webhook_url,
         headers=webhook_headers,
@@ -383,6 +557,23 @@ async def resume_agent_job(
         auth_token = get_auth_token()
 
     job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
+    if await _is_existing_execution_active(job_id, scheduler_address, in_process):
+        await job_store.update_status(job_id, JobStatus.RUNNING, error=None, output=None)
+        EventStore(db_url, job_id).store(
+            {
+                "type": "job.resume_skipped",
+                "data": {
+                    "reason": "Existing worker execution is still active; reattached without requeueing.",
+                },
+            }
+        )
+        logger.info(
+            "Skipped resume requeue for %s job %s because an existing execution is still active",
+            agent_type,
+            job_id,
+        )
+        return job_id
+
     await job_store.update_status(job_id, JobStatus.RUNNING, error=None, output=None)
 
     EventStore(db_url, job_id).store(

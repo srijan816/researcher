@@ -161,12 +161,12 @@ describe('useLayoutStore', () => {
   })
 
   describe('setTheme', () => {
-    test('sets light theme, applies it to <html> and persists it', () => {
-      useLayoutStore.getState().setTheme('light')
+    test('ignores legacy light requests and persists dark', () => {
+      useLayoutStore.getState().setTheme('light' as never)
 
-      expect(useLayoutStore.getState().theme).toBe('light')
-      expect(document.documentElement.getAttribute('data-theme')).toBe('light')
-      expect(window.localStorage.getItem('gx-theme')).toBe('light')
+      expect(useLayoutStore.getState().theme).toBe('dark')
+      expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+      expect(window.localStorage.getItem('gx-theme')).toBe('dark')
     })
 
     test('sets dark theme', () => {
@@ -179,7 +179,7 @@ describe('useLayoutStore', () => {
     test('resolves system to a concrete theme', () => {
       useLayoutStore.getState().setTheme('system')
 
-      expect(['dark', 'light']).toContain(useLayoutStore.getState().theme)
+      expect(useLayoutStore.getState().theme).toBe('dark')
     })
   })
 

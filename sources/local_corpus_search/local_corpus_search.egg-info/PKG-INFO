@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: local-corpus-search
+Version: 1.0.0
+Summary: NAT local search tool over the persisted scrape-artifact corpus
+License: Apache-2.0
+Requires-Python: >=3.11
+Requires-Dist: pydantic>=2.0.0
+Requires-Dist: httpx>=0.24.0
+Requires-Dist: zvec>=0.5.0

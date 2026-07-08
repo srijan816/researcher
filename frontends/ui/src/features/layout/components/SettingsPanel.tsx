@@ -16,7 +16,6 @@ import { Copy, Lock, Plus, Settings, Trash } from '@/adapters/ui/icons'
 import { changePassword, createAPIKey, listAPIKeys, revokeAPIKey, type APIKeyMetadata } from '@/adapters/api'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '../store'
-import { ThemeToggleButton } from './ThemeToggleButton'
 import type { ResearchDepth } from '../types'
 
 const DEPTH_OPTIONS: Array<{ value: ResearchDepth; label: string }> = [
@@ -165,22 +164,6 @@ export const SettingsPanel: FC = memo(function SettingsPanel() {
       }
     >
       <Flex direction="col" gap="6">
-        {/* Appearance Section */}
-        <Flex direction="col" gap="3">
-          <Text kind="label/semibold/xs" className="text-subtle uppercase">
-            UI Theme
-          </Text>
-
-          <Flex direction="col" gap="2">
-            <ThemeToggleButton />
-            <Text kind="body/regular/xs" className="text-subtle">
-              Saved on this device. First visit follows your system preference.
-            </Text>
-          </Flex>
-        </Flex>
-
-        <DividerLine />
-
         {/* Research defaults */}
         <Flex direction="col" gap="3">
           <Text kind="label/semibold/xs" className="text-subtle uppercase">

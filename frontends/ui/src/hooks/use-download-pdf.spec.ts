@@ -155,6 +155,11 @@ describe('useDownloadPdfRoute', () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       statusText: 'Internal Server Error',
+      json: () =>
+        Promise.resolve({
+          error: 'Failed to generate PDF',
+          details: 'request body exceeded 1mb limit',
+        }),
     })
 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -163,7 +168,9 @@ describe('useDownloadPdfRoute', () => {
       await result.current.downloadPdf('# Test')
     })
 
-    expect(result.current.error).toBe('Failed to generate PDF: Internal Server Error')
+    expect(result.current.error).toBe(
+      'Failed to generate PDF: Failed to generate PDF: request body exceeded 1mb limit'
+    )
     expect(result.current.isLoading).toBe(false)
     expect(consoleErrorSpy).toHaveBeenCalled()
   })

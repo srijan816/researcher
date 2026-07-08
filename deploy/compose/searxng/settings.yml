@@ -17,3 +17,11 @@ server:
   secret_key: "aiq-local-searxng-change-me" # pragma: allowlist secret
   limiter: false
   image_proxy: false
+
+# Added for SniperIP discovery reuse: marketplace + reverse-image engines
+engines:
+  - name: ebay
+    inactive: false
+    disabled: false
+  - name: tineye
+    disabled: false

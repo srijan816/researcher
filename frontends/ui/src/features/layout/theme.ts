@@ -4,38 +4,33 @@
 /**
  * Theme utilities
  *
- * The theme is applied via <html data-theme="dark|light">. Dark token values
- * live on :root in globals.css; html[data-theme='light'] overrides them.
- * An inline script in the root layout applies the persisted (or
- * prefers-color-scheme) theme before hydration to avoid a flash.
+ * The interface is dark-only. Older builds allowed a persisted "light" value
+ * in localStorage; every entry point now ignores and overwrites it so the app
+ * cannot boot into the removed light theme.
  */
 
 import type { ThemeMode } from './types'
 
 export const THEME_STORAGE_KEY = 'gx-theme'
 
-/** The two concrete themes; 'system' resolves to one of these. */
-export type ResolvedTheme = 'dark' | 'light'
+export type ResolvedTheme = 'dark'
 
-/** Resolve a ThemeMode to a concrete theme using prefers-color-scheme. */
-export const resolveTheme = (theme: ThemeMode): ResolvedTheme => {
-  if (theme === 'light' || theme === 'dark') return theme
-  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
-  }
+/**
+ * Resolve any requested theme to the only supported theme.
+ */
+export const resolveTheme = (_theme: ThemeMode): ResolvedTheme => {
   return 'dark'
 }
 
-/** Read the persisted theme, falling back to the system preference. */
+/** Read the persisted theme. Light is no longer supported, so this always returns dark. */
 export const getInitialTheme = (): ResolvedTheme => {
   if (typeof window === 'undefined') return 'dark'
   try {
-    const stored = window.localStorage.getItem(THEME_STORAGE_KEY)
-    if (stored === 'light' || stored === 'dark') return stored
+    window.localStorage.setItem(THEME_STORAGE_KEY, 'dark')
   } catch {
-    // Storage unavailable (private mode) — fall through to system preference
+    // Storage unavailable (private mode) — fall through to dark default
   }
-  return resolveTheme('system')
+  return 'dark'
 }
 
 /** Apply the theme to <html> and persist the choice. */
@@ -53,4 +48,4 @@ export const applyTheme = (theme: ResolvedTheme): void => {
  * Inline bootstrap script (stringified into the root layout <head>) that sets
  * data-theme before first paint. Must stay dependency-free ES5.
  */
-export const THEME_BOOTSTRAP_SCRIPT = `(function(){try{var t=localStorage.getItem('${THEME_STORAGE_KEY}');if(t!=='light'&&t!=='dark'){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'}document.documentElement.setAttribute('data-theme',t)}catch(e){document.documentElement.setAttribute('data-theme','dark')}})()`
+export const THEME_BOOTSTRAP_SCRIPT = `(function(){try{localStorage.setItem('${THEME_STORAGE_KEY}','dark');document.documentElement.setAttribute('data-theme','dark')}catch(e){document.documentElement.setAttribute('data-theme','dark')}})()`

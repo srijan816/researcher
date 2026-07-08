@@ -30,7 +30,7 @@ import {
   type DeepResearchJobStatus,
   type TodoItem,
 } from '@/adapters/api'
-import { useChatStore } from '../store'
+import { buildDeepResearchTodoGroup, mapDeepResearchTodos, useChatStore } from '../store'
 import { isAuthRequiredDeepResearchError } from '../lib/deep-research-errors'
 import { isUnavailableDeepResearchJobError } from '../lib/deep-research-errors'
 import { useAuth } from '@/adapters/auth'
@@ -279,6 +279,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
           llmSteps: new Map<string, { name: string; workflow?: string; content: string; thinking?: string; usage?: { input_tokens: number; output_tokens: number }; timestamp?: string }>(),
           toolCalls: new Map<string, { name: string; input?: Record<string, unknown>; output?: string; workflow?: string; agentId?: string; timestamp?: string }>(),
           todos: null as TodoItem[] | null,
+          todoGroups: new Map<string, { todos: TodoItem[]; workflow?: string; agentId?: string; source?: string; timestamp?: string }>(),
           citations: [] as Array<{ url: string; content: string; isCited: boolean; timestamp?: string; title?: string; sourceClass?: string; publishedDate?: string }>,
           files: new Map<string, { content: string; timestamp?: string }>(),  // filename -> latest content (deduped)
           reportContent: null as string | null,
@@ -339,17 +340,15 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             timestamp: parseEventDate(file.timestamp),
           }))
 
-          const todos = buffer.todos
-            ? buffer.todos.map((t, idx) => ({
-                id: `todo-${idx}-${t.content.substring(0, 20).replace(/\s+/g, '-').toLowerCase()}`,
-                content: t.content,
-                status: t.status as 'pending' | 'in_progress' | 'completed' | 'stopped',
-              }))
-            : undefined
+          const todos = buffer.todos ? mapDeepResearchTodos(buffer.todos) : undefined
+          const todoGroups = Array.from(buffer.todoGroups.values()).map((group) =>
+            buildDeepResearchTodoGroup(group.todos, group)
+          )
 
           useChatStore.setState((state) => ({
             ...(buffer.reportContent !== null && { reportContent: buffer.reportContent }),
             ...(todos && { deepResearchTodos: todos }),
+            ...(todoGroups.length > 0 && { deepResearchTodoGroups: todoGroups }),
             ...(agents.length > 0 && { deepResearchAgents: agents }),
             ...(llmSteps.length > 0 && { deepResearchLLMSteps: llmSteps }),
             ...(toolCalls.length > 0 && { deepResearchToolCalls: toolCalls }),
@@ -459,8 +458,12 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               }
             },
 
-            onTodoUpdate: (todos: TodoItem[], workflow?: string) => {
-              if (workflow) return
+            onTodoUpdate: (todos: TodoItem[], workflow?: string, timestamp?: string, agentId?: string, source?: string) => {
+              if (workflow || agentId || source === 'agent') {
+                const group = buildDeepResearchTodoGroup(todos, { workflow, agentId, source, timestamp })
+                buffer.todoGroups.set(group.id, { todos, workflow, agentId, source, timestamp })
+                return
+              }
               buffer.todos = todos
             },
 

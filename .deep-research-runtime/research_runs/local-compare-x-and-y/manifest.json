@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "job_id": null,
+  "slug": "compare-x-and-y",
+  "run_dir": ".deep-research-runtime/research_runs/local-compare-x-and-y",
+  "generated_at": "2026-07-06T04:01:55.620243Z",
+  "files": {
+    "plan.json": ".deep-research-runtime/research_runs/local-compare-x-and-y/plan.json",
+    "plan.md": ".deep-research-runtime/research_runs/local-compare-x-and-y/plan.md",
+    "queries.json": ".deep-research-runtime/research_runs/local-compare-x-and-y/queries.json",
+    "budget.json": ".deep-research-runtime/research_runs/local-compare-x-and-y/budget.json",
+    "sources.json": ".deep-research-runtime/research_runs/local-compare-x-and-y/sources.json",
+    "claims.json": ".deep-research-runtime/research_runs/local-compare-x-and-y/claims.json",
+    "gaps.md": ".deep-research-runtime/research_runs/local-compare-x-and-y/gaps.md",
+    "contradictions.md": ".deep-research-runtime/research_runs/local-compare-x-and-y/contradictions.md",
+    "research.md": ".deep-research-runtime/research_runs/local-compare-x-and-y/research.md",
+    "final.md": ".deep-research-runtime/research_runs/local-compare-x-and-y/final.md",
+    "notes/shared__final.md": ".deep-research-runtime/research_runs/local-compare-x-and-y/notes/shared__final.md",
+    "notes/shared__research.md": ".deep-research-runtime/research_runs/local-compare-x-and-y/notes/shared__research.md"
+  },
+  "source_count": 0,
+  "claim_count": 0,
+  "gap_count": 2,
+  "contradiction_count": 0
+}

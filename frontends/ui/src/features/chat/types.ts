@@ -199,6 +199,8 @@ export interface ChatMessage {
   planMessages?: PlanMessage[]
   /** Task todos shown in TasksTab */
   deepResearchTodos?: DeepResearchTodo[]
+  /** Workflow-scoped task groups shown in TasksTab */
+  deepResearchTodoGroups?: DeepResearchTodoGroup[]
   /** LLM steps shown in ThoughtTracesTab */
   deepResearchLLMSteps?: DeepResearchLLMStep[]
   /** Agent steps shown in AgentsTab */
@@ -357,6 +359,27 @@ export interface DeepResearchTodo {
   status: DeepResearchTodoStatus
 }
 
+/** Todo artifact source context from deep research SSE metadata */
+export type DeepResearchTodoGroupSource = 'orchestrator' | 'agent' | string
+
+/** Workflow-scoped todo list from a planner/researcher sub-agent */
+export interface DeepResearchTodoGroup {
+  /** Stable group id, usually based on agent id or workflow name */
+  id: string
+  /** Human-readable group label */
+  label: string
+  /** Workflow name, e.g. planner-agent or researcher-agent */
+  workflow?: string
+  /** Agent run id when provided by the backend */
+  agentId?: string
+  /** Backend source classification */
+  source?: DeepResearchTodoGroupSource
+  /** Latest todo list for this workflow/agent */
+  todos: DeepResearchTodo[]
+  /** Last update timestamp for this group */
+  updatedAt: Date
+}
+
 /** LLM step for ThoughtTracesTab (from llm.start/end) */
 export interface DeepResearchLLMStep {
   /** Unique identifier */
@@ -483,6 +506,8 @@ export interface ChatState {
   deepResearchCitations: CitationSource[]
   /** Todo items from deep research (from artifact.update with type: "todo") */
   deepResearchTodos: DeepResearchTodo[]
+  /** Workflow-scoped todo groups from sub-agent artifact.update events */
+  deepResearchTodoGroups: DeepResearchTodoGroup[]
   /** LLM steps for ThoughtTracesTab (from llm.start/end events) */
   deepResearchLLMSteps: DeepResearchLLMStep[]
   /** Agent steps for AgentsTab (from workflow.start/end events) */
@@ -700,7 +725,17 @@ export interface ChatActions {
     meta?: { title?: string; sourceClass?: string; publishedDate?: string }
   ) => void
   /** Set the full todo list from deep research (replaces existing) */
-  setDeepResearchTodos: (todos: Array<{ content: string; status: string }>) => void
+  setDeepResearchTodos: (todos: Array<{ id?: string; content: string; status: string }>) => void
+  /** Set a workflow-scoped todo list from a planner/researcher sub-agent */
+  setDeepResearchTodoGroup: (
+    todos: Array<{ id?: string; content: string; status: string }>,
+    metadata: {
+      workflow?: string
+      agentId?: string
+      source?: DeepResearchTodoGroupSource
+      timestamp?: string | Date
+    }
+  ) => void
   /** Mark all in-progress and pending todos as stopped (on error) */
   stopDeepResearchTodos: () => void
   /** Stop all spinners (todos, LLM steps, agents, tool calls). Pass true for success, false/undefined for error. */

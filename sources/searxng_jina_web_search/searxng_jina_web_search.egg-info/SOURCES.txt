@@ -6,4 +6,8 @@ searxng_jina_web_search.egg-info/entry_points.txt
 searxng_jina_web_search.egg-info/requires.txt
 searxng_jina_web_search.egg-info/top_level.txt
 src/__init__.py
+src/enrichment.py
 src/register.py
+src/reranker.py
+tests/test_search_stack_enhancements.py
+tests/test_websurfx_discovery.py

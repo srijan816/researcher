@@ -875,10 +875,15 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     # query it via raw SQL; table is otherwise created lazily on first write).
     EventStore._ensure_table_exists(db_url)
 
-    await _resume_orphaned_startup_jobs(job_store, db_url, default_expiry_seconds)
+    await _resume_orphaned_startup_jobs(
+        job_store,
+        db_url,
+        scheduler_address=scheduler_address,
+        default_expiry_seconds=default_expiry_seconds,
+    )
 
     # Start the ghost job reaper background task.
-    asyncio.create_task(_reap_ghost_jobs(job_store, db_url))
+    asyncio.create_task(_reap_ghost_jobs(job_store, db_url, scheduler_address=scheduler_address))
 
     # Start periodic cleanup of expired jobs (NAT's job_info table) and old events (job_events table).
     # NAT provides periodic_cleanup as a Dask task for job_info, but it must be explicitly submitted.
@@ -1398,7 +1403,7 @@ def _format_resume_input(input_text: str, resume_files: dict[str, dict]) -> str:
     )
 
 
-async def _reap_ghost_jobs(job_store, db_url: str) -> None:
+async def _reap_ghost_jobs(job_store, db_url: str, scheduler_address: str | None = None) -> None:
     """
     Background task that periodically marks stale RUNNING jobs as INTERRUPTED.
 
@@ -1410,6 +1415,8 @@ async def _reap_ghost_jobs(job_store, db_url: str) -> None:
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
     from ..jobs.event_store import EventStore
+    from ..jobs.asyncio_executor import use_inprocess_executor
+    from ..jobs.submit import _is_existing_execution_active
 
     logger.info(
         "Ghost job reaper started (timeout=%ds, interval=%ds)",
@@ -1426,6 +1433,17 @@ async def _reap_ghost_jobs(job_store, db_url: str) -> None:
             stale_job_ids = await loop.run_in_executor(None, _find_stale_jobs, db_url, JobStatus.RUNNING.value)
 
             for stale_job_id in stale_job_ids:
+                if await _is_existing_execution_active(
+                    stale_job_id,
+                    scheduler_address,
+                    use_inprocess_executor(),
+                ):
+                    logger.info(
+                        "Skipping ghost interruption for job %s: worker execution is still active despite no events",
+                        stale_job_id,
+                    )
+                    continue
+
                 logger.warning(
                     "Interrupting ghost job %s (no events for %ds)",
                     stale_job_id,
@@ -1458,7 +1476,12 @@ async def _reap_ghost_jobs(job_store, db_url: str) -> None:
             logger.warning("Ghost job reaper error: %s", e)
 
 
-async def _resume_orphaned_startup_jobs(job_store, db_url: str, default_expiry_seconds: int = 86400) -> None:
+async def _resume_orphaned_startup_jobs(
+    job_store,
+    db_url: str,
+    scheduler_address: str | None = None,
+    default_expiry_seconds: int = 86400,
+) -> None:
     """
     Auto-resume active jobs (submitted/running) from the last saved LangGraph checkpoint
     when this backend starts.
@@ -1466,6 +1489,8 @@ async def _resume_orphaned_startup_jobs(job_store, db_url: str, default_expiry_s
     from aiq_agent.auth import Principal
     from aiq_api.jobs.access import _make_no_auth_principal
     from aiq_api.jobs.access import get_job_access
+    from aiq_api.jobs.asyncio_executor import use_inprocess_executor
+    from aiq_api.jobs.submit import _is_existing_execution_active
     from aiq_api.jobs.submit import resume_agent_job
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
@@ -1487,6 +1512,23 @@ async def _resume_orphaned_startup_jobs(job_store, db_url: str, default_expiry_s
         async def do_resume(jid=job_id, prev=previous_status):
             from aiq_api.jobs.event_store import EventStore
             try:
+                if await _is_existing_execution_active(jid, scheduler_address, use_inprocess_executor()):
+                    logger.info(
+                        "Job %s is still active after backend startup; keeping status %s without requeue",
+                        jid,
+                        prev,
+                    )
+                    EventStore(db_url, jid).store(
+                        {
+                            "type": "job.resume_skipped",
+                            "data": {
+                                "message": "Existing worker execution is still active after backend startup",
+                                "previous_status": prev,
+                            },
+                        }
+                    )
+                    return
+
                 submit_data = _get_submit_data_from_events(db_url, jid)
                 if not submit_data:
                     logger.warning(

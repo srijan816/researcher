@@ -23,7 +23,7 @@ import {
   type DeepResearchJobStatus,
   type TodoItem,
 } from '@/adapters/api'
-import { useChatStore } from '../store'
+import { buildDeepResearchTodoGroup, mapDeepResearchTodos, useChatStore } from '../store'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
 import { checkBackendHealthCached } from '@/shared/hooks/use-backend-health'
@@ -119,6 +119,20 @@ const getToolActivity = (
   return { kind: 'tool', message: `Running ${name}`, detail }
 }
 
+const getToolStatus = (
+  name: string,
+  workflow?: string
+): 'searching' | 'planning' | 'researching' | 'writing' => {
+  const normalizedName = name.toLowerCase()
+  const normalizedWorkflow = (workflow || '').toLowerCase()
+  if (normalizedName.includes('search') || normalizedName.includes('quote')) return 'searching'
+  if (normalizedName.includes('write_file') || normalizedName.includes('report')) return 'writing'
+  if (normalizedName.includes('write_todos')) {
+    return normalizedWorkflow.includes('planner') ? 'planning' : 'researching'
+  }
+  return 'researching'
+}
+
 interface UseDeepResearchReturn {
   /** Whether deep research is currently streaming */
   isStreaming: boolean
@@ -184,6 +198,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
   const setCurrentStatus = useChatStore((s) => s.setCurrentStatus)
   const setStreaming = useChatStore((s) => s.setStreaming)
   const setDeepResearchTodos = useChatStore((s) => s.setDeepResearchTodos)
+  const setDeepResearchTodoGroup = useChatStore((s) => s.setDeepResearchTodoGroup)
   const stopAllDeepResearchSpinners = useChatStore((s) => s.stopAllDeepResearchSpinners)
   const addDeepResearchLLMStep = useChatStore((s) => s.addDeepResearchLLMStep)
   const appendToDeepResearchLLMStep = useChatStore((s) => s.appendToDeepResearchLLMStep)
@@ -276,7 +291,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
     autoResumeAttemptsRef.current.set(jobId, attempts + 1)
     setDeepResearchActivity({
       kind: 'status',
-      message: 'Research was interrupted by the worker. Resuming automatically...',
+      message: 'Reconnecting to the research job...',
       detail: error,
     })
 
@@ -362,6 +377,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
         llmSteps: new Map<string, { name: string; workflow?: string; content: string; thinking?: string; usage?: { input_tokens: number; output_tokens: number }; timestamp?: string }>(),
         toolCalls: new Map<string, { name: string; input?: Record<string, unknown>; output?: string; workflow?: string; agentId?: string; timestamp?: string }>(),
         todos: null as TodoItem[] | null,
+        todoGroups: new Map<string, { todos: TodoItem[]; workflow?: string; agentId?: string; source?: string; timestamp?: string }>(),
         citations: [] as Array<{ url: string; content: string; isCited: boolean; timestamp?: string; title?: string; sourceClass?: string; publishedDate?: string }>,
         files: new Map<string, { content: string; timestamp?: string }>(),
         reportContent: null as string | null,
@@ -378,11 +394,15 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
         const toolCalls = Array.from(buf.toolCalls.entries()).map(([id, t]) => ({ id, name: t.name, input: t.input, output: t.output, workflow: t.workflow, agentId: t.agentId, status: 'complete' as const, timestamp: parseEventDate(t.timestamp) }))
         const citations = buf.citations.map((c, i) => ({ id: `citation-${i}`, url: c.url, content: c.content, isCited: c.isCited, timestamp: parseEventDate(c.timestamp), title: c.title, sourceClass: c.sourceClass, publishedDate: c.publishedDate }))
         const files = Array.from(buf.files.entries()).map(([filename, file], i) => ({ id: `file-${i}`, filename, content: file.content, timestamp: parseEventDate(file.timestamp) }))
-        const todos = buf.todos?.map((t, i) => ({ id: `todo-${i}-${t.content.substring(0, 20).replace(/\s+/g, '-').toLowerCase()}`, content: t.content, status: t.status as 'pending' | 'in_progress' | 'completed' | 'stopped' }))
+        const todos = buf.todos ? mapDeepResearchTodos(buf.todos) : undefined
+        const todoGroups = Array.from(buf.todoGroups.values()).map((group) =>
+          buildDeepResearchTodoGroup(group.todos, group)
+        )
 
         useChatStore.setState((state) => ({
           ...(buf.reportContent !== null && { reportContent: buf.reportContent }),
           ...(todos && todos.length > 0 && { deepResearchTodos: todos }),
+          ...(todoGroups.length > 0 && { deepResearchTodoGroups: todoGroups }),
           ...(agents.length > 0 && { deepResearchAgents: agents }),
           ...(llmSteps.length > 0 && { deepResearchLLMSteps: llmSteps }),
           ...(toolCalls.length > 0 && { deepResearchToolCalls: toolCalls }),
@@ -452,25 +472,35 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               clearTimeout(cancelFallbackRef.current)
               cancelFallbackRef.current = null
             }
-            updateDeepResearchStatus(status)
-            setDeepResearchActivity({
-              kind: status === 'failure' ? 'warning' : 'status',
-              message:
-                status === 'submitted'
-                  ? 'Research job queued'
-                  : status === 'running'
-                    ? 'Research job running'
-                    : status === 'success'
-                      ? 'Research completed'
-                      : status === 'interrupted'
-                        ? 'Research cancelled'
-                        : 'Research failed',
-              detail: error,
-            })
-
             const state = useChatStore.getState()
             const ownerConvId = state.deepResearchOwnerConversationId
             const messageId = state.activeDeepResearchMessageId
+
+            if (isRecoverableInterruptedStatus(status, error)) {
+              setDeepResearchActivity({
+                kind: 'status',
+                message: 'Research worker heartbeat was lost. Checking for active work...',
+                detail: error,
+              })
+              const resumed = await tryAutoResume(jobId, error)
+              if (resumed) return
+            }
+
+            updateDeepResearchStatus(status)
+            const statusMessage = (() => {
+              if (status === 'submitted') return 'Research job queued'
+              if (status === 'running') return 'Research job running'
+              if (status === 'success') return 'Research completed'
+              if (status === 'interrupted') {
+                return isUserCancelledStatus(status, error) ? 'Research cancelled' : 'Research interrupted'
+              }
+              return 'Research failed'
+            })()
+            setDeepResearchActivity({
+              kind: status === 'failure' ? 'warning' : 'status',
+              message: statusMessage,
+              detail: error,
+            })
 
             if (status === 'success') {
               setCurrentStatus('complete')
@@ -495,11 +525,6 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               completeDeepResearch()
               setStreaming(false)
             } else if (status === 'failure' || status === 'interrupted') {
-              if (isRecoverableInterruptedStatus(status, error)) {
-                const resumed = await tryAutoResume(jobId, error)
-                if (resumed) return
-              }
-
               setCurrentStatus('error')
               stopAllDeepResearchSpinners()
               const hasReport = Boolean(state.reportContent?.trim())
@@ -642,7 +667,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               let stack = buf.activeToolStacks.get(name); if (!stack) { stack = []; buf.activeToolStacks.set(name, stack) }; stack.push(id); return
             }
             if (!isOwnerActive(jobId)) return
-            resetTimeout(); setCurrentStatus('searching')
+            resetTimeout(); setCurrentStatus(getToolStatus(name, workflow))
             setDeepResearchActivity(getToolActivity(name, input))
             const hasUserMsg = Boolean(useChatStore.getState().currentUserMessageId)
             let thinkingStepId: string | undefined
@@ -697,17 +722,23 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             setCurrentStatus('researching')
           },
 
-          onTodoUpdate: (todos: TodoItem[], workflow?: string) => {
-            if (workflow) {
-              if (buf.active) return
+          onTodoUpdate: (todos: TodoItem[], workflow?: string, timestamp?: string, agentId?: string, source?: string) => {
+            const isWorkflowScoped = Boolean(workflow || agentId || source === 'agent')
+            if (isWorkflowScoped) {
+              if (buf.active) {
+                const group = buildDeepResearchTodoGroup(todos, { workflow, agentId, source, timestamp })
+                buf.todoGroups.set(group.id, { todos, workflow, agentId, source, timestamp })
+                return
+              }
               if (!isOwnerActive(jobId)) return
+              resetTimeout()
+              setDeepResearchTodoGroup(todos, { workflow, agentId, source, timestamp })
               const activeTodo = todos.find((todo) => todo.status === 'in_progress')
               if (activeTodo) {
-                resetTimeout()
-                setCurrentStatus('researching')
+                setCurrentStatus(workflow?.toLowerCase().includes('planner') ? 'planning' : 'researching')
                 setDeepResearchActivity({
                   kind: 'agent',
-                  message: `${workflow} progress`,
+                  message: `${workflow || 'Research lane'} progress`,
                   detail: activeTodo.content,
                 })
               }
@@ -923,7 +954,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
     [
       idToken, resetTimeout, isOwnerActive, updateDeepResearchStatus, completeDeepResearch,
       addDeepResearchCitation, setReportContent, addThinkingStep, appendToThinkingStep,
-      completeThinkingStep, setCurrentStatus, setDeepResearchTodos, stopAllDeepResearchSpinners,
+      completeThinkingStep, setCurrentStatus, setDeepResearchTodos, setDeepResearchTodoGroup, stopAllDeepResearchSpinners,
       addDeepResearchLLMStep, appendToDeepResearchLLMStep,
       completeDeepResearchLLMStep, addDeepResearchAgentWithId, completeDeepResearchAgent,
       addDeepResearchToolCall, completeDeepResearchToolCall, addDeepResearchFile,

@@ -221,6 +221,32 @@ export const Generate: FC<IconProps> = ({ className }) => {
   )
 }
 
+/**
+ * AlphaGlyph — the GenAlphAI brand α mark as an inline SVG.
+ *
+ * Used on research-complete surfaces in place of the NVIDIA "generate"
+ * triangle. Renders the brand α path in brand red (currentColor falls back to
+ * #F43F5E). Sized via className (width/height utilities); the viewBox is the
+ * source glyph coordinate space and the path transform maps it into the tile.
+ */
+export const AlphaGlyph: FC<IconProps> = ({ className, width = 20, height = 20, 'aria-label': ariaLabel }) => (
+  <svg
+    viewBox="120.5 58.5 32 27"
+    width={width}
+    height={height}
+    fill="currentColor"
+    className={className}
+    style={{ color: '#F43F5E' }}
+    aria-hidden={!ariaLabel}
+    aria-label={ariaLabel}
+  >
+    <path
+      d="M507 -24C775 -24 908 168 983 330L1006 0H1213L1142 559L1383 1118H1176L1056 797C1037 954 957 1132 693 1132C393 1132 153 900 95 555C39 215 209 -24 507 -24ZM968 559 967 556C910 405 768 165 541 165C361 165 279 314 318 553C358 795 503 945 692 945C923 945 958 711 968 562Z"
+      transform="translate(120.94,84) scale(0.02148,-0.02148)"
+    />
+  </svg>
+)
+
 /** Layers icon (stacked squares) for research depth — inline, no CDN dependency */
 export const Layers: FC<IconProps> = ({ className, width = 20, height = 20, 'aria-label': ariaLabel }) => (
   <svg

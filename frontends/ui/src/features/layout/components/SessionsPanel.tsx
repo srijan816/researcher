@@ -64,14 +64,10 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
 
   const isSessionBusy = useChatStore((s) => s.isSessionBusy)
   const pruneExpiredSessions = useChatStore((s) => s.pruneExpiredSessions)
-  // Navigation-specific busy check: only shallow thinking (WebSocket) and HITL prompts
-  // block session switching. Deep research runs server-side and can be reconnected,
-  // so it should NOT prevent navigation.
   const { isStreaming, hasPendingInteraction } = useChatStore(useShallow((s) => ({
     isStreaming: s.isStreaming,
     hasPendingInteraction: s.pendingInteraction !== null,
   })))
-  const isNavigationBlocked = isStreaming || hasPendingInteraction
   const [searchQuery, setSearchQuery] = useState('')
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false)
@@ -90,9 +86,9 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
     }
   }, [isSessionsPanelOpen, pruneExpiredSessions])
 
-  // Deep research runs server-side, so local deletion should remain available.
-  // Shallow streaming and HITL still block destructive actions in the active UI.
-  const isDeleteBlocked = isNavigationBlocked
+  // Browsing history is always allowed. Shallow streaming and HITL still block
+  // destructive changes for the active UI.
+  const isDeleteBlocked = isStreaming || hasPendingInteraction
 
   const handleDeleteClick = useCallback((sessionId: string) => {
     setSessionToDelete(sessionId)
@@ -254,7 +250,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
                     <SessionDateGroups
                       sessions={ownerSessions}
                       selectedSessionId={selectedSessionId}
-                      isNavigationBlocked={isNavigationBlocked}
+                      areActionsBlocked={isDeleteBlocked}
                       isSessionBusy={isSessionBusy}
                       onSelect={handleSessionClick}
                       onDelete={handleDeleteClick}
@@ -267,7 +263,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
           : <SessionDateGroups
               sessions={filteredSessions}
               selectedSessionId={selectedSessionId}
-              isNavigationBlocked={isNavigationBlocked}
+              areActionsBlocked={isDeleteBlocked}
               isSessionBusy={isSessionBusy}
               onSelect={handleSessionClick}
               onDelete={handleDeleteClick}
@@ -306,7 +302,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
 interface SessionDateGroupsProps {
   sessions: Session[]
   selectedSessionId?: string
-  isNavigationBlocked: boolean
+  areActionsBlocked: boolean
   isSessionBusy: (sessionId: string) => boolean
   onSelect: (sessionId: string) => void
   onDelete: (sessionId: string) => void
@@ -316,7 +312,7 @@ interface SessionDateGroupsProps {
 const SessionDateGroups: FC<SessionDateGroupsProps> = ({
   sessions,
   selectedSessionId,
-  isNavigationBlocked,
+  areActionsBlocked,
   isSessionBusy,
   onSelect,
   onDelete,
@@ -333,7 +329,7 @@ const SessionDateGroups: FC<SessionDateGroupsProps> = ({
               key={session.id}
               session={session}
               isSelected={selectedSessionId === session.id}
-              isBusy={isNavigationBlocked}
+              areActionsBlocked={areActionsBlocked}
               isSessionActive={isSessionBusy(session.id)}
               onSelect={onSelect}
               onDelete={onDelete}
@@ -354,9 +350,8 @@ const SessionDateGroups: FC<SessionDateGroupsProps> = ({
 interface SessionItemProps {
   session: Session
   isSelected: boolean
-  /** Navigation block: true when shallow thinking (WS) or HITL prompt is pending.
-   *  Deep research does NOT block navigation since it runs server-side. */
-  isBusy?: boolean
+  /** True when edit/delete controls should be disabled for active operations. */
+  areActionsBlocked?: boolean
   /** Per-session block: true when this specific session has active deep research */
   isSessionActive?: boolean
   onSelect?: (sessionId: string) => void
@@ -367,7 +362,7 @@ interface SessionItemProps {
 const SessionItem: FC<SessionItemProps> = ({
   session,
   isSelected,
-  isBusy = false,
+  areActionsBlocked = false,
   isSessionActive = false,
   onSelect,
   onDelete,
@@ -387,10 +382,10 @@ const SessionItem: FC<SessionItemProps> = ({
   }, [isEditing])
 
   const handleClick = useCallback(() => {
-    if (!isEditing && !isBusy) {
+    if (!isEditing) {
       onSelect?.(session.id)
     }
-  }, [isEditing, isBusy, onSelect, session.id])
+  }, [isEditing, onSelect, session.id])
 
   const handleEditClick = useCallback(
     (e: React.MouseEvent) => {
@@ -446,9 +441,9 @@ const SessionItem: FC<SessionItemProps> = ({
   return (
     <div
       role="button"
-      tabIndex={isBusy ? -1 : 0}
+      tabIndex={0}
       onClick={handleClick}
-      onKeyDown={(e) => e.key === 'Enter' && !isEditing && !isBusy && handleClick()}
+      onKeyDown={(e) => e.key === 'Enter' && !isEditing && handleClick()}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       className={`
@@ -456,15 +451,15 @@ const SessionItem: FC<SessionItemProps> = ({
         border-l-2 p-2 pl-3 text-left transition-colors
         outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand
         sm:min-h-10
-        ${isBusy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}
+        cursor-pointer
         ${
           isSelected
             ? 'bg-surface-raised border-l-[var(--accent-primary)]'
             : 'border-l-transparent hover:bg-surface-raised-50 bg-transparent'
         }
       `}
-      aria-label={isBusy ? `Session: ${session.title} (processing in progress)` : `Session: ${session.title}`}
-      aria-disabled={isBusy}
+      aria-label={`Session: ${session.title}`}
+      aria-disabled={false}
     >
       {isEditing ? (
         <input
@@ -513,9 +508,9 @@ const SessionItem: FC<SessionItemProps> = ({
                 kind="tertiary"
                 size="tiny"
                 onClick={handleEditClick}
-                disabled={isBusy || isSessionActive}
-                aria-label={isBusy || isSessionActive ? "Rename session (disabled)" : "Rename session"}
-                title={isBusy || isSessionActive ? "Cannot rename while operations are in progress" : "Rename session"}
+                disabled={areActionsBlocked || isSessionActive}
+                aria-label={areActionsBlocked || isSessionActive ? "Rename session (disabled)" : "Rename session"}
+                title={areActionsBlocked || isSessionActive ? "Cannot rename while operations are in progress" : "Rename session"}
                 className="min-h-8 min-w-8"
               >
                 <Edit height={16} width={16} />
@@ -525,9 +520,9 @@ const SessionItem: FC<SessionItemProps> = ({
                 size="tiny"
                 color="danger"
                 onClick={handleDeleteClick}
-                disabled={isBusy}
-                aria-label={isBusy ? "Delete session (disabled)" : "Delete session"}
-                title={isBusy ? "Cannot delete while operations are in progress" : "Delete session"}
+                disabled={areActionsBlocked}
+                aria-label={areActionsBlocked ? "Delete session (disabled)" : "Delete session"}
+                title={areActionsBlocked ? "Cannot delete while operations are in progress" : "Delete session"}
                 className="min-h-8 min-w-8"
               >
                 <Trash height={16} width={16} />

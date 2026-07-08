@@ -252,6 +252,8 @@ export interface ArtifactUpdateEvent extends DeepResearchSSEEvent {
     }
     metadata?: {
       workflow?: string
+      agent_id?: string
+      source?: string
     }
   }
 }
@@ -297,7 +299,7 @@ export interface DeepResearchCallbacks {
   onToolStart?: (name: string, input?: Record<string, unknown>, workflow?: string, eventId?: string, agentId?: string, timestamp?: string) => void
   onToolEnd?: (name: string, output?: string, eventId?: string, agentId?: string, timestamp?: string) => void
   /** Called on artifact updates */
-  onTodoUpdate?: (todos: TodoItem[], workflow?: string, timestamp?: string) => void
+  onTodoUpdate?: (todos: TodoItem[], workflow?: string, timestamp?: string, agentId?: string, source?: string) => void
   onCitationUpdate?: (url: string, content: string, isCited?: boolean, timestamp?: string, meta?: CitationEventMeta) => void
   onFileUpdate?: (filename: string, content: string, timestamp?: string) => void
   onOutputUpdate?: (content: string, outputCategory?: string, workflow?: string, timestamp?: string) => void
@@ -653,7 +655,7 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
       }
 
       case 'artifact.update': {
-        // artifact.update has nested structure: { id, timestamp, data: { type, content, url?, output_category? }, metadata?: { workflow } }
+        // artifact.update has nested structure: { id, timestamp, data: { type, content, url?, output_category? }, metadata?: { workflow, agent_id, source } }
         const artifactWrapper = rawData as {
           timestamp?: string
           data?: { type: ArtifactType; content: unknown; url?: string; output_category?: string }
@@ -661,7 +663,7 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
           content?: unknown
           url?: string
           output_category?: string
-          metadata?: { workflow?: string }
+          metadata?: { workflow?: string; agent_id?: string; source?: string }
         }
         // Handle both nested (data.type) and flat (type) structures
         const artifactData = artifactWrapper.data || artifactWrapper
@@ -670,7 +672,13 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
 
         switch (artifactData.type) {
           case 'todo':
-            callbacks.onTodoUpdate?.(artifactData.content as TodoItem[], artifactWorkflow, artifactTimestamp)
+            callbacks.onTodoUpdate?.(
+              artifactData.content as TodoItem[],
+              artifactWorkflow,
+              artifactTimestamp,
+              artifactWrapper.metadata?.agent_id,
+              artifactWrapper.metadata?.source
+            )
             break
           case 'citation_source':
             // citation_source = "Referenced" sources (discovered during search)

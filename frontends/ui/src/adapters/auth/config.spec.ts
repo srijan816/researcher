@@ -52,6 +52,54 @@ describe('isAuthRequired', () => {
   })
 })
 
+describe('shouldUseSecureCookies', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.resetModules()
+  })
+
+  test('falls back to NEXTAUTH_URL https:// when SECURE_COOKIES is unset', async () => {
+    vi.stubEnv('NEXTAUTH_URL', 'https://app2.sniperip.com')
+    const { shouldUseSecureCookies } = await loadConfig()
+    expect(shouldUseSecureCookies()).toBe(true)
+  })
+
+  test('falls back to NEXTAUTH_URL http:// when SECURE_COOKIES is unset', async () => {
+    vi.stubEnv('NEXTAUTH_URL', 'http://localhost:3000')
+    const { shouldUseSecureCookies } = await loadConfig()
+    expect(shouldUseSecureCookies()).toBe(false)
+  })
+
+  test('treats empty SECURE_COOKIES as unset and falls back to NEXTAUTH_URL', async () => {
+    // Regression test: docker-compose sets ``SECURE_COOKIES=`` (empty) by
+    // default.  The previous implementation treated empty string as a
+    // deliberate override and returned ``false``, which made
+    // ``getToken({ req, secureCookie: false })`` look for the unprefixed
+    // ``next-auth.session-token`` while NextAuth (correctly) had set
+    // ``__Secure-next-auth.session-token`` — every page navigation
+    // re-deleted the freshly-minted idToken cookie and users were stuck
+    // on the sign-in screen.
+    vi.stubEnv('SECURE_COOKIES', '')
+    vi.stubEnv('NEXTAUTH_URL', 'https://app2.sniperip.com')
+    const { shouldUseSecureCookies } = await loadConfig()
+    expect(shouldUseSecureCookies()).toBe(true)
+  })
+
+  test('explicit SECURE_COOKIES=true overrides NEXTAUTH_URL', async () => {
+    vi.stubEnv('SECURE_COOKIES', 'true')
+    vi.stubEnv('NEXTAUTH_URL', 'http://localhost:3000')
+    const { shouldUseSecureCookies } = await loadConfig()
+    expect(shouldUseSecureCookies()).toBe(true)
+  })
+
+  test('explicit SECURE_COOKIES=false overrides NEXTAUTH_URL', async () => {
+    vi.stubEnv('SECURE_COOKIES', 'false')
+    vi.stubEnv('NEXTAUTH_URL', 'https://app2.sniperip.com')
+    const { shouldUseSecureCookies } = await loadConfig()
+    expect(shouldUseSecureCookies()).toBe(false)
+  })
+})
+
 describe('auth timing config', () => {
   afterEach(() => {
     vi.unstubAllEnvs()

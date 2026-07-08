@@ -14,13 +14,16 @@
 'use client'
 
 import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { usePathname, useRouter } from 'next/navigation'
 import { SessionProvider } from 'next-auth/react'
 import { ThemeProvider } from '@/adapters/ui'
 import { listConversationSnapshots, listJobs, syncConversationSnapshots } from '@/adapters/api'
 import { useAuth } from '@/adapters/auth'
+import { resolveCallbackUrl, shouldRedirectToSignIn } from '@/adapters/auth/proxy-guard'
 import { AppConfigProvider, type AppConfig } from '@/shared/context'
 import { useLayoutStore } from '@/features/layout'
 import { useChatStore } from '@/features/chat/store'
+import { pruneConversationForStorage } from '@/features/chat/lib/prune-message-for-storage'
 
 interface ProvidersProps {
   children: ReactNode
@@ -124,6 +127,40 @@ const ThemeWrapper = ({ children }: { children: ReactNode }): ReactNode => {
 }
 
 /**
+ * Client-side fallback: redirect unauthenticated users to sign-in for page routes.
+ * Server-side redirect in proxy.ts is the primary gate; this covers client navigations.
+ */
+const AuthRedirect = ({ children }: { children: ReactNode }): ReactNode => {
+  const router = useRouter()
+  const pathname = usePathname()
+  const { isAuthenticated, isLoading, authRequired } = useAuth()
+
+  useEffect(() => {
+    if (!authRequired || isLoading || isAuthenticated || !pathname) return
+    if (!shouldRedirectToSignIn(pathname)) return
+
+    const callbackPath =
+      typeof window !== 'undefined'
+        ? `${window.location.pathname}${window.location.search}`
+        : pathname
+    const target = `/auth/signin?callbackUrl=${encodeURIComponent(resolveCallbackUrl(callbackPath))}`
+    router.replace(target)
+  }, [authRequired, isAuthenticated, isLoading, pathname, router])
+
+  if (
+    authRequired &&
+    !isLoading &&
+    !isAuthenticated &&
+    pathname &&
+    shouldRedirectToSignIn(pathname)
+  ) {
+    return null
+  }
+
+  return <>{children}</>
+}
+
+/**
  * Restores deep research state on conversation load.
  * - Reconnects to running/submitted jobs for page refresh recovery.
  * - Cleans up orphaned 'starting' banners by polling job status via REST.
@@ -213,20 +250,26 @@ const DeepResearchRestorer = ({ children }: { children: ReactNode }): ReactNode 
   useEffect(() => {
     if (!mounted || isAuthLoading || (authRequired && !isAuthenticated)) return
     if (!useChatStore.getState().currentUserId) return
+    // Heavy artifacts accumulate in memory during streaming; defer server sync until idle.
+    if (isDeepResearchStreaming) return
 
     const timeoutId = window.setTimeout(() => {
       const state = useChatStore.getState()
+      if (state.isDeepResearchStreaming) return
+
       const userConversations = state.currentUserId
         ? state.conversations.filter((conversation) => conversation.userId === state.currentUserId)
         : []
       if (userConversations.length === 0) return
-      syncConversationSnapshots(userConversations).catch((error) => {
+
+      const prunedConversations = userConversations.map(pruneConversationForStorage)
+      syncConversationSnapshots(prunedConversations).catch((error) => {
         console.warn('Failed to persist conversation snapshots:', error)
       })
     }, 1200)
 
     return () => window.clearTimeout(timeoutId)
-  }, [mounted, isAuthLoading, authRequired, isAuthenticated, conversations])
+  }, [mounted, isAuthLoading, authRequired, isAuthenticated, conversations, isDeepResearchStreaming])
 
   useEffect(() => {
     if (!mounted || !currentConversationId || isDeepResearchStreaming) return
@@ -244,7 +287,9 @@ const DeepResearchRestorer = ({ children }: { children: ReactNode }): ReactNode 
 export const Providers = ({ children, config }: ProvidersProps): ReactNode => {
   const content = (
     <ThemeWrapper>
-      <DeepResearchRestorer>{children}</DeepResearchRestorer>
+      <AuthRedirect>
+        <DeepResearchRestorer>{children}</DeepResearchRestorer>
+      </AuthRedirect>
     </ThemeWrapper>
   )
 

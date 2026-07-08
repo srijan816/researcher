@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "job_id": null,
+  "slug": "original-query",
+  "run_dir": ".deep-research-runtime/research_runs/local-original-query",
+  "generated_at": "2026-07-06T04:01:55.550180Z",
+  "files": {
+    "plan.json": ".deep-research-runtime/research_runs/local-original-query/plan.json",
+    "plan.md": ".deep-research-runtime/research_runs/local-original-query/plan.md",
+    "queries.json": ".deep-research-runtime/research_runs/local-original-query/queries.json",
+    "budget.json": ".deep-research-runtime/research_runs/local-original-query/budget.json",
+    "sources.json": ".deep-research-runtime/research_runs/local-original-query/sources.json",
+    "claims.json": ".deep-research-runtime/research_runs/local-original-query/claims.json",
+    "gaps.md": ".deep-research-runtime/research_runs/local-original-query/gaps.md",
+    "contradictions.md": ".deep-research-runtime/research_runs/local-original-query/contradictions.md",
+    "research.md": ".deep-research-runtime/research_runs/local-original-query/research.md",
+    "final.md": ".deep-research-runtime/research_runs/local-original-query/final.md",
+    "notes/shared__final.md": ".deep-research-runtime/research_runs/local-original-query/notes/shared__final.md",
+    "notes/shared__research.md": ".deep-research-runtime/research_runs/local-original-query/notes/shared__research.md"
+  },
+  "source_count": 0,
+  "claim_count": 0,
+  "gap_count": 2,
+  "contradiction_count": 0
+}

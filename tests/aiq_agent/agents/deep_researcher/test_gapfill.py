@@ -43,15 +43,15 @@ class TestGapfillSnapshot:
         snapshot = gapfill_snapshot(
             tier="deeper",
             rounds_used=1,
-            budget_snapshot={"budgets": [{"key": "search", "used": 70, "limit": 92, "remaining": 22}]},
-            budget_profile={"reserve_search_calls": 15},
+            budget_snapshot={"budgets": [{"key": "search", "used": 42, "limit": 60, "remaining": 18}]},
+            budget_profile={"reserve_search_calls": 18},
         )
         assert snapshot["rounds_used"] == 1
         assert snapshot["rounds_allowed"] == 2
         assert snapshot["rounds_remaining"] == 1
-        assert snapshot["reserve_search_calls_total"] == 15
-        assert snapshot["reserve_search_calls_remaining"] == 15
-        assert snapshot["search_calls_remaining"] == 22
+        assert snapshot["reserve_search_calls_total"] == 18
+        assert snapshot["reserve_search_calls_remaining"] == 18
+        assert snapshot["search_calls_remaining"] == 18
         assert snapshot["may_launch_gap_fill"] is True
 
     def test_stops_when_rounds_exhausted(self, monkeypatch):
@@ -70,7 +70,7 @@ class TestGapfillSnapshot:
         snapshot = gapfill_snapshot(
             tier="deep",
             rounds_used=0,
-            budget_snapshot={"budgets": [{"key": "search", "used": 168, "limit": 168, "remaining": 0}]},
+            budget_snapshot={"budgets": [{"key": "search", "used": 96, "limit": 96, "remaining": 0}]},
             budget_profile={"reserve_search_calls": 28},
         )
         assert snapshot["reserve_search_calls_remaining"] == 0

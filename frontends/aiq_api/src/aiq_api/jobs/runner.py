@@ -603,6 +603,11 @@ async def run_agent_job(
                         event_store=event_store,
                     )
 
+                    if job_store:
+                        latest_job = await job_store.get_job(job_id)
+                        if latest_job and latest_job.status == JobStatus.INTERRUPTED.value:
+                            raise asyncio.CancelledError("Job was interrupted before success could be persisted")
+
                     # Emit WORKFLOW_END event for Phoenix
                     context.intermediate_step_manager.push_intermediate_step(
                         IntermediateStepPayload(

@@ -71,7 +71,17 @@ export const useDownloadPdfRoute = () => {
       })
 
       if (!response.ok) {
-        throw new Error(`Failed to generate PDF: ${response.statusText}`)
+        let message = response.statusText
+        try {
+          const body = (await response.json()) as { error?: unknown; details?: unknown }
+          const serverMessage = [body.error, body.details]
+            .filter((value): value is string => typeof value === 'string' && value.length > 0)
+            .join(': ')
+          if (serverMessage) message = serverMessage
+        } catch {
+          // Fall back to the HTTP status text when the server does not return JSON.
+        }
+        throw new Error(`Failed to generate PDF: ${message}`)
       }
 
       const blob = await response.blob()

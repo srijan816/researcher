@@ -89,15 +89,11 @@ describe('SettingsPanel', () => {
     expect(screen.getByText('Settings')).toBeInTheDocument()
   })
 
-  test('renders the theme toggle and switches to light theme', async () => {
-    const user = userEvent.setup()
+  test('does not render removed theme controls', () => {
     render(<SettingsPanel />)
 
-    expect(screen.getByText('UI Theme')).toBeInTheDocument()
-    expect(screen.getByTestId('theme-toggle')).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: 'Use light theme' }))
-    expect(mocks.setTheme).toHaveBeenCalledWith('light')
+    expect(screen.queryByText('UI Theme')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('theme-toggle')).not.toBeInTheDocument()
   })
 
   test('renders research defaults and updates image count', async () => {

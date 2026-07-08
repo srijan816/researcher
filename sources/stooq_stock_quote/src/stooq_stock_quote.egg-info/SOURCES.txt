@@ -1,4 +1,5 @@
 pyproject.toml
+src/register.py
 src/stooq_stock_quote.egg-info/PKG-INFO
 src/stooq_stock_quote.egg-info/SOURCES.txt
 src/stooq_stock_quote.egg-info/dependency_links.txt

@@ -32,9 +32,9 @@ export type InputAreaVariant = 'dock' | 'hero'
 
 const RESEARCH_DEPTH_OPTIONS: Array<{ value: ResearchDepth; label: string; title: string }> = [
   { value: 'shallow', label: 'Quick', title: 'Target 10-20 sources' },
-  { value: 'medium', label: 'Standard', title: 'Target 32-64 sources, faster thinking-off research' },
-  { value: 'deeper', label: 'Deeper', title: 'Target 32-64 sources' },
-  { value: 'deep', label: 'Deep', title: 'Target 90-150+ sources' },
+  { value: 'medium', label: 'Standard', title: 'Target 25-51 sources, faster thinking-off research' },
+  { value: 'deeper', label: 'Deeper', title: 'Target 40-70 sources' },
+  { value: 'deep', label: 'Deep', title: 'Target 70-106 sources' },
 ]
 
 interface InputAreaProps {
@@ -223,7 +223,6 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   const openRightPanel = useLayoutStore((s) => s.openRightPanel)
   const closeRightPanel = useLayoutStore((s) => s.closeRightPanel)
   const setDataSourcesPanelTab = useLayoutStore((s) => s.setDataSourcesPanelTab)
-  const setResearchPanelTab = useLayoutStore((s) => s.setResearchPanelTab)
   const researchDepth = useLayoutStore((s) => s.researchDepth)
   const setResearchDepth = useLayoutStore((s) => s.setResearchDepth)
   const researchEngine = useLayoutStore((s) => s.researchEngine)

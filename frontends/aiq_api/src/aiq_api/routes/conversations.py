@@ -90,13 +90,70 @@ def _conversation_principal(principal: Principal) -> Principal:
     return Principal(type="no_auth", sub="default-user", email=None)
 
 
+_HEAVY_MESSAGE_KEYS = (
+    "reportContent",
+    "citations",
+    "deepResearchTodos",
+    "deepResearchLLMSteps",
+    "deepResearchAgents",
+    "deepResearchToolCalls",
+    "deepResearchFiles",
+    "intermediateSteps",
+)
+
+
+def _prune_message_for_storage(message: dict[str, Any]) -> dict[str, Any]:
+    """Mirror frontend pruneMessageForStorage — keep UI metadata, drop refetchable artifacts."""
+
+    pruned = {key: value for key, value in message.items() if key not in _HEAVY_MESSAGE_KEYS}
+
+    thinking_steps = pruned.get("thinkingSteps")
+    if isinstance(thinking_steps, list):
+        pruned["thinkingSteps"] = [
+            {
+                **{k: v for k, v in step.items() if k not in ("content", "rawPayload")},
+                "content": "",
+            }
+            for step in thinking_steps
+            if isinstance(step, dict) and not step.get("isDeepResearch")
+        ]
+
+    plan_messages = pruned.get("planMessages")
+    if isinstance(plan_messages, list):
+        pruned["planMessages"] = [
+            {
+                **pm,
+                "text": str(pm.get("text") or "")[:10_000],
+                **(
+                    {"userResponse": str(pm.get("userResponse") or "")[:2_000]}
+                    if pm.get("userResponse") is not None
+                    else {}
+                ),
+            }
+            for pm in plan_messages
+            if isinstance(pm, dict)
+        ]
+
+    return pruned
+
+
+def _prune_conversation_for_storage(payload: dict[str, Any]) -> dict[str, Any]:
+    messages = payload.get("messages", [])
+    if not isinstance(messages, list):
+        return payload
+    return {
+        **payload,
+        "messages": [_prune_message_for_storage(msg) for msg in messages if isinstance(msg, dict)],
+    }
+
+
 def _clean_conversation_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
     conversation_id = payload.get("id")
     if not isinstance(conversation_id, str) or not conversation_id.strip():
         return None
     if not isinstance(payload.get("messages", []), list):
         raise HTTPException(400, f"Conversation {conversation_id} has invalid messages")
-    return payload
+    return _prune_conversation_for_storage(payload)
 
 
 def _list_conversations(db_url: str, principal: Principal) -> list[dict[str, Any]]:

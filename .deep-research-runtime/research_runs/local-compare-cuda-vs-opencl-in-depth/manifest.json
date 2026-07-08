@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "job_id": null,
+  "slug": "compare-cuda-vs-opencl-in-depth",
+  "run_dir": ".deep-research-runtime/research_runs/local-compare-cuda-vs-opencl-in-depth",
+  "generated_at": "2026-07-06T04:01:55.141835Z",
+  "files": {
+    "plan.json": ".deep-research-runtime/research_runs/local-compare-cuda-vs-opencl-in-depth/plan.json",
+    "plan.md": ".deep-research-runtime/research_runs/local-compare-cuda-vs-opencl-in-depth/plan.md",
+    "queries.json": ".deep-research-runtime/research_runs/local-compare-cuda-vs-opencl-in-depth/queries.json",
+    "budget.json": ".deep-research-runtime/research_runs/local-compare-cuda-vs-opencl-in-depth/budget.json",
+    "sources.json": ".deep-research-runtime/research_runs/local-compare-cuda-vs-opencl-in-depth/sources.json",
+    "claims.json": ".deep-research-runtime/research_runs/local-compare-cuda-vs-opencl-in-depth/claims.json",
+    "gaps.md": ".deep-research-runtime/research_runs/local-compare-cuda-vs-opencl-in-depth/gaps.md",
+    "contradictions.md": ".deep-research-runtime/research_runs/local-compare-cuda-vs-opencl-in-depth/contradictions.md",
+    "research.md": ".deep-research-runtime/research_runs/local-compare-cuda-vs-opencl-in-depth/research.md",
+    "final.md": ".deep-research-runtime/research_runs/local-compare-cuda-vs-opencl-in-depth/final.md",
+    "notes/shared__final.md": ".deep-research-runtime/research_runs/local-compare-cuda-vs-opencl-in-depth/notes/shared__final.md",
+    "notes/shared__research.md": ".deep-research-runtime/research_runs/local-compare-cuda-vs-opencl-in-depth/notes/shared__research.md"
+  },
+  "source_count": 0,
+  "claim_count": 0,
+  "gap_count": 2,
+  "contradiction_count": 0
+}

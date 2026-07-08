@@ -1,4 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <rect width="64" height="64" rx="14" fill="#0A0B0C"/>
-  <text x="32" y="46" font-family="Georgia, 'Times New Roman', serif" font-style="italic" font-weight="600" font-size="42" fill="#F43F5E" text-anchor="middle">α</text>
+  <path transform="translate(12,52) scale(0.0301,-0.0301)" fill="#F43F5E"
+    d="M507 -24C775 -24 908 168 983 330L1006 0H1213L1142 559L1383 1118H1176L1056 797C1037 954 957 1132 693 1132C393 1132 153 900 95 555C39 215 209 -24 507 -24ZM968 559 967 556C910 405 768 165 541 165C361 165 279 314 318 553C358 795 503 945 692 945C923 945 958 711 968 562Z"/>
 </svg>

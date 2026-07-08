@@ -17,7 +17,6 @@ import { type FC, type ReactNode, memo, useCallback, useState } from 'react'
 import { Flex, Text, Button, Avatar, Popover, Divider, Logo } from '@/adapters/ui'
 import { Menu, Globe, Settings, Book, Lock, Logout, Plus, Info, Clock } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
-import { ThemeToggleButton } from './ThemeToggleButton'
 
 /** Particle cap for the small rail-sized wordmark (keep it cheap) */
 
@@ -229,9 +228,8 @@ export const NavRail: FC<NavRailProps> = memo(function NavRail({
         </Flex>
       </Flex>
 
-      {/* Bottom: theme toggle + user avatar / sign in */}
+      {/* Bottom: user avatar / sign in */}
       <Flex direction="col" align="center" gap="2" className="w-full">
-        <ThemeToggleButton compact />
         {!authRequired ? (
           <Popover
             open={isUserMenuOpen}

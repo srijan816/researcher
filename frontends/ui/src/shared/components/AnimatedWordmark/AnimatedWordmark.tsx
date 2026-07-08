@@ -8,15 +8,12 @@
  * locked to the brand canvas aspect ratio (1005x626):
  *
  * 1. A <canvas> particle field constrained to the α glyph. The soft mask
- *    /brand/alpha-shape[-light].png is sampled offscreen (alpha > threshold)
+ *    /brand/alpha-shape.png is sampled offscreen (alpha > threshold)
  *    to build allowed positions; particles drift and twinkle inside it.
  *    Palette: primarily brand red (#F43F5E→#FB7185 across the glyph) with
  *    ~12% green, ~12% blue and ~8% neutral sprinkles — festive but coherent.
- * 2. /brand/text-overlay[-light].png — the lettering — sits on top, exactly
+ * 2. /brand/text-overlay.png — the lettering — sits on top, exactly
  *    as in the static logo (the α is behind the text).
- *
- * Theme-aware: on the light theme the light-variant mask/overlay assets are
- * used and the particle hues shift to deeper values for contrast.
  *
  * Density is size-responsive: ~760 particles at canvas widths >= 480px,
  * ~440 below; the `maxParticles` prop caps this (e.g. small NavRail usage).
@@ -36,27 +33,18 @@
 
 import { type FC, useEffect, useRef } from 'react'
 import { useReducedMotion } from '@/hooks/use-reduced-motion'
-import { useLayoutStore } from '@/features/layout/store'
 
-const ASPECT_RATIO = '1005 / 626'
-
-const DARK_ASSETS = {
+const ASSETS = {
   mask: '/brand/alpha-shape.png',
   textOverlay: '/brand/text-overlay.png',
   staticLogo: '/brand/logo-dark.png',
-} as const
-
-const LIGHT_ASSETS = {
-  mask: '/brand/alpha-shape-light.png',
-  textOverlay: '/brand/text-overlay-light.png',
-  staticLogo: '/brand/logo-light.png',
+  aspectRatio: '1005 / 626',
 } as const
 
 /** Size-responsive particle density */
 const WIDE_CANVAS_MIN_WIDTH = 480
 const PARTICLE_COUNT_WIDE = 760
 const PARTICLE_COUNT_NARROW = 440
-
 const MAX_DPR = 2
 /** Mask alpha threshold (0–1) above which a pixel is an allowed position */
 const MASK_ALPHA_THRESHOLD = 0.35
@@ -69,6 +57,7 @@ const DRIFT_RADIUS = 3.5
 const MIN_RADIUS = 1.6
 const MAX_RADIUS = 4.4
 const GLOBAL_OPACITY = 0.9
+const HALO_OPACITY = 0.25
 
 type RGB = readonly [number, number, number]
 
@@ -89,18 +78,14 @@ const DARK_PALETTE: WordmarkPalette = {
   neutral: [243, 239, 230], // #F3EFE6
 }
 
-/** Light surfaces: deeper values of the same hues for contrast on paper */
-const LIGHT_PALETTE: WordmarkPalette = {
-  redStart: [225, 29, 72], // #E11D48
-  redEnd: [244, 63, 94], // #F43F5E
-  green: [5, 150, 105], // #059669
-  blue: [2, 132, 199], // #0284C7
-  neutral: [58, 63, 71], // #3A3F47
-}
-
 interface MaskPoint {
   x: number
   y: number
+}
+
+interface MaskBuildResult {
+  points: MaskPoint[]
+  clipCanvas: HTMLCanvasElement | null
 }
 
 interface WordmarkParticle {
@@ -135,22 +120,26 @@ const particleColor = (palette: WordmarkPalette, normalizedX: number): string =>
 }
 
 /** Particle count for a given canvas width, optionally capped. */
-export const particleCountForWidth = (width: number, maxParticles?: number): number => {
+export const particleCountForWidth = (
+  width: number,
+  maxParticles?: number
+): number => {
   const base = width >= WIDE_CANVAS_MIN_WIDTH ? PARTICLE_COUNT_WIDE : PARTICLE_COUNT_NARROW
   return maxParticles ? Math.min(base, maxParticles) : base
 }
 
 /** Sample allowed positions from the alpha channel of the shape mask image. */
-const buildMaskPoints = (
+const buildMask = (
   image: HTMLImageElement,
   width: number,
-  height: number
-): MaskPoint[] => {
+  height: number,
+  thresholdRatio: number
+): MaskBuildResult => {
   const off = document.createElement('canvas')
   off.width = width
   off.height = height
   const ctx = off.getContext('2d')
-  if (!ctx) return []
+  if (!ctx) return { points: [], clipCanvas: null }
 
   ctx.drawImage(image, 0, 0, width, height)
 
@@ -158,20 +147,35 @@ const buildMaskPoints = (
   try {
     data = ctx.getImageData(0, 0, width, height).data
   } catch {
-    return []
+    return { points: [], clipCanvas: null }
   }
 
-  const threshold = MASK_ALPHA_THRESHOLD * 255
+  const threshold = thresholdRatio * 255
   const points: MaskPoint[] = []
-  // Sample every 2nd pixel to keep the candidate pool small
-  for (let y = 0; y < height; y += 2) {
-    for (let x = 0; x < width; x += 2) {
-      if (data[(y * width + x) * 4 + 3] > threshold) {
-        points.push({ x, y })
+  const clipCanvas = document.createElement('canvas')
+  clipCanvas.width = width
+  clipCanvas.height = height
+  const clipCtx = clipCanvas.getContext('2d')
+
+  if (!clipCtx) return { points, clipCanvas: null }
+
+  const clipImage = clipCtx.createImageData(width, height)
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const index = (y * width + x) * 4
+      if (data[index + 3] > threshold) {
+        if (x % 2 === 0 && y % 2 === 0) points.push({ x, y })
+        clipImage.data[index] = 255
+        clipImage.data[index + 1] = 255
+        clipImage.data[index + 2] = 255
+        clipImage.data[index + 3] = 255
       }
     }
   }
-  return points
+
+  clipCtx.putImageData(clipImage, 0, 0)
+  return { points, clipCanvas }
 }
 
 const createParticles = (
@@ -224,10 +228,6 @@ export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const prefersReducedMotion = useReducedMotion()
-  const theme = useLayoutStore((s) => s.theme)
-  const isLight = theme === 'light'
-  const assets = isLight ? LIGHT_ASSETS : DARK_ASSETS
-  const palette = isLight ? LIGHT_PALETTE : DARK_PALETTE
 
   useEffect(() => {
     if (prefersReducedMotion) return
@@ -246,6 +246,7 @@ export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({
     ctx.scale(dpr, dpr)
 
     let particles: WordmarkParticle[] = []
+    let clipCanvas: HTMLCanvasElement | null = null
     let frameId = 0
     let isRunning = false
     let isTabVisible = document.visibilityState !== 'hidden'
@@ -263,7 +264,7 @@ export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({
         const alpha = p.baseOpacity * twinkle * GLOBAL_OPACITY
 
         // Soft halo: 2x radius at low alpha behind the core dot
-        ctx.globalAlpha = alpha * 0.25
+        ctx.globalAlpha = alpha * HALO_OPACITY
         ctx.fillStyle = `rgb(${p.color})`
         ctx.beginPath()
         ctx.arc(x, y, p.radius * 2, 0, Math.PI * 2)
@@ -273,6 +274,12 @@ export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({
         ctx.beginPath()
         ctx.arc(x, y, p.radius, 0, Math.PI * 2)
         ctx.fill()
+      }
+      if (clipCanvas) {
+        ctx.globalAlpha = 1
+        ctx.globalCompositeOperation = 'destination-in'
+        ctx.drawImage(clipCanvas, 0, 0, width, height)
+        ctx.globalCompositeOperation = 'source-over'
       }
       ctx.globalAlpha = 1
     }
@@ -316,17 +323,24 @@ export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({
     maskImage.decoding = 'async'
     maskImage.onload = () => {
       if (isDisposed) return
+      const mask = buildMask(
+        maskImage,
+        width,
+        height,
+        MASK_ALPHA_THRESHOLD
+      )
+      clipCanvas = mask.clipCanvas
       particles = createParticles(
-        buildMaskPoints(maskImage, width, height),
+        mask.points,
         particleCountForWidth(width, maxParticles),
-        palette
+        DARK_PALETTE
       )
       syncRunningState()
     }
     maskImage.onerror = () => {
       // Mask unavailable — the text overlay still renders; skip particles.
     }
-    maskImage.src = assets.mask
+    maskImage.src = ASSETS.mask
 
     return () => {
       isDisposed = true
@@ -334,18 +348,18 @@ export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({
       document.removeEventListener('visibilitychange', handleVisibility)
       observer.disconnect()
     }
-  }, [prefersReducedMotion, active, maxParticles, assets.mask, palette])
+  }, [prefersReducedMotion, active, maxParticles])
 
   if (prefersReducedMotion) {
     return (
       <div
         className={['relative', className].filter(Boolean).join(' ')}
-        style={{ aspectRatio: ASPECT_RATIO }}
+        style={{ aspectRatio: ASSETS.aspectRatio }}
         data-testid="animated-wordmark-static"
       >
         {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset */}
         <img
-          src={assets.staticLogo}
+          src={ASSETS.staticLogo}
           alt="GenAlphAI"
           className="absolute inset-0 h-full w-full object-contain"
           draggable={false}
@@ -357,7 +371,7 @@ export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({
   return (
     <div
       className={['relative', className].filter(Boolean).join(' ')}
-      style={{ aspectRatio: ASPECT_RATIO }}
+      style={{ aspectRatio: ASSETS.aspectRatio }}
       data-testid="animated-wordmark"
       role="img"
       aria-label="GenAlphAI"
@@ -369,7 +383,7 @@ export const AnimatedWordmark: FC<AnimatedWordmarkProps> = ({
       />
       {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset */}
       <img
-        src={assets.textOverlay}
+        src={ASSETS.textOverlay}
         alt=""
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 h-full w-full"

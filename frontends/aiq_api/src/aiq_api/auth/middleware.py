@@ -411,7 +411,14 @@ class AuthMiddleware:
             await self._send_json(send, 404, {"detail": "Not found"})
             return
 
-        if is_external and path in AUTH_EXEMPT_PATHS:
+        # AUTH_EXEMPT_PATHS must be reachable without a token from BOTH external
+        # and internal callers. The Next.js server in the chat-UI container is
+        # an internal caller (Host header is the backend service DNS, not a
+        # hostname in AIQ_EXTERNAL_HOSTNAMES), and it needs to call
+        # ``/v1/auth/login`` / ``/v1/auth/refresh`` to mint a JWT for the user
+        # before it can forward any authenticated traffic. Gating the exempt
+        # check on ``is_external`` would 401 the login flow itself.
+        if path in AUTH_EXEMPT_PATHS:
             user = {"type": "anonymous", "skip_clarifier": True}
             await self._call_app(scope, receive, send, headers, user)
             return

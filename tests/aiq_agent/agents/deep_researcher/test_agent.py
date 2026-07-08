@@ -594,13 +594,13 @@ class TestDeepResearcherAgent:
             assert agent._tool_limits_for_state(shallow)["planner:advanced_web_search_tool"] == 1
             assert agent._tool_limits_for_state(medium)["advanced_web_search_tool"] == 62
             assert agent._tool_limits_for_state(medium)["planner:advanced_web_search_tool"] == 1
-            assert agent._tool_limits_for_state(deeper)["advanced_web_search_tool"] == 92
+            assert agent._tool_limits_for_state(deeper)["advanced_web_search_tool"] == 60
             assert agent._tool_limits_for_state(deeper)["planner:advanced_web_search_tool"] == 1
-            assert agent._tool_limits_for_state(deep)["advanced_web_search_tool"] == 168
+            assert agent._tool_limits_for_state(deep)["advanced_web_search_tool"] == 96
             assert agent._tool_limits_for_state(deep)["planner:advanced_web_search_tool"] == 2
             assert agent._parallel_tool_limits_for_state(shallow)["task"] == 1
             assert agent._parallel_tool_limits_for_state(medium)["task"] == 3
-            assert agent._parallel_tool_limits_for_state(deeper)["task"] == 4
+            assert agent._parallel_tool_limits_for_state(deeper)["task"] == 3
             assert agent._parallel_tool_limits_for_state(deep)["task"] == 3
 
     def test_medium_tier_uses_medium_orchestrator_when_configured(self, real_tool):

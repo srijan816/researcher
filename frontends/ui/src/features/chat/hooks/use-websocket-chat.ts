@@ -288,6 +288,17 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           const state = useChatStore.getState()
           const currentPlanMessages = state.planMessages
           const currentConversation = state.currentConversation
+          const existingTrackingMessage = currentConversation?.messages.find(
+            (message) =>
+              message.messageType === 'agent_response' &&
+              message.deepResearchJobId === jobId
+          )
+
+          if (existingTrackingMessage?.id) {
+            startDeepResearch(jobId, existingTrackingMessage.id)
+            setLoading(false)
+            return
+          }
 
           // Extract research title from plan messages for conversation title
           // Try multiple sources: plan preview, any plan message, or original user query

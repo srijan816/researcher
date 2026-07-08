@@ -1,0 +1,2 @@
+[nat.plugins]
+local_corpus_search = local_corpus_search.register

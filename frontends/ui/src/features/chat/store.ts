@@ -32,6 +32,10 @@ import type {
   DeepResearchToolCall,
   DeepResearchFile,
   DeepResearchActivity,
+  DeepResearchTodo,
+  DeepResearchTodoGroup,
+  DeepResearchTodoGroupSource,
+  DeepResearchTodoStatus,
   DeepResearchBannerType,
   BatchResearchItem,
   ResearchEngine,
@@ -65,6 +69,78 @@ const isQuotaExceededError = (error: unknown): boolean => {
 }
 
 const DELETED_RESEARCH_JOBS_KEY = 'deep-research-deleted-job-ids'
+
+type RawDeepResearchTodo = {
+  id?: string
+  content: string
+  status: string
+}
+
+type DeepResearchTodoGroupMetadata = {
+  workflow?: string
+  agentId?: string
+  source?: DeepResearchTodoGroupSource
+  timestamp?: string | Date
+}
+
+const parseDeepResearchTodoDate = (timestamp?: string | Date): Date => {
+  if (timestamp instanceof Date) return timestamp
+  if (!timestamp) return new Date()
+  const parsed = new Date(timestamp)
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed
+}
+
+export const normalizeDeepResearchTodoStatus = (status: string): DeepResearchTodoStatus => {
+  switch (status) {
+    case 'completed':
+    case 'in_progress':
+    case 'pending':
+    case 'stopped':
+      return status
+    case 'cancelled':
+      return 'stopped'
+    default:
+      return 'pending'
+  }
+}
+
+const slugTodoIdPart = (value: string): string =>
+  value
+    .trim()
+    .substring(0, 32)
+    .replace(/\s+/g, '-')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .toLowerCase()
+
+export const mapDeepResearchTodos = (
+  todos: RawDeepResearchTodo[],
+  scopeKey = 'todo'
+): DeepResearchTodo[] =>
+  todos.map((todo, index) => ({
+    id: `${scopeKey}-${todo.id || index}-${slugTodoIdPart(todo.content)}`,
+    content: todo.content,
+    status: normalizeDeepResearchTodoStatus(todo.status),
+  }))
+
+const todoGroupBaseId = (metadata: DeepResearchTodoGroupMetadata): string =>
+  metadata.agentId || metadata.workflow || metadata.source || 'workflow'
+
+export const buildDeepResearchTodoGroup = (
+  todos: RawDeepResearchTodo[],
+  metadata: DeepResearchTodoGroupMetadata
+): DeepResearchTodoGroup => {
+  const baseId = todoGroupBaseId(metadata)
+  const id = `todo-group-${slugTodoIdPart(baseId) || 'workflow'}`
+  return {
+    id,
+    label: metadata.workflow || metadata.source || 'Research lane',
+    workflow: metadata.workflow,
+    agentId: metadata.agentId,
+    source: metadata.source,
+    todos: mapDeepResearchTodos(todos, id),
+    updatedAt: parseDeepResearchTodoDate(metadata.timestamp),
+  }
+}
 
 const readDeletedResearchJobIds = (): Set<string> => {
   if (typeof localStorage === 'undefined') return new Set()
@@ -237,6 +313,7 @@ const initialState: ChatState = {
   activeDeepResearchMessageId: null,
   deepResearchCitations: [],
   deepResearchTodos: [],
+  deepResearchTodoGroups: [],
   // State for ThinkingTab sub-tabs (LLM steps, agents, tool calls, files)
   deepResearchLLMSteps: [],
   deepResearchAgents: [],
@@ -254,11 +331,10 @@ const DEFAULT_BATCH_APPROVAL_DELAY_MS = 90_000
 /**
  * How long after the last user message a session reload still treats
  * pre-research (clarifier / plan preview) as potentially in-flight server-side.
- * Matches the backend HITL auto-approve window (AIQ_PLAN_APPROVAL_TIMEOUT_SECONDS,
- * default 300s) plus generation slack. Within this window we re-attach silently
- * instead of showing an "interrupted" error card.
+ * Long searches and plan generation can be quiet for a while, so the UI keeps
+ * accepting reattached WebSocket output instead of inferring interruption.
  */
-export const PRE_RESEARCH_REATTACH_WINDOW_MS = 10 * 60 * 1000
+export const PRE_RESEARCH_REATTACH_WINDOW_MS = 6 * 60 * 60 * 1000
 
 const createBatchTitle = (query: string): string => {
   const trimmed = query.trim()
@@ -479,6 +555,45 @@ const mergeResearchHistoryConversation = (conversation: Conversation, job: Resea
   }
 }
 
+const stripClarificationContext = (input?: string | null): string => {
+  if (!input) return ''
+  return input.split(/\n\n## Clarification Context/i)[0]?.trim() ?? ''
+}
+
+const normalizeResearchMatchText = (value?: string | null): string =>
+  stripClarificationContext(value).replace(/\s+/g, ' ').trim().toLowerCase()
+
+const findUntrackedConversationForResearchJob = (
+  conversations: Conversation[],
+  job: ResearchHistoryJob,
+  userId: string
+): string | undefined => {
+  const normalizedJobInput = normalizeResearchMatchText(job.input)
+  if (!normalizedJobInput) return undefined
+
+  const jobCreatedAt = getDateTime(parseJobDate(job.created_at))
+  const candidates = conversations
+    .filter((conversation) => (conversation.userId === (job.owner_subject || userId)))
+    .filter((conversation) => !conversation.messages.some((message) => message.deepResearchJobId))
+    .map((conversation) => {
+      const latestUserMessage = [...conversation.messages]
+        .reverse()
+        .find((message) => message.messageType === 'user' && message.role === 'user')
+      return { conversation, latestUserMessage }
+    })
+    .filter(({ latestUserMessage }) => normalizeResearchMatchText(latestUserMessage?.content) === normalizedJobInput)
+
+  if (candidates.length === 0) return undefined
+
+  candidates.sort((a, b) => {
+    const aTime = getDateTime(a.latestUserMessage?.timestamp || a.conversation.updatedAt)
+    const bTime = getDateTime(b.latestUserMessage?.timestamp || b.conversation.updatedAt)
+    return Math.abs(aTime - jobCreatedAt) - Math.abs(bTime - jobCreatedAt)
+  })
+
+  return candidates[0]?.conversation.id
+}
+
 /**
  * Helper to update conversation in list
  */
@@ -560,6 +675,7 @@ export const useChatStore = create<ChatStore>()(
                 planMessages: [],
                 deepResearchCitations: [],
                 deepResearchTodos: [],
+                deepResearchTodoGroups: [],
                 deepResearchLLMSteps: [],
                 deepResearchAgents: [],
               deepResearchToolCalls: [],
@@ -613,6 +729,7 @@ export const useChatStore = create<ChatStore>()(
               planMessages: [],
               deepResearchCitations: [],
               deepResearchTodos: [],
+              deepResearchTodoGroups: [],
               deepResearchLLMSteps: [],
               deepResearchAgents: [],
               deepResearchToolCalls: [],
@@ -659,6 +776,7 @@ export const useChatStore = create<ChatStore>()(
               planMessages: [],
               deepResearchCitations: [],
               deepResearchTodos: [],
+              deepResearchTodoGroups: [],
               deepResearchLLMSteps: [],
               deepResearchAgents: [],
               deepResearchToolCalls: [],
@@ -712,6 +830,7 @@ export const useChatStore = create<ChatStore>()(
               planMessages: [],
               deepResearchCitations: [],
               deepResearchTodos: [],
+              deepResearchTodoGroups: [],
               deepResearchLLMSteps: [],
               deepResearchAgents: [],
               deepResearchToolCalls: [],
@@ -788,6 +907,7 @@ export const useChatStore = create<ChatStore>()(
                 activeDeepResearchMessageId: null,
                 deepResearchCitations: [],
                 deepResearchTodos: [],
+                deepResearchTodoGroups: [],
                 deepResearchLLMSteps: [],
                 deepResearchAgents: [],
                 deepResearchToolCalls: [],
@@ -1020,6 +1140,7 @@ export const useChatStore = create<ChatStore>()(
                 activeDeepResearchMessageId: null,
                 deepResearchCitations: [],
                 deepResearchTodos: [],
+                deepResearchTodoGroups: [],
                 deepResearchLLMSteps: [],
                 deepResearchAgents: [],
                 deepResearchToolCalls: [],
@@ -1068,6 +1189,7 @@ export const useChatStore = create<ChatStore>()(
               activeDeepResearchMessageId: null,
               deepResearchCitations: [],
               deepResearchTodos: [],
+              deepResearchTodoGroups: [],
               deepResearchLLMSteps: [],
               deepResearchAgents: [],
               deepResearchToolCalls: [],
@@ -1119,6 +1241,7 @@ export const useChatStore = create<ChatStore>()(
                 planMessages: [],
                 deepResearchCitations: [],
                 deepResearchTodos: [],
+                deepResearchTodoGroups: [],
                 deepResearchLLMSteps: [],
                 deepResearchAgents: [],
                 deepResearchToolCalls: [],
@@ -1215,7 +1338,10 @@ export const useChatStore = create<ChatStore>()(
           })
 
           jobs.filter((job) => isActiveResearchStatus(job.status) || !deletedJobIds.has(job.job_id)).forEach((job) => {
-            const conversationId = jobConversationIds.get(job.job_id) || getResearchConversationId(job.job_id)
+            const conversationId =
+              jobConversationIds.get(job.job_id) ||
+              findUntrackedConversationForResearchJob(conversations, job, userId) ||
+              getResearchConversationId(job.job_id)
             const existingConversation = conversationById.get(conversationId)
 
             conversationById.set(
@@ -2069,6 +2195,14 @@ export const useChatStore = create<ChatStore>()(
 
           if (!targetConversation) return
 
+          const existingSameBanner = targetConversation.messages.some(
+            (m) =>
+              m.messageType === 'deep_research_banner' &&
+              m.deepResearchBannerData?.jobId === jobId &&
+              m.deepResearchBannerData?.bannerType === bannerType
+          )
+          if (existingSameBanner) return
+
           // When adding a terminal banner, remove the 'starting' banner for the same job
           // to prevent stale "View Progress" buttons from persisting after completion
           const isTerminalBanner = bannerType !== 'starting'
@@ -2151,6 +2285,7 @@ export const useChatStore = create<ChatStore>()(
               reportContentCategory: null,
               deepResearchCitations: [],
               deepResearchTodos: [],
+              deepResearchTodoGroups: [],
               deepResearchLLMSteps: [],
               deepResearchAgents: [],
               deepResearchToolCalls: [],
@@ -2240,19 +2375,27 @@ export const useChatStore = create<ChatStore>()(
           }
         },
 
-        setDeepResearchTodos: (todos: Array<{ content: string; status: string }>) => {
-          // Convert raw todos to typed DeepResearchTodo items with generated IDs
-          const typedTodos = todos.map((todo, index) => ({
-            id: `todo-${index}-${todo.content.substring(0, 20).replace(/\s+/g, '-').toLowerCase()}`,
-            content: todo.content,
-            status: todo.status as 'pending' | 'in_progress' | 'completed' | 'stopped',
-          }))
+        setDeepResearchTodos: (todos: Array<{ id?: string; content: string; status: string }>) => {
+          set({ deepResearchTodos: mapDeepResearchTodos(todos) }, false, 'setDeepResearchTodos')
+        },
 
-          set({ deepResearchTodos: typedTodos }, false, 'setDeepResearchTodos')
+        setDeepResearchTodoGroup: (
+          todos: Array<{ id?: string; content: string; status: string }>,
+          metadata: DeepResearchTodoGroupMetadata
+        ) => {
+          const group = buildDeepResearchTodoGroup(todos, metadata)
+          set(
+            (state) => {
+              const groups = state.deepResearchTodoGroups.filter((existing) => existing.id !== group.id)
+              return { deepResearchTodoGroups: [...groups, group] }
+            },
+            false,
+            'setDeepResearchTodoGroup'
+          )
         },
 
         stopDeepResearchTodos: () => {
-          const { deepResearchTodos } = get()
+          const { deepResearchTodos, deepResearchTodoGroups } = get()
           const stoppedTodos = deepResearchTodos.map((todo) => ({
             ...todo,
             status:
@@ -2260,12 +2403,30 @@ export const useChatStore = create<ChatStore>()(
                 ? ('stopped' as const)
                 : todo.status,
           }))
-          set({ deepResearchTodos: stoppedTodos }, false, 'stopDeepResearchTodos')
+          const stoppedTodoGroups = deepResearchTodoGroups.map((group) => ({
+            ...group,
+            todos: group.todos.map((todo) => ({
+              ...todo,
+              status:
+                todo.status === 'in_progress' || todo.status === 'pending'
+                  ? ('stopped' as const)
+                  : todo.status,
+            })),
+          }))
+          set(
+            {
+              deepResearchTodos: stoppedTodos,
+              deepResearchTodoGroups: stoppedTodoGroups,
+            },
+            false,
+            'stopDeepResearchTodos'
+          )
         },
 
         stopAllDeepResearchSpinners: (isSuccessfulCompletion = false) => {
           const {
             deepResearchTodos,
+            deepResearchTodoGroups,
             deepResearchLLMSteps,
             deepResearchAgents,
             deepResearchToolCalls,
@@ -2278,6 +2439,17 @@ export const useChatStore = create<ChatStore>()(
               todo.status === 'in_progress' || todo.status === 'pending'
                 ? (isSuccessfulCompletion ? ('completed' as const) : ('stopped' as const))
                 : todo.status,
+          }))
+
+          const stoppedTodoGroups = deepResearchTodoGroups.map((group) => ({
+            ...group,
+            todos: group.todos.map((todo) => ({
+              ...todo,
+              status:
+                todo.status === 'in_progress' || todo.status === 'pending'
+                  ? (isSuccessfulCompletion ? ('completed' as const) : ('stopped' as const))
+                  : todo.status,
+            })),
           }))
 
           // Complete LLM steps (mark incomplete ones as complete)
@@ -2304,6 +2476,7 @@ export const useChatStore = create<ChatStore>()(
 
           set({
             deepResearchTodos: stoppedTodos,
+            deepResearchTodoGroups: stoppedTodoGroups,
             deepResearchLLMSteps: stoppedLLMSteps,
             deepResearchAgents: stoppedAgents,
             deepResearchToolCalls: stoppedToolCalls,
@@ -2321,6 +2494,7 @@ export const useChatStore = create<ChatStore>()(
               activeDeepResearchMessageId: null,
               deepResearchCitations: [],
               deepResearchTodos: [],
+              deepResearchTodoGroups: [],
               deepResearchLLMSteps: [],
               deepResearchAgents: [],
             deepResearchToolCalls: [],
@@ -2589,6 +2763,7 @@ export const useChatStore = create<ChatStore>()(
                   activeDeepResearchMessageId: messageId,
                   deepResearchCitations: [],
                   deepResearchTodos: [],
+                  deepResearchTodoGroups: [],
                   deepResearchLLMSteps: [],
                   deepResearchAgents: [],
                   deepResearchToolCalls: [],
@@ -3087,6 +3262,17 @@ export const useChatStore = create<ChatStore>()(
           // Restore planMessages from unresponded prompt (during HITL wait) or last agent response
           const restoredPlanMessages = unrespondedPrompt?.planMessages || lastAgentResponse?.planMessages || []
 
+          const meaningfulTypes = new Set(['user', 'assistant', 'agent_response', 'error', 'prompt'])
+          const lastMeaningful = [...conversation.messages]
+            .reverse()
+            .find((m) => meaningfulTypes.has(m.messageType ?? ''))
+          let preResearchMayReattach = false
+
+          if (!restoredPendingInteraction && lastMeaningful?.messageType === 'user' && lastMeaningful.thinkingSteps?.length) {
+            const messageAgeMs = Date.now() - new Date(lastMeaningful.timestamp).getTime()
+            preResearchMayReattach = Number.isFinite(messageAgeMs) && messageAgeMs <= PRE_RESEARCH_REATTACH_WINDOW_MS
+          }
+
           // NOTE: Heavy research data fields are NO LONGER restored from localStorage
           // They were removed by pruneMessageForStorage to save space (~96% reduction)
           // Research data will be fetched from backend on-demand via importStreamOnly()
@@ -3101,17 +3287,18 @@ export const useChatStore = create<ChatStore>()(
               reportContentCategory: null,
               deepResearchCitations: [],
               deepResearchTodos: [],
+              deepResearchTodoGroups: [],
               deepResearchLLMSteps: [],
               deepResearchAgents: [],
               deepResearchToolCalls: [],
               deepResearchFiles: [],
               // ONLY restore planMessages - cannot be fetched from backend (WebSocket only)
               planMessages: restoredPlanMessages,
-              // Clear streaming/loading state for restored sessions
-              // In-progress jobs will reconnect via reconnectToActiveJob
-              isStreaming: false,
+              // Keep recent pre-research workflows receptive to reattached
+              // WebSocket output. In-progress SSE jobs reconnect separately.
+              isStreaming: preResearchMayReattach,
               isLoading: false,
-              currentStatus: null,
+              currentStatus: preResearchMayReattach ? 'thinking' : null,
               // Restore pending HITL interaction from unresponded prompt message
               pendingInteraction: restoredPendingInteraction,
               // Restore job ID so research data can be fetched on demand
@@ -3128,31 +3315,9 @@ export const useChatStore = create<ChatStore>()(
             'restoreSessionState'
           )
 
-          // Detect interrupted responses: if the last meaningful message is a user
-          // message with thinking steps but no following response, the response was
-          // interrupted by a page refresh or browser close mid-stream.
-          // Skip if there's a pending HITL interaction (user is expected to respond).
-          // Also skip if the user message is recent: pre-research (clarifier /
-          // plan preview) keeps running server-side across disconnects, and the
-          // reconnecting WebSocket re-attaches to it (pending approval prompts
-          // are re-delivered). Only declare an interruption once the server-side
-          // HITL/auto-approve window has certainly elapsed.
-          if (!restoredPendingInteraction) {
-            const meaningfulTypes = new Set(['user', 'assistant', 'agent_response', 'error', 'prompt'])
-            const lastMeaningful = [...conversation.messages]
-              .reverse()
-              .find((m) => meaningfulTypes.has(m.messageType ?? ''))
-
-            if (lastMeaningful?.messageType === 'user' && lastMeaningful.thinkingSteps?.length) {
-              const messageAgeMs = Date.now() - new Date(lastMeaningful.timestamp).getTime()
-              if (!Number.isFinite(messageAgeMs) || messageAgeMs > PRE_RESEARCH_REATTACH_WINDOW_MS) {
-                get().addErrorCard(
-                  'agent.response_interrupted',
-                  'Your previous request was not completed. Please resend your message.'
-                )
-              }
-            }
-          }
+          // Do not infer interruption from local-only message history. The
+          // reconnectable backend can keep pre-research workflows alive after a
+          // refresh, and a false interrupted card can hide a still-running task.
         },
 
         // ============================================================

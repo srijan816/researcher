@@ -138,20 +138,20 @@ RESEARCH_DEPTH_CONFIGS: dict[ResearchDepthTier, ResearchDepthConfig] = {
     "deeper": ResearchDepthConfig(
         tier="deeper",
         label="Deeper",
-        source_target="40-77",
-        max_researcher_tasks=5,
-        max_parallel_researcher_tasks=4,
-        search_calls_per_task=16,
+        source_target="40-70",
+        max_researcher_tasks=4,
+        max_parallel_researcher_tasks=3,
+        search_calls_per_task=10,
         planner_search_limit=1,
-        advanced_web_search_limit=92,
-        nominal_advanced_web_search_limit=77,
-        web_search_limit=29,
-        stock_quote_limit=10,
+        advanced_web_search_limit=70,
+        nominal_advanced_web_search_limit=60,
+        web_search_limit=20,
+        stock_quote_limit=8,
         planner_guidance=(
-            "Build a multi-angle plan, but pack related sections into 3-4 researcher tasks. "
-            "Use the larger per-task search ceiling for current evidence, primary sources, "
-            "independent analysis, comparisons, and caveats, but treat the extra budget as adaptive "
-            "reserve rather than mandatory searching."
+            "Build a multi-angle plan, but pack related sections into 2-4 researcher tasks. "
+            "Use compact searches for current evidence, primary sources, independent analysis, "
+            "comparisons, and caveats, and treat the extra budget as adaptive reserve rather than "
+            "mandatory searching."
         ),
     ),
     "medium": ResearchDepthConfig(
@@ -175,20 +175,19 @@ RESEARCH_DEPTH_CONFIGS: dict[ResearchDepthTier, ResearchDepthConfig] = {
     "deep": ResearchDepthConfig(
         tier="deep",
         label="Deep",
-        source_target="90-150+",
-        max_researcher_tasks=10,
+        source_target="70-106",
+        max_researcher_tasks=6,
         max_parallel_researcher_tasks=3,
-        search_calls_per_task=16,
+        search_calls_per_task=12,
         planner_search_limit=2,
-        advanced_web_search_limit=168,
-        nominal_advanced_web_search_limit=140,
-        web_search_limit=58,
-        stock_quote_limit=19,
+        advanced_web_search_limit=106,
+        nominal_advanced_web_search_limit=90,
+        web_search_limit=36,
+        stock_quote_limit=12,
         planner_guidance=(
-            "Build an exhaustive plan, but consolidate related queries into up to 8 broad researcher "
-            "tasks. Use the larger per-task search ceiling to cover primary sources, recent updates, "
-            "benchmarks, pricing, counterarguments, history, and edge cases, while preserving the adaptive "
-            "reserve for verification and gap closure."
+            "Build a thorough plan, but consolidate related queries into up to 6 broad researcher "
+            "tasks. Prioritize primary sources, recent updates, benchmarks, pricing, counterarguments, "
+            "history, and edge cases, while preserving the adaptive reserve for verification and gap closure."
         ),
     ),
 }

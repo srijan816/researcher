@@ -14,7 +14,7 @@
 
 import { type FC, type ReactNode, memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { Flex, Button, SegmentedControl, Text } from '@/adapters/ui'
-import { Close, Generate, StopCircle } from '@/adapters/ui/icons'
+import { Close, StopCircle, AlphaGlyph } from '@/adapters/ui/icons'
 import { useCancelDeepResearchJob, useChatStore, useLoadJobData } from '@/features/chat'
 import { useReducedMotion } from '@/hooks/use-reduced-motion'
 import { InfinityLoader } from '@/shared/components/InfinityLoader'
@@ -201,7 +201,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
           {isDeepResearchStreaming ? (
             <InfinityLoader size={20} label="Researching" />
           ) : (
-            <Generate className="h-[calc(var(--spacing)*6)] w-[calc(var(--spacing)*6)]" />
+            <AlphaGlyph className="h-[calc(var(--spacing)*6)] w-[calc(var(--spacing)*6)]" />
           )}
         </span>
         <Text
@@ -302,7 +302,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
                 {isDeepResearchStreaming ? (
                   <InfinityLoader size={22} className="shrink-0" label="Research activity" />
                 ) : (
-                  <Generate className="h-4 w-4 shrink-0 text-subtle" aria-hidden="true" />
+                  <AlphaGlyph className="h-4 w-4 shrink-0 text-subtle" aria-hidden="true" />
                 )}
                 <Flex direction="col" gap="0" className="min-w-0 flex-1">
                   <Text kind="label/semibold/sm" className="truncate text-primary">

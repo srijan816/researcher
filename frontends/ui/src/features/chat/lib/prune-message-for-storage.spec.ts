@@ -2,8 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, test, expect } from 'vitest'
-import { pruneMessageForStorage, capString, stripThinkingStepsForStorage, prunePlanMessages } from './prune-message-for-storage'
-import type { ChatMessage } from '../types'
+import {
+  pruneMessageForStorage,
+  pruneConversationForStorage,
+  capString,
+  stripThinkingStepsForStorage,
+  prunePlanMessages,
+} from './prune-message-for-storage'
+import type { ChatMessage, Conversation } from '../types'
 
 describe('prune-message-for-storage', () => {
   describe('pruneMessageForStorage', () => {
@@ -338,6 +344,34 @@ describe('prune-message-for-storage', () => {
       expect(pruned[0].inputType).toBe('multiple_choice')
       expect(pruned[0].placeholder).toBe('Choose an option')
       expect(pruned[0].required).toBe(true)
+    })
+  })
+
+  describe('pruneConversationForStorage', () => {
+    test('prunes every message in the conversation', () => {
+      const conversation: Conversation = {
+        id: 'conv_1',
+        userId: 'default-user',
+        title: 'Session',
+        messages: [
+          {
+            id: 'msg_1',
+            role: 'assistant',
+            content: 'answer',
+            timestamp: new Date(),
+            messageType: 'agent_response',
+            reportContent: 'large report body',
+          },
+        ],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+
+      const pruned = pruneConversationForStorage(conversation)
+
+      expect(pruned.id).toBe('conv_1')
+      expect(pruned.messages[0].reportContent).toBeUndefined()
+      expect(pruned.messages[0].content).toBe('answer')
     })
   })
 })

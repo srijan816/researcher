@@ -6,6 +6,14 @@ import React from 'react'
 import { renderToStream } from '@react-pdf/renderer'
 import { MarkdownPDF } from '../../lib/pdf/ReactPdfDocument'
 
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '16mb',
+    },
+  },
+}
+
 /**
  * POST /api/generate-pdf
  * Receives: { markdown: string } in JSON body

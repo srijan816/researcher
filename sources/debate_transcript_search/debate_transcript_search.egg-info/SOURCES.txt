@@ -6,4 +6,5 @@ debate_transcript_search.egg-info/entry_points.txt
 debate_transcript_search.egg-info/requires.txt
 debate_transcript_search.egg-info/top_level.txt
 src/__init__.py
+src/core.py
 src/register.py

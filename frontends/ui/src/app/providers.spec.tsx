@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ReactNode } from 'react'
-import { render } from '@testing-library/react'
+import { render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { AppConfig } from '@/shared/context'
+import { syncConversationSnapshots } from '@/adapters/api'
 import { Providers } from './providers'
 
 const sessionProviderProps: Array<Record<string, unknown>> = []
@@ -79,10 +80,14 @@ const baseConfig: AppConfig = {
 describe('Providers', () => {
   beforeEach(() => {
     sessionProviderProps.length = 0
+    chatState.conversations = []
+    chatState.isDeepResearchStreaming = false
     vi.clearAllMocks()
+    vi.useFakeTimers()
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -130,5 +135,75 @@ describe('Providers', () => {
     )
 
     expect(setIntervalSpy).not.toHaveBeenCalled()
+  })
+
+  test('syncs pruned conversation snapshots after debounce', async () => {
+    chatState.conversations = [
+      {
+        id: 'conv_1',
+        userId: 'default-user',
+        title: 'Session',
+        messages: [
+          {
+            id: 'msg_1',
+            role: 'assistant',
+            content: 'answer',
+            timestamp: new Date(),
+            messageType: 'agent_response',
+            reportContent: 'large report body',
+          },
+        ],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ]
+
+    render(
+      <Providers config={{ ...baseConfig, authRequired: false }}>
+        <div>content</div>
+      </Providers>
+    )
+
+    await vi.advanceTimersByTimeAsync(1200)
+
+    await waitFor(() => {
+      expect(syncConversationSnapshots).toHaveBeenCalledTimes(1)
+    })
+
+    const synced = vi.mocked(syncConversationSnapshots).mock.calls[0][0]
+    expect(synced[0].messages[0].reportContent).toBeUndefined()
+    expect(synced[0].messages[0].content).toBe('answer')
+  })
+
+  test('skips conversation sync while deep research is streaming', async () => {
+    chatState.isDeepResearchStreaming = true
+    chatState.conversations = [
+      {
+        id: 'conv_1',
+        userId: 'default-user',
+        title: 'Session',
+        messages: [
+          {
+            id: 'msg_1',
+            role: 'user',
+            content: 'complex prompt',
+            timestamp: new Date(),
+            messageType: 'user_message',
+          },
+        ],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ]
+
+    render(
+      <Providers config={{ ...baseConfig, authRequired: false }}>
+        <div>content</div>
+      </Providers>
+    )
+
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(syncConversationSnapshots).not.toHaveBeenCalled()
   })
 })

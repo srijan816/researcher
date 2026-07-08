@@ -38,7 +38,6 @@ import { useLayoutStore } from '../store'
 import { useSessionUrl } from '@/hooks/use-session-url'
 import { Chat, Generate, Menu, Settings, Book, Logout } from '@/adapters/ui/icons'
 import { Avatar } from '@/adapters/ui'
-import { ThemeToggleButton } from './ThemeToggleButton'
 
 const DISPLAYABLE_MESSAGE_TYPES = new Set([
   'user',
@@ -401,7 +400,6 @@ export const MainLayout: FC<MainLayoutProps> = ({
                   </Text>
                 )}
               </div>
-              <ThemeToggleButton compact />
             </div>
 
             {(

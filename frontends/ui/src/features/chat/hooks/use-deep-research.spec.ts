@@ -19,6 +19,7 @@ const mockCompleteThinkingStep = vi.fn()
 const mockSetCurrentStatus = vi.fn()
 const mockSetStreaming = vi.fn()
 const mockSetDeepResearchTodos = vi.fn()
+const mockSetDeepResearchTodoGroup = vi.fn()
 const mockStopDeepResearchTodos = vi.fn()
 const mockStopAllDeepResearchSpinners = vi.fn()
 const mockSetDeepResearchLastEventId = vi.fn()
@@ -69,6 +70,7 @@ vi.mock('../store', () => ({
         setCurrentStatus: mockSetCurrentStatus,
         setStreaming: mockSetStreaming,
         setDeepResearchTodos: mockSetDeepResearchTodos,
+        setDeepResearchTodoGroup: mockSetDeepResearchTodoGroup,
         stopDeepResearchTodos: mockStopDeepResearchTodos,
         stopAllDeepResearchSpinners: mockStopAllDeepResearchSpinners,
         setDeepResearchLastEventId: mockSetDeepResearchLastEventId,
@@ -738,6 +740,16 @@ describe('useDeepResearch', () => {
       })
     })
 
+    test('onToolStart classifies write tools as writing', async () => {
+      await setupConnectedHook()
+
+      act(() => {
+        mockClient?.callbacks.onToolStart?.('write_file', { file_path: '/report.md' }, 'researcher-agent', 'event-1', 'agent-123')
+      })
+
+      expect(mockSetCurrentStatus).toHaveBeenCalledWith('writing')
+    })
+
     test('onToolEnd completes tool call', async () => {
       await setupConnectedHook()
 
@@ -768,6 +780,27 @@ describe('useDeepResearch', () => {
       })
 
       expect(mockSetDeepResearchTodos).toHaveBeenCalledWith(todos)
+    })
+
+    test('onTodoUpdate stores workflow todos in a scoped group', async () => {
+      await setupConnectedHook()
+
+      const todos = [
+        { id: '1', content: 'Search primary sources', status: 'in_progress' as const },
+      ]
+
+      act(() => {
+        mockClient?.callbacks.onTodoUpdate?.(todos, 'researcher-agent', '2026-07-06T12:00:00Z', 'agent-123', 'agent')
+      })
+
+      expect(mockSetDeepResearchTodos).not.toHaveBeenCalled()
+      expect(mockSetDeepResearchTodoGroup).toHaveBeenCalledWith(todos, {
+        workflow: 'researcher-agent',
+        agentId: 'agent-123',
+        source: 'agent',
+        timestamp: '2026-07-06T12:00:00Z',
+      })
+      expect(mockSetCurrentStatus).toHaveBeenCalledWith('researching')
     })
 
     test('onCitationUpdate adds citation to store', async () => {

@@ -290,7 +290,7 @@ Selected tier: **{{ research_depth.label }}**
 - Search calls per researcher task: {{ research_depth.search_calls_per_task }}
 - Planning guidance: {{ research_depth.planner_guidance }}
 
-Use this tier as the evidence budget. Do not stop at a smaller source set unless the task is narrow, sources are unavailable, or further searching would only duplicate already-covered evidence. For the Deep tier, expect a long-running workflow and keep launching non-overlapping researcher-agent tasks until the target source range is plausibly covered.
+Use this tier as the evidence budget. Stop once the important claims and report sections have enough diverse support; do not spend search calls merely to hit the top of the source range. For the Deep tier, expect a larger workflow, but keep researcher-agent tasks non-overlapping and move to synthesis when additional searches would mostly duplicate covered evidence.
 {% endif %}
 {% if budget_profile %}
 ## Budget Profile

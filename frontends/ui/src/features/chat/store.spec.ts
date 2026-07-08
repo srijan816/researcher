@@ -928,6 +928,62 @@ describe('useChatStore', () => {
       expect(conversations[0].messages[1].deepResearchJobId).toBe('job-running')
       expect(conversations[0].messages[1].isDeepResearchActive).toBe(true)
     })
+
+    test('attaches backend job history to an existing untracked matching prompt', () => {
+      const conversation: Conversation = {
+        id: 'conv-original',
+        userId: 'srijan',
+        title: 'Radiology research',
+        messages: [
+          {
+            id: 'user-1',
+            role: 'user',
+            content: 'Research radiology AI adoption',
+            timestamp: new Date('2026-06-01T12:00:00Z'),
+            messageType: 'user',
+            thinkingSteps: [
+              {
+                id: 'step-1',
+                userMessageId: 'user-1',
+                category: 'tasks',
+                functionName: 'planner',
+                displayName: 'Planning',
+                content: 'Planning...',
+                isComplete: false,
+                timestamp: new Date('2026-06-01T12:01:00Z'),
+              },
+            ],
+          },
+        ],
+        createdAt: new Date('2026-06-01T12:00:00Z'),
+        updatedAt: new Date('2026-06-01T12:02:00Z'),
+      }
+
+      useChatStore.setState({
+        currentUserId: 'srijan',
+        currentConversation: conversation,
+        conversations: [conversation],
+      })
+
+      useChatStore.getState().syncResearchHistory([
+        {
+          job_id: 'job-radiology',
+          status: 'running',
+          owner_subject: 'srijan',
+          owner_display_name: 'srijan@local',
+          input: 'Research radiology AI adoption\n\n## Clarification Context\nApproved plan',
+          title: 'Radiology AI Adoption',
+          created_at: '2026-06-01T12:05:00Z',
+          updated_at: '2026-06-01T12:10:00Z',
+          has_report: false,
+        },
+      ])
+
+      const conversations = useChatStore.getState().conversations
+      expect(conversations).toHaveLength(1)
+      expect(conversations[0].id).toBe('conv-original')
+      expect(conversations[0].messages.some((m) => m.deepResearchJobId === 'job-radiology')).toBe(true)
+    })
   })
 
   describe('thinking steps', () => {
@@ -1496,10 +1552,10 @@ describe('useChatStore', () => {
       updatedAt: new Date(),
     })
 
-    // Older than PRE_RESEARCH_REATTACH_WINDOW_MS (10 min)
-    const OLD_TIMESTAMP = new Date(Date.now() - 11 * 60 * 1000)
+    // Older than PRE_RESEARCH_REATTACH_WINDOW_MS (6h)
+    const OLD_TIMESTAMP = new Date(Date.now() - 7 * 60 * 60 * 1000)
 
-    test('adds error card when last meaningful message is an OLD user message with thinking steps', () => {
+    test('does NOT infer interruption from an old user message with thinking steps', () => {
       const conv = createConversation([
         {
           role: 'user',
@@ -1516,11 +1572,10 @@ describe('useChatStore', () => {
       useChatStore.setState({ currentConversation: conv, conversations: [conv] })
       useChatStore.getState().restoreSessionState(conv)
 
-      // Should have added an error card
       const messages = useChatStore.getState().currentConversation?.messages ?? []
-      expect(messages).toHaveLength(2)
-      expect(messages[1].messageType).toBe('error')
-      expect(messages[1].errorData?.errorCode).toBe('agent.response_interrupted')
+      expect(messages).toHaveLength(1)
+      expect(messages.every((m) => m.errorData?.errorCode !== 'agent.response_interrupted')).toBe(true)
+      expect(useChatStore.getState().isStreaming).toBe(false)
     })
 
     test('does NOT add error card when last message is an assistant response', () => {
@@ -1580,7 +1635,7 @@ describe('useChatStore', () => {
       expect(messages.every((m) => m.errorData?.errorCode !== 'agent.response_interrupted')).toBe(true)
     })
 
-    test('does NOT add error card when user message is recent (pre-research may re-attach)', () => {
+    test('restores recent user message with thinking steps as streaming so pre-research can re-attach', () => {
       const conv = createConversation([
         {
           role: 'user',
@@ -1594,10 +1649,10 @@ describe('useChatStore', () => {
       useChatStore.setState({ currentConversation: conv, conversations: [conv] })
       useChatStore.getState().restoreSessionState(conv)
 
-      // No interrupted card: server-side pre-research survives disconnects and
-      // the reconnecting socket re-attaches to it.
       const messages = useChatStore.getState().currentConversation?.messages ?? []
       expect(messages.every((m) => m.errorData?.errorCode !== 'agent.response_interrupted')).toBe(true)
+      expect(useChatStore.getState().isStreaming).toBe(true)
+      expect(useChatStore.getState().currentStatus).toBe('thinking')
     })
 
     test('restores pendingInteraction from unresponded approval prompt on session load', () => {
@@ -1635,7 +1690,7 @@ describe('useChatStore', () => {
       expect(messages.every((m) => m.errorData?.errorCode !== 'agent.response_interrupted')).toBe(true)
     })
 
-    test('does NOT double-add error card on repeated restore calls', () => {
+    test('keeps repeated restore calls idempotent for old unfinished user messages', () => {
       const conv = createConversation([
         {
           role: 'user',
@@ -1648,16 +1703,16 @@ describe('useChatStore', () => {
 
       useChatStore.setState({ currentConversation: conv, conversations: [conv] })
 
-      // First restore — adds error card
       useChatStore.getState().restoreSessionState(conv)
       const afterFirst = useChatStore.getState().currentConversation?.messages ?? []
-      expect(afterFirst.filter((m) => m.errorData?.errorCode === 'agent.response_interrupted')).toHaveLength(1)
+      expect(afterFirst.filter((m) => m.errorData?.errorCode === 'agent.response_interrupted')).toHaveLength(0)
 
-      // Second restore with updated conversation (now includes error card)
+      // Second restore with the same conversation should not add anything
       const updatedConv = useChatStore.getState().currentConversation!
       useChatStore.getState().restoreSessionState(updatedConv)
       const afterSecond = useChatStore.getState().currentConversation?.messages ?? []
-      expect(afterSecond.filter((m) => m.errorData?.errorCode === 'agent.response_interrupted')).toHaveLength(1)
+      expect(afterSecond.filter((m) => m.errorData?.errorCode === 'agent.response_interrupted')).toHaveLength(0)
+      expect(afterSecond).toHaveLength(1)
     })
   })
 

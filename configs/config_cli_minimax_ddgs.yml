@@ -265,16 +265,16 @@ functions:
     websurfx_url: ${WEBSURFX_URL:-http://localhost:8081}
     websurfx_engines: ${WEBSURFX_ENGINES:-Searx,Brave,DuckDuckGo,LibreX,Mojeek,Qwant,Startpage,Yahoo,Bing,SepiaSearch}
     websurfx_timeout_seconds: ${WEBSURFX_TIMEOUT_SECONDS:-10}
-    max_results: 20
+    max_results: 12
     max_content_length: 2500
     discovery_backend: ${AIQ_ADVANCED_DISCOVERY_BACKEND:-websurfx_hybrid}
     engines: bing
     ddgs_backend: auto
-    ddgs_max_results: 25
+    ddgs_max_results: 18
     search_pages: 1
     search_page_concurrency: 1
     extraction_backend: scrapling
-    scrape_max_results: 12
+    scrape_max_results: 6
     scrape_concurrency: 8
     request_timeout: 18
     max_retries: 1

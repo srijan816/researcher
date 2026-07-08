@@ -8,7 +8,7 @@
  * saving to localStorage. Research data can be fetched from backend on demand.
  */
 
-import type { ChatMessage } from '../types'
+import type { ChatMessage, Conversation } from '../types'
 
 /**
  * Cap string content to prevent excessively large values.
@@ -104,3 +104,9 @@ export const pruneMessageForStorage = (message: ChatMessage): ChatMessage => {
 
   return prunedMessage
 }
+
+/** Prune all messages in a conversation before server sync or localStorage persist. */
+export const pruneConversationForStorage = (conversation: Conversation): Conversation => ({
+  ...conversation,
+  messages: (conversation.messages ?? []).map(pruneMessageForStorage),
+})

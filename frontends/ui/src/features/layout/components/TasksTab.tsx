@@ -18,6 +18,9 @@ import { useShallow } from 'zustand/react/shallow'
 import { CheckCircle } from '@/adapters/ui/icons'
 import { useChatStore } from '@/features/chat'
 import { TaskCard } from './TaskCard'
+import type { DeepResearchTodoGroup } from '@/features/chat/types'
+
+const hasVisibleTodos = (group: DeepResearchTodoGroup): boolean => group.todos.length > 0
 
 /**
  * Tasks tab content showing todos/tasks from deep research.
@@ -27,6 +30,7 @@ export const TasksTab: FC = () => {
   const state =
     useChatStore(useShallow((s) => ({
       deepResearchTodos: s.deepResearchTodos,
+      deepResearchTodoGroups: s.deepResearchTodoGroups,
       deepResearchJobId: s.deepResearchJobId,
       currentStatus: s.currentStatus,
       isDeepResearchStreaming: s.isDeepResearchStreaming,
@@ -37,16 +41,21 @@ export const TasksTab: FC = () => {
     })))
 
   const deepResearchTodos = Array.isArray(state.deepResearchTodos) ? state.deepResearchTodos : []
+  const deepResearchTodoGroups = Array.isArray(state.deepResearchTodoGroups) ? state.deepResearchTodoGroups : []
+  const visibleTodoGroups = deepResearchTodoGroups.filter(hasVisibleTodos)
   const deepResearchAgents = Array.isArray(state.deepResearchAgents) ? state.deepResearchAgents : []
   const deepResearchToolCalls = Array.isArray(state.deepResearchToolCalls) ? state.deepResearchToolCalls : []
   const deepResearchFiles = Array.isArray(state.deepResearchFiles) ? state.deepResearchFiles : []
   const { deepResearchJobId, currentStatus, isDeepResearchStreaming, deepResearchActivity } = state
 
-  const isEmpty = deepResearchTodos.length === 0
+  const isEmpty = deepResearchTodos.length === 0 && visibleTodoGroups.length === 0
 
   // Calculate progress stats
-  const completedCount = deepResearchTodos.filter((t) => t.status === 'completed').length
-  const totalCount = deepResearchTodos.length
+  const allVisibleTodos = [...deepResearchTodos, ...visibleTodoGroups.flatMap((group) => group.todos)]
+  const completedCount = allVisibleTodos.filter((t) => t.status === 'completed').length
+  const totalCount = allVisibleTodos.length
+  const rootCompletedCount = deepResearchTodos.filter((t) => t.status === 'completed').length
+  const rootTotalCount = deepResearchTodos.length
   const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0
   const isWritingReport = isDeepResearchStreaming && currentStatus === 'writing'
   const runningAgents = deepResearchAgents.filter((agent) => agent.status === 'running').length
@@ -73,9 +82,9 @@ export const TasksTab: FC = () => {
           )}
           {totalCount > 0 && (
             <Text kind="body/regular/xs" className="text-subtle">
-              {completedCount}/{totalCount}
-            </Text>
-          )}
+                  {completedCount}/{totalCount}
+                </Text>
+              )}
         </Flex>
         <Text kind="body/regular/xs" className="text-subtle">
           Research plan breakdown and progress during deep research.
@@ -143,14 +152,51 @@ export const TasksTab: FC = () => {
             </Flex>
           )}
 
-          {/* Activity timeline */}
-          <div className="gx-timeline flex flex-col">
-            {deepResearchTodos.map((todo) => (
-              <div key={todo.id} className="shrink-0">
-                <TaskCard todo={todo} />
-              </div>
-            ))}
-          </div>
+          {rootTotalCount > 0 && visibleTodoGroups.length > 0 && (
+            <Text kind="body/regular/xs" className="text-tertiary">
+              Orchestrator plan: {rootCompletedCount}/{rootTotalCount}
+            </Text>
+          )}
+
+          {deepResearchTodos.length > 0 && (
+            <div className="gx-timeline flex flex-col">
+              {deepResearchTodos.map((todo) => (
+                <div key={todo.id} className="shrink-0">
+                  <TaskCard todo={todo} />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {visibleTodoGroups.map((group) => {
+            const groupCompletedCount = group.todos.filter((todo) => todo.status === 'completed').length
+            const groupActiveTodo = group.todos.find((todo) => todo.status === 'in_progress')
+
+            return (
+              <Flex key={group.id} direction="col" gap="2" className="shrink-0">
+                <Flex align="center" gap="2" className="min-w-0">
+                  <div
+                    className={`h-2 w-2 shrink-0 rounded-full ${
+                      groupActiveTodo ? 'animate-pulse bg-[var(--accent-info)]' : 'bg-[var(--border-color-base)]'
+                    }`}
+                  />
+                  <Text kind="body/semibold/sm" className="min-w-0 truncate text-primary">
+                    {group.label}
+                  </Text>
+                  <Text kind="body/regular/xs" className="shrink-0 text-tertiary">
+                    {groupCompletedCount}/{group.todos.length}
+                  </Text>
+                </Flex>
+                <div className="gx-timeline ml-1 flex flex-col border-l border-base pl-3">
+                  {group.todos.map((todo) => (
+                    <div key={todo.id} className="shrink-0">
+                      <TaskCard todo={todo} />
+                    </div>
+                  ))}
+                </div>
+              </Flex>
+            )
+          })}
         </Flex>
       )}
     </Flex>

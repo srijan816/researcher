@@ -1,0 +1,13 @@
+[
+  {
+    "url": "https://example.com",
+    "title": null,
+    "source_class": "unknown",
+    "authority": 1,
+    "recency": 3,
+    "relevance": 2,
+    "bias_risk": 5,
+    "used_for": [],
+    "scoring_reason": "class=unknown; authority=1; recency=3; relevance=2; bias_risk=5"
+  }
+]

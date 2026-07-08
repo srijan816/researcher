@@ -264,7 +264,7 @@ describe('SessionsPanel - Session Switching', () => {
     expect(onSelectSession).toHaveBeenCalledWith('session-1')
   })
 
-  test('blocks switching when shallow thinking (WebSocket) is active', async () => {
+  test('allows switching when shallow thinking (WebSocket) is active', async () => {
     setupChatStoreMock({
       isStreaming: true,
       pendingInteraction: null,
@@ -280,16 +280,15 @@ describe('SessionsPanel - Session Switching', () => {
       />
     )
 
-    // All sessions should be visually disabled
-    const session2 = screen.getByRole('button', { name: /session: idle session \(processing in progress\)/i })
-    expect(session2).toHaveClass('cursor-not-allowed')
-    expect(session2).toHaveAttribute('aria-disabled', 'true')
+    const session2 = screen.getByRole('button', { name: /session: idle session/i })
+    expect(session2).not.toHaveClass('cursor-not-allowed')
+    expect(session2).toHaveAttribute('aria-disabled', 'false')
 
     await user.click(session2)
-    expect(onSelectSession).not.toHaveBeenCalled()
+    expect(onSelectSession).toHaveBeenCalledWith('session-2')
   })
 
-  test('blocks switching when pending HITL interaction exists', async () => {
+  test('allows switching when pending HITL interaction exists', async () => {
     setupChatStoreMock({
       isStreaming: false,
       pendingInteraction: { id: 'p1', type: 'approval', content: 'Approve plan?' },
@@ -305,11 +304,11 @@ describe('SessionsPanel - Session Switching', () => {
       />
     )
 
-    const session2 = screen.getByRole('button', { name: /session: idle session \(processing in progress\)/i })
-    expect(session2).toHaveAttribute('aria-disabled', 'true')
+    const session2 = screen.getByRole('button', { name: /session: idle session/i })
+    expect(session2).toHaveAttribute('aria-disabled', 'false')
 
     await user.click(session2)
-    expect(onSelectSession).not.toHaveBeenCalled()
+    expect(onSelectSession).toHaveBeenCalledWith('session-2')
   })
 
   test('allows switching between sessions when nothing is active', async () => {
@@ -442,10 +441,8 @@ describe('SessionsPanel - Delete Button States', () => {
     const user = userEvent.setup()
     render(<SessionsPanel sessions={mockSessions} />)
 
-    // With streaming active, session buttons have aria-disabled and show
-    // "(processing in progress)" in their aria-label
     const firstSession = screen.getByRole('button', {
-      name: /session: first session \(processing in progress\)/i,
+      name: /session: first session/i,
     })
     await user.hover(firstSession)
 

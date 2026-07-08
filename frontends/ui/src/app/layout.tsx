@@ -43,7 +43,7 @@ export const metadata: Metadata = {
   title: 'GenAlphAI Research',
   description: 'Agentic deep research: plans, searches, verifies, and writes cited reports. Depth over hype.',
   icons: {
-    icon: '/brand/alpha-mark.png',
+    icon: '/icon.svg',
   },
 }
 
@@ -74,7 +74,7 @@ const RootLayout = async ({ children }: RootLayoutProps): Promise<ReactNode> => 
       suppressHydrationWarning
     >
       <head>
-        {/* Apply persisted theme (or prefers-color-scheme) before first paint */}
+        {/* Apply persisted theme (dark default on first visit) before first paint */}
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} />
         {/* CDN SVG icon loader - inlines <svg data-src="..."> elements */}
         <script

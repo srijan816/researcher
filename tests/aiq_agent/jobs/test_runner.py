@@ -898,6 +898,34 @@ class TestSubmitDeepResearchJob:
         assert job_args[-7] == ["web_search"]
 
     @pytest.mark.asyncio
+    async def test_submit_agent_job_reuses_active_equivalent_job(self):
+        """Refresh/replay should reuse an active equivalent job instead of submitting another."""
+        from aiq_api.jobs.submit import submit_agent_job
+
+        mock_job_store = MagicMock()
+
+        with patch.dict(
+            "os.environ",
+            {
+                "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
+                "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+            },
+        ):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.submit.get_current_principal", return_value=self.principal):
+                    with patch("aiq_api.jobs.submit._find_active_equivalent_job", return_value="existing-job"):
+                        result = await submit_agent_job(
+                            agent_type="deep_researcher",
+                            input_text="test query",
+                            owner="test@example.com",
+                            data_sources=["web_search"],
+                        )
+
+        assert result == "existing-job"
+        mock_job_store.ensure_job_id.assert_not_called()
+        mock_job_store.submit_job.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_submit_agent_job_passes_research_depth(self):
         """Test submit_agent_job forwards research_depth into worker args."""
         from aiq_api.jobs.submit import submit_agent_job
@@ -1107,6 +1135,38 @@ class TestSubmitDeepResearchJob:
 
         assert result == "custom-job-id"
         mock_job_store.ensure_job_id.assert_called_with("custom-job-id")
+
+    @pytest.mark.asyncio
+    async def test_resume_agent_job_reattaches_active_execution_without_requeue(self):
+        """Resume should not create a second worker task when the original future is still active."""
+        from aiq_api.jobs.submit import resume_agent_job
+
+        mock_job_store = MagicMock()
+        mock_job_store.update_status = AsyncMock(return_value=None)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
+                "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+            },
+        ):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.submit._is_existing_execution_active", new=AsyncMock(return_value=True)):
+                    with patch("aiq_api.jobs.submit.EventStore") as mock_event_store:
+                        result = await resume_agent_job(
+                            job_id="job-active",
+                            agent_type="deep_researcher",
+                            input_text="test query",
+                            owner="test@example.com",
+                            principal=self.principal,
+                            expiry_seconds=86400,
+                        )
+
+        assert result == "job-active"
+        mock_job_store.update_status.assert_awaited_once()
+        mock_job_store.dask_client.submit.assert_not_called()
+        mock_event_store.return_value.store.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_submit_requires_verified_principal(self):

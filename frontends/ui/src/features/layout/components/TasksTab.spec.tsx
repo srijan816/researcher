@@ -11,10 +11,21 @@ let mockDeepResearchTodos: Array<{
   content: string
   status: 'pending' | 'in_progress' | 'completed' | 'stopped'
 }> = []
+let mockDeepResearchTodoGroups: Array<{
+  id: string
+  label: string
+  todos: Array<{
+    id: string
+    content: string
+    status: 'pending' | 'in_progress' | 'completed' | 'stopped'
+  }>
+  updatedAt: Date
+}> = []
 
 vi.mock('@/features/chat', () => ({
   useChatStore: () => ({
     deepResearchTodos: mockDeepResearchTodos,
+    deepResearchTodoGroups: mockDeepResearchTodoGroups,
   }),
 }))
 
@@ -29,6 +40,7 @@ describe('TasksTab', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockDeepResearchTodos = []
+    mockDeepResearchTodoGroups = []
   })
 
   describe('empty state', () => {
@@ -79,6 +91,29 @@ describe('TasksTab', () => {
 
       expect(screen.getByText('Research market trends')).toBeInTheDocument()
       expect(screen.getByText('Analyze competitors')).toBeInTheDocument()
+    })
+
+    test('renders workflow todo groups', () => {
+      mockDeepResearchTodos = [
+        { id: '1', content: 'Execute research', status: 'in_progress' },
+      ]
+      mockDeepResearchTodoGroups = [
+        {
+          id: 'group-1',
+          label: 'researcher-agent',
+          todos: [
+            { id: 'g1', content: 'Search primary radiology sources', status: 'in_progress' },
+            { id: 'g2', content: 'Extract trial evidence', status: 'completed' },
+          ],
+          updatedAt: new Date(),
+        },
+      ]
+
+      render(<TasksTab />)
+
+      expect(screen.getByText('researcher-agent')).toBeInTheDocument()
+      expect(screen.getByText('Search primary radiology sources')).toBeInTheDocument()
+      expect(screen.getByText('1/3')).toBeInTheDocument()
     })
 
     test('renders correct number of task cards', () => {

@@ -100,7 +100,9 @@ services:
       # Grok Build CLI + host-global OAuth session for the 'grok' image provider;
       # MiniMax remains the fallback.
       - /opt/stacks/app2/grok-home:/grok-home
-      - /var/lib/grok-shared/auth.json:/grok-home/.grok/auth.json:rw
+      # Mount the DIRECTORY, not the file: grok rewrites auth.json via atomic
+      # rename (new inode), which silently detaches single-file bind mounts.
+      - /var/lib/grok-shared:/grok-shared:rw
     networks:
       - aiq-network
     depends_on:

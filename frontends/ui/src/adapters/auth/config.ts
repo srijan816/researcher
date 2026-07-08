@@ -69,7 +69,16 @@ if (isAuthRequired() && !activeProvider) {
  */
 export const shouldUseSecureCookies = (): boolean => {
   const explicitSetting = process.env.SECURE_COOKIES
-  if (explicitSetting !== undefined) {
+  // Treat empty-string env overrides the same as unset: ``SECURE_COOKIES=``
+  // is the docker-compose default, and falling through to the NEXTAUTH_URL
+  // heuristic keeps our cookie-naming in sync with NextAuth's own derivation
+  // (which only looks at ``url.base.startsWith("https://")``).  A previous
+  // version of this helper returned ``false`` for empty strings, which
+  // caused ``__Secure-next-auth.session-token`` requests to be rejected by
+  // ``getToken({ req, secureCookie: false })`` and the proxy then deleted
+  // the freshly-minted ``idToken`` cookie on every navigation — users were
+  // stuck on the sign-in screen.
+  if (explicitSetting !== undefined && explicitSetting !== '') {
     return explicitSetting === 'true'
   }
 
